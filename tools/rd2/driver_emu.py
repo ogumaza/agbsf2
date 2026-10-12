@@ -18,7 +18,8 @@ calls the driver makes are emulated), and captures what the driver does:
     driver_emu.py ROM render SEQUENCE FRAMES OUT.wav
 
 The routine and RAM addresses are chosen by the ROM's game code. Those of The Legend of Zelda: A Link to the Past
-(AZLE) and Super Mario Advance 2 (AA2E) are built in. Another game needs its own values; see GAMES and docs/rd2.md.
+(AZLE), Super Mario Advance 2 (AA2E) and Super Mario Advance 3 (A3AE) are built in. For another game, add an entry to
+GAMES (see docs/rd2.md).
 """
 import argparse
 import struct
@@ -70,6 +71,7 @@ class Addresses:
     player_playing = 0x42
     voice_note = 0x09        # the offsets of a voice's note, before the transpose, and its velocity
     voice_velocity = 0x0A
+    play_music = None        # the game's play-music routine, where it gives the driver settings with the sequence
 
 
 class AddressesAA2E(Addresses):
@@ -101,7 +103,34 @@ class AddressesAA2E(Addresses):
     voice_velocity = 0x09
 
 
-GAMES = {b'AZLE': Addresses, b'AA2E': AddressesAA2E}
+class AddressesA3AE(Addresses):
+    """A3AE (Super Mario Advance 3: Yoshi's Island, US). The game's driver is A Link to the Past's revision with
+    another volume for sample voices. The driver's variables are 0x98 bytes lower than in A Link to the Past."""
+    sound_init = 0x0812C214
+    request = 0x0812EEBC
+    commit = 0x0812EEA8
+    requests = 0x0812F3C8
+    vblank = 0x0812CF50
+    frame = 0x0812CF5C
+    voices = 0x030016C8
+    active = 0x030000D0
+    tracks = 0x03000B88
+    players = 0x03001BF0
+    fixed_region = 0x030000C0
+    outputs = 0x030000A8
+    output_index = 0x030000BA
+    note_on = 0x0812DF58
+    note_key = 0x0812DF96
+    note_voice = 0x0812E046
+    note_done = 0x0812E108
+    music_player = 0x13
+    play_music = 0x0812C3B4  # the game's play-music routine: r0 = the music number. It also requests the sample
+                             # voices and the second volume that the music plays with.
+    music_table = 0x083077E4  # a halfword for each music number: the sequence in its low byte
+    music_count = 0x29
+
+
+GAMES = {b'AZLE': Addresses, b'AA2E': AddressesAA2E, b'A3AE': AddressesA3AE}
 
 
 def addresses_for(rom):
@@ -190,11 +219,26 @@ class DriverEmulator:
 
     def play(self, sequence):
         """Asks for a sequence on the music player, as the game's play routine does. The driver starts it in the next
-        frame."""
+        frame. Where the game's play-music routine gives the driver settings with the sequence, the routine starts it,
+        as the first music number that plays it."""
         self.writes = []
-        self.call(self.addr.request, (self.addr.music_player, sequence))
+        music = self.music_number(sequence)
+        if music is None:
+            self.call(self.addr.request, (self.addr.music_player, sequence))
+        else:
+            self.call(self.addr.play_music, (music,))
         self.call(self.addr.commit)
         return self.writes
+
+    def music_number(self, sequence):
+        """Returns the first music number that plays `sequence` through the game's play-music routine, or None."""
+        a = self.addr
+        if a.play_music is None:
+            return None
+        for music in range(a.music_count):
+            if self.read(a.music_table + 2 * music, 1)[0] == sequence:
+                return music
+        return None
 
     def frame(self):
         """Runs one frame as the game's VBlank handler does: the driver's VBlank routine, then its per-frame routine.

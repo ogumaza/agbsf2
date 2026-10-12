@@ -188,6 +188,11 @@ and the largest pitch deviation.
 notes still count towards the mixer's limit of 8 voices, so the result is what
 the game would play with those channels muted.
 
+The driver's init sets the music volume to 128. In *Donkey Kong Country 3*
+(`BDQE`), `driver_emu.py` sets it to 69 after it requests a tune. The game sets
+the same volume for most tunes. At that volume the mixer leaves out the notes
+of a channel at volume 0. The model does the same.
+
 ### Working out Rare's driver
 
 The driver's init is easy to find in a ROM, because it copies the driver's ARM
@@ -390,10 +395,12 @@ copies to IWRAM. From there:
    checked note by note with `compare_notes.py`, and track by track against
    the driver's renders for timing and level.
 
-`driver_emu.py` picks the addresses by the ROM's game code. Those of *The
-Legend of Zelda: A Link to the Past & Four Swords* (`AZLE`) and *Super Mario
-Advance 2: Super Mario World* (`AA2E`), which has an older revision of the
-driver, are built in. For another game, add an entry to `GAMES` with:
+`driver_emu.py` picks the addresses by the ROM's game code. The addresses of
+three games are built in: *The Legend of Zelda: A Link to the Past & Four
+Swords* (`AZLE`), *Super Mario Advance 2: Super Mario World* (`AA2E`) and
+*Super Mario Advance 3: Yoshi's Island* (`A3AE`). *Super Mario Advance 2* has
+an older revision of the driver. For another game, add an entry to `GAMES`
+with:
 
 * `sound_init`: the game's routine that calls the driver's init with its
   settings.
@@ -418,6 +425,12 @@ driver, are built in. For another game, add an entry to `GAMES` with:
   and velocity. In the Super Mario Advance 2 revision, the mixer's list ends
   with a node, the music player is 0x13, a player's record is 0x44 bytes, and a
   voice keeps the velocity at 0x09 and no note.
+* `play_music`, `music_table` and `music_count`, in a game whose play-music
+  routine gives the driver settings along with the sequence, as *Super Mario
+  Advance 3*'s does: the routine, its table of music, and the number of music
+  numbers in the table. `driver_emu.py` then starts each sequence through the
+  routine, as the first music number that plays it. Otherwise `play_music` is
+  `None`.
 
 The emulator reads 0 from memory outside the GBA's, as `supergbamidi` does,
 where a region read from a bank's table of offsets can find the address of its

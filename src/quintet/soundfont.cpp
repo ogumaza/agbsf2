@@ -37,15 +37,14 @@ constexpr uint64_t kLengthTickCycles = kSecondCycles / 256;
 
 // Stores one waveform cycle as three copies looping over the middle one, so players get lead-in and lead-out points
 // around the loop.
-void SetCycle(Sf2Sample& out, const std::vector<int16_t>& cycle)
+void SetCycle(sf2::Sample& out, const std::vector<int16_t>& cycle)
 {
-    out.pcm.clear();
+    out.data.clear();
     for (int i = 0; i < 3; i++)
     {
-        out.pcm.insert(out.pcm.end(), cycle.begin(), cycle.end());
+        out.data.insert(out.data.end(), cycle.begin(), cycle.end());
     }
 
-    out.loop = true;
     out.loop_start = uint32_t(cycle.size());
     out.loop_end = uint32_t(2 * cycle.size());
 }
@@ -176,7 +175,7 @@ int SoundfontBuilder::SquareSample(int duty)
         return it->second;
     }
 
-    Sf2Sample out;
+    sf2::Sample out;
     out.name = std::string("Square ") + kDutyNames[duty];
 
     // 8 points a step, 64 a cycle.
@@ -188,8 +187,8 @@ int SoundfontBuilder::SquareSample(int duty)
     }
 
     SetCycle(out, cycle);
-    out.rate = uint32_t(64 * kMiddleC + 0.5);
-    out.root_key = 60;
+    out.sample_rate = uint32_t(64 * kMiddleC + 0.5);
+    out.original_key = 60;
 
     file_.samples.push_back(std::move(out));
     return squares_[duty] = int(file_.samples.size()) - 1;
@@ -224,7 +223,7 @@ int SoundfontBuilder::WaveSample(const WaveShape& shape)
         return it->second;
     }
 
-    Sf2Sample out;
+    sf2::Sample out;
     char name[32];
     std::snprintf(name, sizeof name, "Wave %d", int(waves_.size()));
     out.name = name;
@@ -245,8 +244,8 @@ int SoundfontBuilder::WaveSample(const WaveShape& shape)
     }
 
     SetCycle(out, cycle);
-    out.rate = uint32_t(double(cycle.size()) * kMiddleC + 0.5);
-    out.root_key = uint8_t(60 + WaveKeyOffset(shape));
+    out.sample_rate = uint32_t(double(cycle.size()) * kMiddleC + 0.5);
+    out.original_key = uint8_t(60 + WaveKeyOffset(shape));
 
     file_.samples.push_back(std::move(out));
     return waves_[shape] = int(file_.samples.size()) - 1;
@@ -259,12 +258,12 @@ int SoundfontBuilder::NoiseSample(const NoiseSound& sound)
         return it->second;
     }
 
-    Sf2Sample out;
+    sf2::Sample out;
     char name[32];
     std::snprintf(name, sizeof name, "Noise %d", int(noises_.size()));
     out.name = name;
-    out.rate = kNoiseRate;
-    out.root_key = 60;
+    out.sample_rate = kNoiseRate;
+    out.original_key = 60;
 
     // Each of the note's frames applies the driver's settings; after the last, the channel plays on until it falls
     // silent for good or its sound stops changing.
@@ -281,7 +280,7 @@ int SoundfontBuilder::NoiseSample(const NoiseSound& sound)
         cycles += kFrameCycles;
         for (; points * kNoisePointCycles < cycles; points++)
         {
-            out.pcm.push_back(int16_t(noise.Next() * 32767));
+            out.data.push_back(int16_t(noise.Next() * 32767));
         }
 
         if (frame + 1 >= sound.frames.size() && (!noise.Sounding() || noise.Steady()))
@@ -293,18 +292,17 @@ int SoundfontBuilder::NoiseSample(const NoiseSound& sound)
     // A sound that goes on unchanged loops its last 2 frames, and the rest end in a few points of silence.
     if (noise.Sounding())
     {
-        const size_t loop = out.pcm.size() >= 2 * 1098 ? out.pcm.size() - 2 * 1098 : 0;
-        out.loop = true;
+        const size_t loop = out.data.size() >= 2 * 1098 ? out.data.size() - 2 * 1098 : 0;
         out.loop_start = uint32_t(loop);
-        out.loop_end = uint32_t(out.pcm.size());
+        out.loop_end = uint32_t(out.data.size());
         for (int i = 0; i < kGuardPoints; i++)
         {
-            out.pcm.push_back(out.pcm[loop + size_t(i)]);
+            out.data.push_back(out.data[loop + size_t(i)]);
         }
     }
     else
     {
-        out.pcm.insert(out.pcm.end(), kGuardPoints, int16_t(0));
+        out.data.insert(out.data.end(), kGuardPoints, int16_t(0));
     }
 
     file_.samples.push_back(std::move(out));
@@ -326,7 +324,7 @@ int SoundfontBuilder::PcmSample(const PcmSound& sound)
     }
 
     // A sample that plays at several rates, which make its passes different lengths, gets a numbered copy for each.
-    Sf2Sample out;
+    sf2::Sample out;
     char name[32];
     const int copy = ++pcm_copies_[sound.start];
     if (copy > 1)
@@ -339,42 +337,41 @@ int SoundfontBuilder::PcmSample(const PcmSound& sound)
     }
 
     out.name = name;
-    out.rate = sound.rate;
-    out.root_key = 60;
+    out.sample_rate = sound.rate;
+    out.original_key = 60;
 
     // The bytes from the start, then a pass through the loop, which is the SF2 sample's loop. The samples are 8-bit and
     // signed.
     for (uint32_t i = 0; i < sound.first; i++)
     {
-        out.pcm.push_back(int16_t(rom_.S8(sound.start + sound.from + i) * 256));
+        out.data.push_back(int16_t(rom_.S8(sound.start + sound.from + i) * 256));
     }
     for (uint32_t i = 0; i < loop_length; i++)
     {
-        out.pcm.push_back(int16_t(rom_.S8(sound.start + sound.loop + i) * 256));
+        out.data.push_back(int16_t(rom_.S8(sound.start + sound.loop + i) * 256));
     }
 
     if (loop_length)
     {
-        out.loop = true;
         out.loop_start = sound.first;
         out.loop_end = sound.first + loop_length;
         for (uint32_t i = 0; i < kGuardPoints; i++)
         {
-            out.pcm.push_back(out.pcm[out.loop_start + i % loop_length]);
+            out.data.push_back(out.data[out.loop_start + i % loop_length]);
         }
     }
     else
     {
-        out.pcm.insert(out.pcm.end(), kGuardPoints, int16_t(0));
+        out.data.insert(out.data.end(), kGuardPoints, int16_t(0));
     }
 
     file_.samples.push_back(std::move(out));
     return pcms_[sound] = int(file_.samples.size()) - 1;
 }
 
-int SoundfontBuilder::AddInstrument(const std::string& name, std::vector<Sf2Zone> zones)
+int SoundfontBuilder::AddInstrument(const std::string& name, std::vector<sf2::Zone> zones)
 {
-    Sf2Instrument inst;
+    sf2::Instrument inst;
     inst.name = name;
     inst.zones = std::move(zones);
     file_.instruments.push_back(std::move(inst));
@@ -384,12 +381,7 @@ int SoundfontBuilder::AddInstrument(const std::string& name, std::vector<Sf2Zone
 
 void SoundfontBuilder::AddPreset(const std::string& name, int bank, int program, int instrument)
 {
-    Sf2Preset p;
-    p.name = name;
-    p.bank = uint16_t(bank);
-    p.program = uint16_t(program);
-    p.instrument = instrument;
-    file_.presets.push_back(std::move(p));
+    file_.presets.push_back(MakePreset(name, uint16_t(bank), uint16_t(program), instrument));
 }
 
 } // namespace supergbamidi::quintet

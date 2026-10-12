@@ -30,6 +30,15 @@ constexpr int32_t kFullLevel = 0x80000;
 // The song time that the driver counts for each frame, in 1/256 microseconds: 1/60 s, as it works it out.
 constexpr int64_t kFrameTime = 4266666;
 
+// What the mixer did with a note slot's voice in the last frame.
+enum class MixResult : uint8_t
+{
+    kIdle,    // the slot had no voice
+    kMixed,   // the mixer took the voice
+    kSkipped, // the mixer left the voice out, after taking as many voices as its limit allows
+    kSilent,  // the mixer left the voice out, as its level was 0
+};
+
 // A note slot. Each channel has the same number, and a note plays in one until its envelope or its sample ends.
 struct Slot
 {
@@ -47,6 +56,7 @@ struct Slot
     int32_t level_step = 0;
     int32_t sustain = 0;
     uint32_t instrument = 0; // the instrument it plays
+    MixResult mix = MixResult::kIdle;
 };
 
 // A channel's settings.
@@ -56,6 +66,7 @@ struct ChannelState
     int program = -1;
     uint32_t bend = 0x2000;
     uint32_t modulation = 0; // controller 1
+    uint32_t volume = 0x7F;  // controller 7
     uint32_t vibrato_phase = 0;
     bool mono = false;
     EnvelopeSettings envelope; // a program change sets them back

@@ -128,6 +128,7 @@ struct Simulation
     std::vector<uint64_t> frame_ticks; // the MIDI tick each frame starts at, and the one after the last frame
     Plan plan;
     bool frame_timing = false; // each event at the start of the frame the driver plays it in, rather than its time
+    int volume2 = 0x80;        // the player's second volume, as the game sets it for the sequence
     std::vector<std::string> warnings;
 };
 
@@ -184,6 +185,11 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops,
     for (uint32_t f = 0; f < kMaxFrames && seq.Valid(); f++)
     {
         seq.Step();
+        if (f == 0)
+        {
+            sim.volume2 = seq.GetPlayer().volume2;
+        }
+
         FrameData d;
         d.tempo = std::max(0, int(seq.GetPlayer().tempo) + seq.GetPlayer().tempo_adjust);
         d.bend.fill(std::numeric_limits<double>::quiet_NaN());
@@ -686,7 +692,7 @@ std::vector<std::string> AddPresets(const Rom& rom, SoundfontBuilder& sf, const 
         const Program& program = programs[p];
 
         // Keys in a row with the same sound share a zone.
-        std::vector<Sf2Zone> zones;
+        std::vector<sf2::Zone> zones;
         for (auto it = program.keys.begin(); it != program.keys.end();)
         {
             const int first = it->first;
@@ -704,16 +710,13 @@ std::vector<std::string> AddPresets(const Rom& rom, SoundfontBuilder& sf, const 
             case kSampleType:
                 sample = sf.GameSample(z.sound);
                 break;
-
             case kSquare1Type:
             case kSquare2Type:
                 sample = sf.SquareSample(int(z.sound));
                 break;
-
             case kWaveType:
                 sample = sf.WaveSample(z.sound);
                 break;
-
             default:
                 sample = sf.NoiseSample(uint8_t(z.sound));
                 break;
@@ -727,26 +730,27 @@ std::vector<std::string> AddPresets(const Rom& rom, SoundfontBuilder& sf, const 
                 continue;
             }
 
-            Sf2Zone zone;
-            zone.gens.push_back(Sf2Gen::Range(sf2gen::kKeyRange, first, last));
-            zone.gens.push_back(Sf2Gen::Value(sf2gen::kOverridingRootKey, z.root));
+            sf2::Zone zone;
+            zone.generators.push_back(sf2::Generator::Range(sf2::kKeyRange, first, last));
+            zone.generators.push_back(sf2::Generator::Value(sf2::kOverridingRootKey, z.root));
             if (z.coarse)
             {
-                zone.gens.push_back(Sf2Gen::Value(sf2gen::kCoarseTune, z.coarse));
+                zone.generators.push_back(sf2::Generator::Value(sf2::kCoarseTune, z.coarse));
             }
             if (z.pan)
             {
-                zone.gens.push_back(Sf2Gen::Value(sf2gen::kPan, z.pan));
+                zone.generators.push_back(sf2::Generator::Value(sf2::kPan, z.pan));
             }
 
             // A drum keeps its pan whatever its track's pan is. This modulator replaces the default one from CC10.
             if (z.own_pan)
             {
-                zone.mods.push_back(
-                    {uint16_t(sf2src::kController | cc::kPan) | sf2src::kBipolar, sf2gen::kPan, 0, 0, 0});
+                zone.modulators.push_back({uint16_t(sf2::kController | cc::kPan) | sf2::kBipolar, sf2::kPan, 0, 0, 0});
             }
-            zone.gens.push_back(Sf2Gen::Value(sf2gen::kSampleModes, sf.File().samples[size_t(sample)].loop ? 1 : 0));
-            zone.gens.push_back(Sf2Gen::Value(sf2gen::kSampleId, sample));
+
+            zone.generators.push_back(
+                sf2::Generator::Value(sf2::kSampleModes, Looped(sf.File().samples[size_t(sample)]) ? 1 : 0));
+            zone.generators.push_back(sf2::Generator::Value(sf2::kSampleId, sample));
 
             const bool psg = z.type == kSquare1Type || z.type == kSquare2Type || z.type == kNoiseType;
             const Sf2Envelope env =
@@ -770,10 +774,12 @@ int BendValue(double bend, int range)
 }
 
 // Returns a track's levels on each side (full scale 128) for a voice at full velocity and envelope, from its pan and
-// volume and the player's volume, as the driver works out a sample voice's. A Link to the Past's revision gives the
-// voice a level of 190 at most, splits it between the sides in 256ths and divides the mix by 128. The Super Mario
-// Advance 2 revision gives it 127 at most, splits it in 128ths and divides each voice's points by 256.
-std::pair<double, double> TrackLevels(Revision revision, int pan, int volume, int player_volume)
+// volume and the player's volumes, as the driver works out a sample voice's. A Link to the Past's revision gives the
+// voice a level of 190 at most at the player's default second volume, 0x80, splits it between the sides in 256ths and
+// divides the mix by 128. The Super Mario Advance 2 revision has no second volume. It gives the voice 127 at most,
+// splits it in 128ths and divides each voice's points by 256. The Super Mario Advance 3 revision is A Link to the
+// Past's with two thirds of the level.
+std::pair<double, double> TrackLevels(Revision revision, int pan, int volume, int player_volume, int player_volume2)
 {
     pan = std::clamp(pan, 0, 127);
     if (revision == Revision::kSuperMarioAdvance2)
@@ -782,17 +788,30 @@ std::pair<double, double> TrackLevels(Revision revision, int pan, int volume, in
         return {(127 - pan) * level / 128 * 127 / 256, pan * level / 128 * 127 / 256};
     }
 
-    const double level = 3.0 * 127 * (player_volume / 128.0) * (volume / 256.0) * (32767.0 / 32768.0);
+    const double scale = revision == Revision::kSuperMarioAdvance3 ? 2.0 : 3.0;
+    const double level =
+        scale * 127 * (player_volume / 128.0) * (player_volume2 / 128.0) * (volume / 256.0) * (32767.0 / 32768.0);
     return {(127 - pan) * level / 256 * 127 / 128, pan * level / 256 * 127 / 128};
 }
 
-// A track's settings that the MIDI file's controllers follow, and the player's volume.
+// A track's settings that the MIDI file's controllers follow, and the player's volumes.
 struct Levels
 {
     int pan = kCentre;
     int volume = 0x80;
     int player_volume = 0x80;
+    int player_volume2 = 0x80;
 };
+
+// Returns a track's levels before its first change: the driver's, with the second volume that the game gives the
+// player.
+Levels StartLevels(const Simulation& sim)
+{
+    Levels start;
+    start.player_volume2 = sim.volume2;
+
+    return start;
+}
 
 // A change of a track's levels: its tick, the levels from there on, and whether it sets the track's pan.
 struct LevelChange
@@ -808,6 +827,7 @@ std::array<std::vector<LevelChange>, kPlayerTracks> TrackChanges(const Simulatio
 {
     std::array<std::vector<LevelChange>, kPlayerTracks> changes;
     std::array<Levels, kPlayerTracks> levels;
+    levels.fill(StartLevels(sim));
     for (const TimedEvent& te : sim.events)
     {
         const Event& e = te.event;
@@ -862,8 +882,9 @@ std::array<std::vector<LevelChange>, kPlayerTracks> TrackChanges(const Simulatio
 // Writes a track's CC10 for pan and CC11 for loudness at the start and whenever they change. A player that jumps back
 // to `loop`, the loop's start, retains the levels from the loop's end, as the game does until the loop sets them. So
 // CC11 is written again at the first level-change record at or after `loop`, and CC10, which follows the pan alone, at
-// the first record that sets the pan, even if their values haven't changed.
-void WriteLevels(MidiTrack& mt, int c, Revision revision, const std::vector<LevelChange>& changes,
+// the first record that sets the pan, even if their values haven't changed. `start` gives the levels before the
+// track's first change.
+void WriteLevels(MidiTrack& mt, int c, Revision revision, const Levels& start, const std::vector<LevelChange>& changes,
                  std::optional<uint64_t> loop)
 {
     int cc10 = -1, cc11 = -1;
@@ -877,7 +898,7 @@ void WriteLevels(MidiTrack& mt, int c, Revision revision, const std::vector<Leve
         again11 = again11 && !write11;
 
         const Levels& l = change.levels;
-        const auto [left, right] = TrackLevels(revision, l.pan, l.volume, l.player_volume);
+        const auto [left, right] = TrackLevels(revision, l.pan, l.volume, l.player_volume, l.player_volume2);
         int n10 = cc10 < 0 ? 64 : cc10, n11 = cc11 < 0 ? 0 : cc11;
         LevelsToControllers(left, right, n10, n11);
         if (n10 != cc10 || write10)
@@ -892,7 +913,7 @@ void WriteLevels(MidiTrack& mt, int c, Revision revision, const std::vector<Leve
 
     if (changes.empty() || changes[0].tick != 0)
     {
-        write(LevelChange());
+        write({0, start, false});
     }
     for (const LevelChange& change : changes)
     {
@@ -1011,10 +1032,14 @@ bool FirstPassRepeats(const Rom& rom, const DriverInfo& info, const Simulation& 
     {
         // The track's levels from its last change up to the note's start, as CC10 and CC11 give them.
         const std::vector<LevelChange>& list = changes[size_t(n.track)];
-        const auto after = std::upper_bound(list.begin(), list.end(), n.on, [](uint64_t tick, const LevelChange& change)
-                                            { return tick < change.tick; });
-        const Levels levels = after == list.begin() ? Levels() : std::prev(after)->levels;
-        const auto [left, right] = TrackLevels(info.revision, levels.pan, levels.volume, levels.player_volume);
+        const auto by_tick = [](uint64_t tick, const LevelChange& change)
+        {
+            return tick < change.tick;
+        };
+        const auto after = std::upper_bound(list.begin(), list.end(), n.on, by_tick);
+        const Levels levels = after == list.begin() ? StartLevels(sim) : std::prev(after)->levels;
+        const auto [left, right] =
+            TrackLevels(info.revision, levels.pan, levels.volume, levels.player_volume, levels.player_volume2);
         int cc10 = 64, cc11 = 0;
         LevelsToControllers(left, right, cc10, cc11);
 
@@ -1099,22 +1124,16 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
         mt.Control(0, c, cc::kChorus, 0);
         if (range)
         {
-            // RPN 0 sets the bend range; the null RPN then keeps later data entry from changing it.
-            mt.Control(0, c, cc::kRpnMsb, 0);
-            mt.Control(0, c, cc::kRpnLsb, 0);
-            mt.Control(0, c, cc::kDataEntry, range);
-            mt.Control(0, c, cc::kDataEntryLsb, 0);
-            mt.Control(0, c, cc::kRpnMsb, 127);
-            mt.Control(0, c, cc::kRpnLsb, 127);
+            mt.BendRange(0, c, range);
             mt.PitchBend(0, c, 8192);
             WriteBends(mt, c, sim, n, list, range, loop);
         }
 
-        WriteLevels(mt, c, revision, changes[size_t(n)], loop);
+        WriteLevels(mt, c, revision, StartLevels(sim), changes[size_t(n)], loop);
         WriteNotes(mt, c, list, slots, program, loop);
     }
 
-    return midi.Write(path, error);
+    return WriteFile(path, midi.Encode(), error);
 }
 
 // Converts a sequence, writing its files if `write` is set.
@@ -1191,6 +1210,7 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
                   rom.GameCode().c_str(), song, unsigned(info.sequence_addresses[size_t(song)]), kProgramName);
     const std::string stem =
         Utf8(PathFromUtf8(opt.out_dir) / PathFromUtf8(SafeFileName(opt.base_name) + "_" + TwoDigits(song)));
+
     std::string error;
     sum.midi_path = stem + ".mid";
     if (!WriteMidi(sum.midi_path, title, about, info.revision, sim, notes, slots, error))

@@ -43,6 +43,7 @@ struct DriverInfo
     int slots_per_channel = 6;                // the notes a channel can play at once
     bool envelope_controllers = false;        // controllers 20-23 set a channel's envelope, as in BDQE's revision
     bool frees_loop_once = false;             // moving a note past its end frees it in loop mode 1, as in BDQE's
+    bool skips_silent_notes = false;          // the mixer leaves out a note at a level of 0, as BDQE's does
     uint32_t pitch_table = 0;                 // 2^(n/12) for n = -64..63 in 9.23 fixed point, at n = 0
     uint32_t sine_table = 0;                  // 257 words: the vibrato's sine
     std::array<uint8_t, 100> fade_table = {}; // the length of each decay and release, from the driver's table

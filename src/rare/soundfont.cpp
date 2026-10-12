@@ -8,6 +8,8 @@
 #include <string>
 #include <utility>
 
+#include "seqlib/sf2/units.h"
+
 namespace supergbamidi::rare
 {
 namespace
@@ -19,6 +21,10 @@ constexpr int kInstant = -12000;
 // The greatest attenuation, in centibels.
 constexpr int kSilent = 1440;
 
+// A modulator that mutes a note while its key's polyphonic key pressure is 64 or more. Its 96 dB of attenuation takes
+// a 16-bit sample below its smallest step.
+constexpr sf2::Modulator kMute = {sf2::kPolyPressure | sf2::kSwitch, sf2::kInitialAttenuation, 960, 0, 0};
+
 // The shortest loop a sample gets, in points. A shorter one is repeated until it's at least this long, since some
 // players can't play a very short loop.
 constexpr uint32_t kMinLoop = 32;
@@ -29,12 +35,7 @@ constexpr uint32_t kLoopGuard = 8;
 // Returns a time in timecents, the unit of SoundFont envelope times.
 int Timecents(double seconds)
 {
-    if (seconds <= 0.001)
-    {
-        return kInstant;
-    }
-
-    return std::clamp(int(std::lround(1200.0 * std::log2(seconds))), kInstant, 8000);
+    return sf2::ToTimecents(seconds * 1000.0, kInstant, 8000);
 }
 
 // Returns the SoundFont duration for a decay or release that falls to silence over `frames` frames. The driver's level
@@ -155,13 +156,17 @@ int SoundfontBuilder::InstrumentFor(uint32_t address, const EnvelopeSettings& se
 
     // The global zone makes velocity and controller 7 scale the level in a straight line, as the driver does. The
     // default curves square them, and these take the place of the defaults.
-    Sf2Instrument si;
+    sf2::Instrument si;
     si.name = InstrumentName(address, settings);
-    Sf2Zone global;
-    global.mods.push_back(
-        {sf2src::kNoteOnVelocity | sf2src::kNegative | sf2src::kConcave, sf2gen::kInitialAttenuation, 480, 0, 0});
-    global.mods.push_back({uint16_t(sf2src::kController | 7) | sf2src::kNegative | sf2src::kConcave,
-                           sf2gen::kInitialAttenuation, 480, 0, 0});
+    sf2::Zone global;
+    global.modulators.push_back(
+        {sf2::kNoteOnVelocity | sf2::kNegative | sf2::kConcave, sf2::kInitialAttenuation, 480, 0, 0});
+    global.modulators.push_back(
+        {uint16_t(sf2::kController | 7) | sf2::kNegative | sf2::kConcave, sf2::kInitialAttenuation, 480, 0, 0});
+    if (mutes_)
+    {
+        global.modulators.push_back(kMute);
+    }
     si.zones.push_back(global);
 
     if (top.IsSample())
@@ -238,7 +243,7 @@ int SoundfontBuilder::BankFor(int bank, const EnvelopeSettings& settings)
 
 void SoundfontBuilder::AddPreset(int bank, int program, int instrument)
 {
-    for (const Sf2Preset& p : file_.presets)
+    for (const sf2::Preset& p : file_.presets)
     {
         if (p.bank == bank && p.program == program)
         {
@@ -246,12 +251,22 @@ void SoundfontBuilder::AddPreset(int bank, int program, int instrument)
         }
     }
 
-    Sf2Preset p;
-    p.name = "Program " + std::to_string(program);
-    p.bank = uint16_t(bank);
-    p.program = uint16_t(program);
-    p.instrument = instrument;
-    file_.presets.push_back(p);
+    file_.presets.push_back(
+        MakePreset("Program " + std::to_string(program), uint16_t(bank), uint16_t(program), instrument));
+}
+
+void SoundfontBuilder::AddMutes()
+{
+    if (mutes_)
+    {
+        return;
+    }
+
+    mutes_ = true;
+    for (sf2::Instrument& si : file_.instruments)
+    {
+        si.zones.front().modulators.push_back(kMute);
+    }
 }
 
 int SoundfontBuilder::SampleFor(const Instrument& inst)
@@ -271,27 +286,26 @@ int SoundfontBuilder::SampleFor(const Instrument& inst)
     }
 
     // The driver's samples are signed 8-bit.
-    Sf2Sample s;
+    sf2::Sample s;
     s.name = Name("Sample", inst.start);
-    s.rate = inst.rate;
-    s.root_key = uint8_t(std::min<uint32_t>(inst.root_key, 127));
+    s.sample_rate = inst.rate;
+    s.original_key = uint8_t(std::min<uint32_t>(inst.root_key, 127));
     const uint32_t length = inst.end - inst.start;
     for (uint32_t i = 0; i < length; i++)
     {
-        s.pcm.push_back(int16_t(rom_.S8(inst.start + i) * 256));
+        s.data.push_back(int16_t(rom_.S8(inst.start + i) * 256));
     }
 
     // A loop is the sample's last loop_length points. A short one is repeated after the end until it's long enough.
     if (loops)
     {
-        s.loop = true;
         s.loop_start = length - inst.loop_length;
         s.loop_end = length;
         while (s.loop_end - s.loop_start < kMinLoop)
         {
             for (uint32_t i = 0; i < inst.loop_length; i++)
             {
-                s.pcm.push_back(s.pcm[s.loop_start + i]);
+                s.data.push_back(s.data[s.loop_start + i]);
             }
 
             s.loop_end += inst.loop_length;
@@ -299,7 +313,7 @@ int SoundfontBuilder::SampleFor(const Instrument& inst)
 
         for (uint32_t i = 0; i < kLoopGuard; i++)
         {
-            s.pcm.push_back(s.pcm[s.loop_start + i % (s.loop_end - s.loop_start)]);
+            s.data.push_back(s.data[s.loop_start + i % (s.loop_end - s.loop_start)]);
         }
     }
 
@@ -309,47 +323,47 @@ int SoundfontBuilder::SampleFor(const Instrument& inst)
     return samples_[key];
 }
 
-Sf2Zone SoundfontBuilder::ZoneFor(const Instrument& voice, const EnvelopeSettings& settings, int sample, int low,
-                                  int high, bool fixed_pitch) const
+sf2::Zone SoundfontBuilder::ZoneFor(const Instrument& voice, const EnvelopeSettings& settings, int sample, int low,
+                                    int high, bool fixed_pitch) const
 {
-    Sf2Zone z;
-    z.gens.push_back(Sf2Gen::Range(sf2gen::kKeyRange, low, high));
+    sf2::Zone z;
+    z.generators.push_back(sf2::Generator::Range(sf2::kKeyRange, low, high));
 
     // Envelope phases at their defaults are left out.
     const Sf2Envelope env = EnvelopeFor(info_, voice, settings);
     const std::pair<uint16_t, int> phases[] = {
-        {sf2gen::kAttackVolEnv, env.attack}, {sf2gen::kDecayVolEnv, env.decay}, {sf2gen::kReleaseVolEnv, env.release}};
+        {sf2::kAttackVolEnv, env.attack}, {sf2::kDecayVolEnv, env.decay}, {sf2::kReleaseVolEnv, env.release}};
     for (const auto& [op, value] : phases)
     {
         if (value != kInstant)
         {
-            z.gens.push_back(Sf2Gen::Value(op, value));
+            z.generators.push_back(sf2::Generator::Value(op, value));
         }
     }
     if (env.sustain)
     {
-        z.gens.push_back(Sf2Gen::Value(sf2gen::kSustainVolEnv, env.sustain));
+        z.generators.push_back(sf2::Generator::Value(sf2::kSustainVolEnv, env.sustain));
     }
 
     // A fine tune of a semitone or more goes partly into the coarse tune, since the fine tune only reaches 99 cents.
     if (voice.fine_tune / 100)
     {
-        z.gens.push_back(Sf2Gen::Value(sf2gen::kCoarseTune, std::clamp(voice.fine_tune / 100, -120, 120)));
+        z.generators.push_back(sf2::Generator::Value(sf2::kCoarseTune, std::clamp(voice.fine_tune / 100, -120, 120)));
     }
     if (voice.fine_tune % 100)
     {
-        z.gens.push_back(Sf2Gen::Value(sf2gen::kFineTune, voice.fine_tune % 100));
+        z.generators.push_back(sf2::Generator::Value(sf2::kFineTune, voice.fine_tune % 100));
     }
 
     if (fixed_pitch)
     {
-        z.gens.push_back(Sf2Gen::Value(sf2gen::kScaleTuning, 0));
+        z.generators.push_back(sf2::Generator::Value(sf2::kScaleTuning, 0));
     }
     if (voice.Loops())
     {
-        z.gens.push_back(Sf2Gen::Value(sf2gen::kSampleModes, 1));
+        z.generators.push_back(sf2::Generator::Value(sf2::kSampleModes, 1));
     }
-    z.gens.push_back(Sf2Gen::Value(sf2gen::kSampleId, sample));
+    z.generators.push_back(sf2::Generator::Value(sf2::kSampleId, sample));
 
     return z;
 }

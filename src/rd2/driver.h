@@ -19,6 +19,9 @@ constexpr double kFrameRate = 16777216.0 / 280896.0;
 // The size of the game's settings for the driver: 7 table addresses and a word the driver doesn't read.
 constexpr uint32_t kSettingsSize = 32;
 
+// The mixer's sample voices.
+constexpr int kSampleVoices = 7;
+
 // User-supplied overrides for driver detection.
 struct DriverOverrides
 {
@@ -32,10 +35,19 @@ enum class Revision
     kLinkToThePast,      // The Legend of Zelda: A Link to the Past
     kSuperMarioAdvance2, // Super Mario Advance 2, an older revision without the player's second volume, whose bends,
                          // levels and mix differ
+    kSuperMarioAdvance3, // Super Mario Advance 3: A Link to the Past's, with sample voices at two thirds of the level
 };
 
 // Returns the revision's name, as --info prints it.
 const char* RevisionName(Revision r);
+
+// The driver's settings that a game's play-music routine makes along with a sequence: the sample voices it gives the
+// driver, and the music player's second volume.
+struct MusicSettings
+{
+    int sample_voices = kSampleVoices;
+    int volume2 = 0x80;
+};
 
 // The driver's tables in a ROM, and the tables the game gives it. Each table of offsets holds a word for each entry,
 // counted from the table's start.
@@ -59,15 +71,13 @@ struct DriverInfo
     uint32_t key_envelope = 0;     // the envelope of instruments that pick a sample for each key
     std::vector<uint32_t> sequence_addresses;
     std::vector<uint32_t> bank_list_addresses;
-    std::vector<std::string> log;      // detection results for --info
-    std::vector<std::string> warnings; // assumptions detection had to make
+    std::vector<MusicSettings> music_settings; // for each sequence, the settings that the game plays it with
+    std::vector<std::string> log;              // detection results for --info
+    std::vector<std::string> warnings;         // assumptions detection had to make
 };
 
 // Finds the driver in `rom`. Returns false and sets `error` if the driver's tables can't be read, or returns false with
 // `error` empty if the game shows no sign of the driver.
 bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info, std::string& error);
-
-// Returns `v` as 0x and 8 hexadecimal digits, for messages.
-std::string Hex(uint32_t v);
 
 } // namespace supergbamidi::rd2

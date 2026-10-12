@@ -79,6 +79,7 @@ std::optional<uint32_t> FindBank(const Rom& rom)
         {
             continue;
         }
+
         for (uint32_t site : FindCalls(rom, call - 2))
         {
             const uint32_t file = BlTarget(rom, site - 4);
@@ -86,6 +87,7 @@ std::optional<uint32_t> FindBank(const Rom& rom)
             {
                 continue;
             }
+
             const std::optional<uint32_t> bank = RunThumb(rom, file, {uint32_t(rom.U16(site - 6) & 0xFF), 0, 0, 0});
             if (bank && rom.Contains(*bank, 16))
             {
@@ -297,12 +299,14 @@ bool ReadMusic(const Rom& rom, const DriverInfo& info, int song, MusicPiece& pie
     {
         return false;
     }
+
     const int count = rom.U16(piece.address + 4);
     piece.flags = rom.U16(piece.address + 6);
     if (!count || !rom.Contains(piece.address + 8, 2 * uint32_t(count)))
     {
         return false;
     }
+
     for (int i = 0; i < count; i++)
     {
         piece.segments.push_back(rom.U16(piece.address + 8 + 2 * uint32_t(i)));

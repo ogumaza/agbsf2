@@ -7,27 +7,18 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <system_error>
 #include <vector>
 
-#ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX // MinGW's libstdc++ defines it already
-#define NOMINMAX
-#endif
-#include <windows.h>
-// shellapi.h needs the types from windows.h, so it has to come second.
-#include <shellapi.h>
-#endif
+#include "xsflib/console.h"
+#include "xsflib/text.h"
 
 #include "files.h"
 #include "music.h"
@@ -146,20 +137,32 @@ void OptionError(const std::string& message)
     std::fprintf(stderr, "%s: %s\n", kProgramName, message.c_str());
 }
 
-// Parses the whole of `s` as a number.
+// Parses the whole of `s` as a number in `base`, by C's rules (std::strtoll's).
 bool ParseNumber(const std::string& s, long long& out, int base)
 {
-    char* end = nullptr;
-    out = std::strtoll(s.c_str(), &end, base);
-    return !s.empty() && *end == 0;
+    const std::optional<int64_t> value = xsflib::ParseInteger(s, {base, true});
+    if (!value)
+    {
+        return false;
+    }
+
+    out = *value;
+
+    return true;
 }
 
-// Parses the whole of `s` as a decimal number.
+// Parses the whole of `s` as a decimal number, by C's rules (std::strtod's).
 bool ParseNumber(const std::string& s, double& out)
 {
-    char* end = nullptr;
-    out = std::strtod(s.c_str(), &end);
-    return !s.empty() && *end == 0;
+    const std::optional<xsflib::DecimalNumber> value = xsflib::ReadDecimal(s, {true});
+    if (!value || s.c_str()[value->length] != '\0')
+    {
+        return false;
+    }
+
+    out = value->value;
+
+    return true;
 }
 
 // Parses a list such as "0,3,7-9" into `values`.
@@ -781,15 +784,17 @@ int ConvertFile(const std::string& input, const std::string& label, const Option
         return 1;
     }
 
+    done.push_back(source);
+
     // The output goes in a folder named after the game, beside it. A file without an extension would share its path
     // with that folder. The folder then gets a suffix.
-    done.push_back(source);
     const std::string name = SafeFileName(o.name.empty() ? Utf8(source.stem()) : o.name);
     fs::path out_dir = o.out_dir.empty() ? source.parent_path() / PathFromUtf8(name) : PathFromUtf8(o.out_dir);
     if (o.out_dir.empty() && out_dir.lexically_normal() == source.lexically_normal())
     {
         out_dir += "_output";
     }
+
     fs::create_directories(out_dir, ec);
     if (ec)
     {
@@ -860,10 +865,8 @@ int ConvertFile(const std::string& input, const std::string& label, const Option
 // Converts every input the arguments name. Returns the exit code.
 int Run(const std::vector<std::string>& args)
 {
-#ifndef _WIN32
     // Keep progress and errors in order when both go to one pipe (the macOS droplet).
-    std::setvbuf(stdout, nullptr, _IOLBF, BUFSIZ);
-#endif
+    xsflib::console::LineBufferOutput();
 
     Options o;
     const int parsed = ParseArgs(args, o);
@@ -894,6 +897,7 @@ int Run(const std::vector<std::string>& args)
                 path = path.parent_path();
             }
             label = Utf8(path.filename());
+
             if (ConvertFile(o.inputs[i], label, o, done, failed))
             {
                 result = 1;
@@ -909,61 +913,15 @@ int Run(const std::vector<std::string>& args)
     return result;
 }
 
-#ifdef _WIN32
-// Returns the program's arguments in UTF-8. They're read as wide strings, so that paths outside the ANSI code page
-// survive.
-std::vector<std::string> CommandLine()
-{
-    int argc = 0;
-    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    std::vector<std::string> args;
-    for (int i = 0; argv && i < argc; i++)
-    {
-        const int n = WideCharToMultiByte(CP_UTF8, 0, argv[i], -1, nullptr, 0, nullptr, nullptr);
-        std::string s(size_t(n > 0 ? n - 1 : 0), '\0');
-        if (n > 1)
-        {
-            WideCharToMultiByte(CP_UTF8, 0, argv[i], -1, &s[0], n, nullptr, nullptr);
-        }
-
-        args.push_back(s);
-    }
-
-    if (argv)
-    {
-        LocalFree(argv);
-    }
-
-    return args;
-}
-
-// Waits for Enter if the program has a console window of its own. Dropping files on the .exe (or double-clicking it)
-// gives it one, which closes as soon as the program exits, so this keeps it open for the results to be read.
-void WaitIfOwnConsole()
-{
-    DWORD processes[2];
-    if (GetConsoleProcessList(processes, 2) == 1)
-    {
-        std::printf("\nPress Enter to close this window.");
-        std::fflush(stdout);
-        std::getchar();
-    }
-}
-#endif
-
 } // namespace
 
 int main(int argc, char** argv)
 {
-#ifdef _WIN32
-    SetConsoleOutputCP(CP_UTF8);
-    const int result = Run(CommandLine());
-    WaitIfOwnConsole();
-    (void)argc;
-    (void)argv;
+    // On Windows: the arguments from the wide command line, UTF-8 output, and a window that waits after files are
+    // dropped on the program, or after a double-click.
+    xsflib::console::UseUtf8Output(false);
+    const int result = Run(xsflib::console::Arguments(argc, argv));
+    xsflib::console::WaitInOwnWindow(stdout, "\nPress Enter to close this window.");
 
     return result;
-#else
-    return Run(std::vector<std::string>(argv, argv + argc));
-#endif
 }

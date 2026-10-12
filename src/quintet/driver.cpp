@@ -2,7 +2,6 @@
 
 #include "quintet/driver.h"
 
-#include <cstdio>
 #include <optional>
 #include <string>
 #include <vector>
@@ -18,14 +17,6 @@ namespace
 // The most songs and samples detection reads, so that unrelated ROM data can't keep it busy.
 constexpr int kMaxSongs = 1024;
 constexpr int kMaxSamples = 128;
-
-std::string Hex(uint32_t v)
-{
-    char b[16];
-    std::snprintf(b, sizeof b, "0x%08X", unsigned(v));
-
-    return b;
-}
 
 // Returns the literal that the ldr at halfword `index` of the first match of `pattern` loads, or 0 if there's no match.
 uint32_t FindLiteral(const Rom& rom, const char* pattern, int index)

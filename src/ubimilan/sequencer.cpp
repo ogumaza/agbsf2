@@ -57,11 +57,13 @@ Sequencer::Sequencer(const Rom& rom, const DriverInfo& info, int song) : rom_(ro
     {
         return;
     }
+
     const uint32_t first = ResourceAddress(rom, info, piece_.segments[0]);
     if (!first || rom.U8(first) != kSequence || !rom.Contains(first + 4, 2))
     {
         return;
     }
+
     valid_ = true;
 
     // The piece's start: a voice for the kit if the piece keeps one, the PSG's envelopes silenced, the kit's voice
@@ -72,10 +74,12 @@ Sequencer::Sequencer(const Rom& rom, const DriverInfo& info, int song) : rom_(ro
         kit_voice_ = kVoiceCount - 1;
         voices_[size_t(kit_voice_)].busy = true;
     }
+
     for (uint32_t address : {kNr11, kNr21, kNr31, kNr41})
     {
         Write(address, 2, 0);
     }
+
     wait_ = rom.U16(first + 4);
     pointer_ = first + 6;
     const uint32_t next = NextSegment(1);
@@ -403,14 +407,15 @@ void Sequencer::PsgNoteOn(int channel, int key, int velocity)
         Warn(text);
     }
 
-    // The instrument's bytes and the velocity, which is ORed into the envelope, then the key's frequency.
-    const uint16_t frequency = rom_.U16(info_.frequency_table + 2 * uint32_t(index));
     Note n;
     n.channel = channel;
     n.key = key;
     n.velocity = velocity;
     n.program = psg.program;
     n.on = frame_;
+
+    // The instrument's bytes and the velocity, which is ORed into the envelope, then the key's frequency.
+    const uint16_t frequency = rom_.U16(info_.frequency_table + 2 * uint32_t(index));
     if (channel == 0)
     {
         n.duty = rom_.U8(inst + 1);
@@ -494,6 +499,7 @@ void Sequencer::SoundUpdate()
     {
         return;
     }
+
     changed_ = false;
     const uint32_t next = NextSegment(2);
     if (next && rom_.U8(next) == kSequence)
@@ -505,6 +511,7 @@ void Sequencer::SoundUpdate()
         Warn("the piece's sequence after next isn't a sequence, on which the game resets");
         next_ = 0;
     }
+
     const int count = int(piece_.segments.size());
     index_ = index_ == count - 1 ? 0 : index_ + 1;
 }
@@ -519,6 +526,7 @@ void Sequencer::MixerRun()
         {
             continue;
         }
+
         voice.position += kRunPoints;
         if (voice.loop)
         {
@@ -569,6 +577,7 @@ bool Sequencer::Playing() const
     {
         return true;
     }
+
     for (const Voice& voice : voices_)
     {
         if (!voice.stopped)

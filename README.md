@@ -64,6 +64,7 @@ The tool reports unrecognised revisions of Konami's driver.
   Swords*, whose game selection and *Four Swords* play their music with MP2K
 * *Super Mario Advance 2: Super Mario World*, which has an older revision of
   the driver
+* *Super Mario Advance 3: Yoshi's Island*
 
 ### MP2K
 
@@ -107,17 +108,26 @@ name the driver and supply table addresses with the override options.
 For 64-bit Windows, download the zip containing `supergbamidi.exe` from
 GitHub Releases.
 
-You need a C++20 compiler and CMake 3.20 or later. There are no other
-dependencies.
+supergbamidi supports macOS on Apple Silicon and Windows x64 built with
+clang-cl. Other platforms and compilers aren't supported.
 
-* **Windows:** Visual Studio 2022 or later with the "Desktop development with
-  C++" workload, which includes CMake. MinGW-w64 works too.
-* **macOS:** the Xcode command line tools (`xcode-select --install`) and CMake,
-  for example from Homebrew (`brew install cmake`).
-* **Linux:** GCC 10 or Clang 10 or later, and CMake from your distribution,
-  for example `sudo apt install build-essential cmake` on Debian and Ubuntu.
+You need Git, a C++20 compiler and CMake 3.20 or later. The MIDI and
+SoundFont code comes from seqlib. The PSF container reader, the file and
+console code and the parsing of numbers come from xsflib. The repository
+holds both as Git submodules, in `externals/seqlib` and `externals/xsflib`.
+There are no other dependencies.
 
-Then, in the source folder:
+* **Windows x64:** Visual Studio 2022 with the "Desktop development with C++"
+  workload and its "C++ Clang tools for Windows" component. The workload
+  includes CMake. Configure with `cmake -S . -B build -A x64 -T ClangCL` in
+  place of the first command below.
+* **macOS on Apple Silicon:** the Xcode command line tools
+  (`xcode-select --install`) and CMake, for example from Homebrew
+  (`brew install cmake`).
+
+Clone the repository with `git clone --recursive`. In a clone made without
+`--recursive`, run `git submodule update --init` first. Then, in the source
+folder:
 
 ```sh
 cmake -S . -B build
@@ -131,7 +141,8 @@ also makes `build/Supergbamidi.app`, which you can drop files on.
 
 `ctest` runs the unit tests, and on macOS it also checks the report that
 `Supergbamidi.app` puts together from the program's output. CI builds
-supergbamidi and runs the tests on Windows, macOS and Linux.
+supergbamidi and runs the tests on macOS on Apple Silicon and on Windows x64
+with clang-cl.
 
 ## Usage
 
@@ -362,6 +373,17 @@ tune's commands:
   note if all of its channel's slots are playing. The MIDI file leaves such
   notes out, and ends each note where the driver's slot stops playing it, such
   as when a note in mono mode (controller 126) cuts off the one before.
+* The driver's mixer plays at most 8 voices in each frame. It leaves the
+  other notes out of that frame. Where it leaves out every note of a key on a
+  channel, the MIDI file mutes the key there with polyphonic key pressure
+  (aftertouch) of 127. A key pressure of 0 unmutes the key when the mixer takes
+  one of its notes again. The SoundFont turns a key pressure of 64 or more into
+  96 dB of attenuation. A player that applies the SoundFont's modulators, such
+  as FluidSynth, then silences the muted notes. A player that ignores key
+  pressure or the modulator plays every note. Where the mixer takes one note of
+  a key and leaves out another on the same channel, the MIDI file plays both.
+  In *Donkey Kong Country 3*, the mixer also leaves out the notes of a channel
+  at volume 0. Those notes don't count towards the limit.
 * A note off releases only one note with that key on the channel. Since a
   MIDI channel can't play the same key twice at once, the conversion ends
   the older note when the newer one starts.
@@ -401,6 +423,10 @@ channel's settings give there. That's the release the driver would give it.
 * **Volume and velocity** scale the level in a straight line, as in the
   driver, through modulators in each instrument. The SoundFont default would
   square them.
+* **Mutes.** Where the MIDI file mutes notes that the mixer leaves out, each
+  instrument has a modulator that adds 96 dB of attenuation while the note's
+  key has a key pressure of 64 or more. That takes a 16-bit sample below its
+  smallest step.
 
 With `--single-sf2`, the tunes that use the first tune's instruments use bank
 0, and each other set of instruments gets a bank of its own, which the tunes
@@ -744,7 +770,9 @@ order of the bank's resources. A piece plays a list of sequences one after
 another, and a piece that loops starts its list again. Each MIDI file has a
 conductor track with the tempo and loop markers, and a track for each channel
 that plays notes: `Square 1`, `Square 2` and `Wave` for sequence channels 0-2,
-on MIDI channels 1-3, and `Kit` for channel 9, on MIDI channel 10.
+on MIDI channels 1-3, and `Kit` for channel 9, on MIDI channel 11. Players treat
+notes on MIDI channel 10 as drums. Some ignore a drum's note-off or its
+sample's loop, and the kit's notes require both.
 
 The driver counts time in frames, and has no tempo. The MIDI file has 480
 ticks per quarter note, and the tempos of the beat that `supergbamidi` works
@@ -753,9 +781,9 @@ silence comes before its first note.
 
 | Game | MIDI |
 |---|---|
-| note on channel 9 | note on MIDI channel 10, whose key plays one of the kit's samples; a velocity of v is written as 127 × v / 64 |
+| note on channel 9 | note on MIDI channel 11: its key plays one of the kit's samples; a velocity of v is written as 127 × v / 64 |
 | note on channels 0-2 | note at the square's or the wave's pitch, with the starting volume as its velocity |
-| program on channel 9 | program change: an offset into the kit. Key k plays the kit's entry k + offset |
+| program on channel 9 | bank select 9 and program change: an offset into the kit. Key k plays the kit's entry k + offset |
 | program on channels 0-2 | bank select of the channel's number and program change: the channel's instrument |
 
 Channel 9's keys up to 11 play the PSG's noise, and its keys above that the
@@ -771,12 +799,12 @@ volume 0 make no sound, and the MIDI file leaves them out.
 
 Each song's SoundFont holds the instruments its notes play:
 
-* **The kit** gets a preset in bank 128 for each offset that the song uses,
-  with a zone for each key it plays: the key's sample, one of the game's 8-bit
-  samples widened to 16 bits, at the rate at which the mixer moves through
-  it, 16352 Hz, unpitched. The mixer moves through a sample 8 points at a
-  time, and a loop lasts a whole number of 8 points. As in the game, a note
-  stops at once at its note-off.
+* **The kit** gets a preset in bank 9 for each offset that the song uses. Each
+  preset has a zone for each key that the song plays. Each zone plays its key's
+  sample unpitched, at the rate at which the mixer moves through it: 16352 Hz.
+  The SoundFont widens the game's 8-bit points to 16 bits. The mixer moves
+  through a sample 8 points at a time, and a loop lasts a whole number of 8
+  points. As in the game, a note stops at once at its note-off.
 * **Noise keys** of the kit play the PSG's noise at the clock that the
   driver's table gives the key.
 * **The PSG's instruments** get a preset in the bank numbered after their
@@ -836,9 +864,12 @@ SoundFonts.
 ### Rare's driver
 
 * **Voice limit.** The driver mixes at most 8 voices at a time and leaves the
-  rest silent until voices free up. A SoundFont player plays every note, so a
-  busy passage can have notes in the MIDI file that the game doesn't let you
-  hear.
+  rest silent until voices free up. The MIDI file mutes the notes that the
+  driver leaves out with key pressure (see "MIDI from Rare's driver"). A
+  player that ignores key pressure or the SoundFont's mute modulator plays
+  every note. A busy passage then has notes that the game doesn't let you
+  hear. Where the driver leaves out one of two notes of a key on a channel, the
+  MIDI file plays both.
 * **Envelopes.** The SoundFont's envelopes approximate the driver's straight
   fades, and some players treat very short envelope phases differently.
 * **Timing.** The driver runs once a frame, so it plays every event on a frame
@@ -906,6 +937,11 @@ SoundFonts.
 * **Tracks the game mutes.** A game can mute some of a sequence's tracks when
   it plays it, as *Super Mario Advance 2* does to choose between two endings of
   a jingle. The MIDI file has every track.
+* **Voices and volumes the game sets.** A game can also give the driver fewer
+  sample voices, or lower the music's volume, when it plays a sequence.
+  `supergbamidi` reads the settings that *Super Mario Advance 3*'s play-music
+  routine makes. For another game, the MIDI file plays every sequence with all
+  7 sample voices, at the driver's default volume.
 * **Sound effects** aren't converted. Only the game's code starts them.
 
 ### MP2K
@@ -1030,5 +1066,10 @@ under an ARM emulator, and comparison scripts. See `tools/README.md`.
 
 `supergbamidi` is released under the MIT License; see `LICENSE`. The DEFLATE
 decoder in `src/inflate.cpp` is adapted from Mark Adler's puff under the zlib
-license. Its notice is in that file and in `THIRD_PARTY_NOTICES`. Game data is
-not covered by these licenses.
+license. Its notice is in that file and in `THIRD_PARTY_NOTICES`. The MIDI
+and SoundFont code comes from seqlib, under the MIT License. Its notice is in
+`externals/seqlib/LICENSE` and in `THIRD_PARTY_NOTICES`. The PSF container
+reader, the file and console code and the parsing of numbers come from
+xsflib, under the MIT License. xsflib's notice is in
+`externals/xsflib/LICENSE` and in `THIRD_PARTY_NOTICES`. Game data is not
+covered by these licenses.

@@ -34,6 +34,10 @@ RETURN_TRAP = 0x0F000000
 DMA_CONTROL = (0x040000B8, 0x040000C4, 0x040000D0, 0x040000DC)  # each DMA channel's count and control registers
 SLOT_SIZE = 0x28
 
+# The music volume, out of 128, at which Donkey Kong Country 3 plays most of its tunes. The driver's init sets 128. The
+# game sets the volume for each tune after it requests the tune. supergbamidi's model plays every tune at this volume.
+GAME_MUSIC_VOLUME = 69
+
 
 class Addresses:
     """A5NE (Donkey Kong Country)."""
@@ -50,6 +54,7 @@ class Addresses:
     samples_per_frame = 0x03001414
     channel_volume = 0x03001560  # 16 controller 7 values
     envelope_settings = None     # in BDQE's revision, 4 bytes for each channel from controllers 20-23
+    music_volume = None          # in BDQE, the word that holds the music volume
 
 
 class AddressesAWUE(Addresses):
@@ -139,6 +144,7 @@ class AddressesBDQE(Addresses):
     samples_per_frame = 0x03001294
     channel_volume = 0x03001380
     envelope_settings = 0x030023f0
+    music_volume = 0x030023c4
 
 
 GAMES = {b'A5NE': Addresses, b'AWUE': AddressesAWUE, b'BPIE': AddressesBPIE, b'BKZX': AddressesBKZX,
@@ -291,8 +297,11 @@ class DriverEmulator:
         return struct.unpack('<i', self.uc.mem_read(address, 4))[0]
 
     def play(self, tune):
-        """Requests `tune`. It starts on the next frame."""
+        """Requests `tune`. It starts on the next frame. In BDQE, the music volume is then set as the game sets it for
+        most tunes."""
         self.call(self.addr.request, (tune,))
+        if self.addr.music_volume is not None:
+            self.uc.mem_write(self.addr.music_volume, struct.pack('<I', GAME_MUSIC_VOLUME))
 
     def frame(self):
         """Runs one frame. Returns the mixer's output for it, as signed 8-bit samples. Afterwards `steps` holds the

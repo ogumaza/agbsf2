@@ -102,7 +102,4 @@ bool ReadModule(const Rom& rom, uint32_t address, ModuleInfo& module);
 // orders between markers.
 int SongCount(const ModuleInfo& module);
 
-// Returns `v` as 0x and 8 hexadecimal digits, for messages.
-std::string Hex(uint32_t v);
-
 } // namespace supergbamidi::krawall

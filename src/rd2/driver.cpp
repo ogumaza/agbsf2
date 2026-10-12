@@ -3,7 +3,6 @@
 #include "rd2/driver.h"
 
 #include <algorithm>
-#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -63,17 +62,58 @@ constexpr RevisionPatterns kSuperMarioAdvance2Patterns = {
 // Past's reads byte 10 and shifts it by 7.
 constexpr const char* kSuperMarioAdvance2Level = "B530 1C05 7868 2801 D1xx 7A6C 0224";
 
+// The end of that routine in the Super Mario Advance 3 revision: a released voice's level, then the volume, with
+// lsrs r4, r4, #8. A Link to the Past's routine multiplies the level by 3 and shifts it right by 9 instead. The Super
+// Mario Advance 2 revision's routine ends the same way. Detection looks for this end only when the start above is
+// missing.
+constexpr const char* kSuperMarioAdvance3Level = "30E6 6969 4348 0A40 6168 1C04 0A24 1C20";
+
 // The wave voice's fade after its release.
 constexpr TablePattern kWaveVolumes = {"2904 D900 2104 0609 0E09 4Axx 48xx 1809 7808 7010", 6};
 
 // The instrument lookup, for instruments with a sample for each key.
 constexpr TablePattern kKeyEnvelope = {"8869 1859 4Axx 0070 1840 8800 8050 6022 48xx 6060", 8};
 
-// Returns the literal that the ldr of the first match of a table's pattern loads, or 0 if there's no match.
-uint32_t FindTable(const Rom& rom, const TablePattern& table, int index = -1)
+// The lookup of the music's entry in Super Mario Advance 3's play-music routine. The game's table holds a halfword for
+// each music number, with the sequence in its low byte. The code is ldr r1, =table; lsls r0, r4, #1; adds r0, r0, r1;
+// ldrh r1, [r0]; ldrb r5, [r0]; movs r0, #0x80; lsls r0, r0, #3; ands r0, r1; cmp r0, #0; beq. The movs, lsls and ands
+// pick bit 10 of the entry. With the bit set, movs r0, #6 and a bl follow. The bl calls the routine that requests that
+// many sample voices.
+constexpr const char* kPlayMusicPattern = "49xx 0060 1840 8801 7805 2080 00C0 4008 2800 D0xx 20xx Fxxx Fxxx";
+
+// The most music numbers that detection reads from the game's table.
+constexpr uint32_t kMaxMusic = 256;
+
+// The part of the ROM that detection searches for the driver's code: from the driver's init up to the next copy's init.
+// A cartridge can hold a second copy of the driver in the multiboot image that the game sends to other GBAs. The two
+// copies can be different revisions. In Super Mario Advance 3, the image of Mario Bros. has the Super Mario Advance 2
+// revision, and the game has a later one.
+struct DriverCopy
 {
-    const std::vector<uint32_t> hits = FindThumb(rom, ParseThumbPattern(table.pattern));
-    return hits.empty() ? 0 : ThumbLiteral(rom, hits[0] + 2 * uint32_t(index < 0 ? table.index : index));
+    uint32_t begin;
+    uint32_t end;
+};
+
+// Returns the address of the first match of a pattern in the copy of the driver, or 0 if there's no match.
+uint32_t FindInCopy(const Rom& rom, const DriverCopy& copy, const char* pattern)
+{
+    for (uint32_t hit : FindThumb(rom, ParseThumbPattern(pattern)))
+    {
+        if (hit >= copy.begin && hit < copy.end)
+        {
+            return hit;
+        }
+    }
+
+    return 0;
+}
+
+// Returns the literal that the ldr of the first match of a table's pattern in the copy of the driver loads, or 0 if
+// there's no match.
+uint32_t FindTable(const Rom& rom, const DriverCopy& copy, const TablePattern& table, int index = -1)
+{
+    const uint32_t hit = FindInCopy(rom, copy, table.pattern);
+    return hit ? ThumbLiteral(rom, hit + 2 * uint32_t(index < 0 ? table.index : index)) : 0;
 }
 
 // Returns the game's settings from its call to the driver's init: the ldr r0 just before the bl.
@@ -135,19 +175,115 @@ bool PlausibleSequence(const Rom& rom, uint32_t at)
     return true;
 }
 
+// Where kPlayMusicPattern matches the game's play-music routine, reads the settings that the routine makes along with
+// each sequence. With the entry's bit clear, the beq goes to movs r0, #7 and a bl to the same routine. Both ways go on
+// to adds r1, r5, #0, movs r0, #player and a bl to the request for the sequence on the player. A run of cmp r4,
+// #music; bne; movs r0, #player; movs r1, #volume; and a bl to the request for the player's second volume follows. The
+// table doesn't give its length. Detection reads it up to the first entry whose sequence the game doesn't have. The
+// game has `game_count` sequences. An override of the count doesn't change that. A sequence takes the settings of the
+// first music number that plays it. Returns a line for --info, or an empty one if the game has no such routine.
+std::string ReadMusicSettings(const Rom& rom, uint32_t game_count, DriverInfo& info)
+{
+    info.music_settings.assign(info.sequence_addresses.size(), MusicSettings());
+    const std::vector<uint32_t> hits = FindThumb(rom, ParseThumbPattern(kPlayMusicPattern));
+    if (hits.size() != 1)
+    {
+        return "";
+    }
+
+    const uint32_t at = hits[0];
+    const uint32_t table = ThumbLiteral(rom, at);
+    const uint32_t bit = uint32_t(rom.U16(at + 10) & 0xFF) << ((rom.U16(at + 12) >> 6) & 0x1F);
+    const int with_bit = rom.U16(at + 20) & 0xFF;
+    const uint32_t set_voices = BlTarget(rom, at + 22);
+    const uint32_t clear = uint32_t(int64_t(at) + 22 + 2 * int8_t(rom.U16(at + 18) & 0xFF));
+    const int without_bit = rom.U16(clear) & 0xFF;
+    const int player = rom.U16(clear + 8) & 0xFF;
+    if ((rom.U16(clear) & 0xFF00) != 0x2000 || !set_voices || BlTarget(rom, clear + 2) != set_voices ||
+        rom.U16(clear + 6) != 0x1C29 || (rom.U16(clear + 8) & 0xFF00) != 0x2000 || !BlTarget(rom, clear + 10) ||
+        with_bit < 1 || with_bit > kSampleVoices || without_bit < 1 || without_bit > kSampleVoices)
+    {
+        return "";
+    }
+
+    // The music numbers that set the player's second volume, and the volume that each sets.
+    std::vector<std::pair<uint32_t, int>> volumes;
+    uint32_t set_volume = 0;
+    for (uint32_t p = clear + 14; (rom.U16(p) & 0xFF00) == 0x2C00; p += 12)
+    {
+        const uint32_t target = BlTarget(rom, p + 8);
+        if ((rom.U16(p + 2) & 0xFF00) != 0xD100 || rom.U16(p + 4) != (0x2000 | player) ||
+            (rom.U16(p + 6) & 0xFF00) != 0x2100 || !target || (set_volume && target != set_volume))
+        {
+            break;
+        }
+
+        set_volume = target;
+        volumes.push_back({rom.U16(p) & 0xFFu, rom.U16(p + 6) & 0xFF});
+    }
+
+    // Each sequence's settings, from the first music number that plays it. An entry for a sequence that isn't converted
+    // is skipped.
+    std::vector<bool> seen(info.sequence_addresses.size());
+    for (uint32_t music = 0; music < kMaxMusic && rom.Contains(table + 2 * music, 2); music++)
+    {
+        const uint16_t entry = rom.U16(table + 2 * music);
+        const size_t sequence = entry & 0xFF;
+        if (sequence >= game_count)
+        {
+            break;
+        }
+        if (sequence >= seen.size() || seen[sequence])
+        {
+            continue;
+        }
+
+        seen[sequence] = true;
+        MusicSettings& s = info.music_settings[sequence];
+        s.sample_voices = (entry & bit) ? with_bit : without_bit;
+        for (const auto& [number, volume] : volumes)
+        {
+            if (number == music)
+            {
+                s.volume2 = volume;
+            }
+        }
+    }
+
+    // The sequences that play with other settings than the driver's.
+    std::string voices, volume2;
+    for (size_t sequence = 0; sequence < info.music_settings.size(); sequence++)
+    {
+        const MusicSettings& s = info.music_settings[sequence];
+        if (s.sample_voices != kSampleVoices)
+        {
+            voices += (voices.empty() ? "" : ", ") + std::to_string(sequence);
+        }
+        if (s.volume2 != MusicSettings().volume2)
+        {
+            volume2 += (volume2.empty() ? "" : ", ") + std::to_string(sequence) + " (" +
+                       xsflib::Hex(uint32_t(s.volume2), 2, true) + ")";
+        }
+    }
+
+    return "the game's music table: " + Hex(table) + "; sequences with " + std::to_string(with_bit) +
+           " sample voices: " + (voices.empty() ? "none" : voices) +
+           "; second volume: " + (volume2.empty() ? "none" : volume2);
+}
+
 } // namespace
 
 const char* RevisionName(Revision r)
 {
-    return r == Revision::kSuperMarioAdvance2 ? "Super Mario Advance 2" : "A Link to the Past";
-}
-
-std::string Hex(uint32_t v)
-{
-    char b[16];
-    std::snprintf(b, sizeof b, "0x%08X", unsigned(v));
-
-    return b;
+    switch (r)
+    {
+    case Revision::kSuperMarioAdvance2:
+        return "Super Mario Advance 2";
+    case Revision::kSuperMarioAdvance3:
+        return "Super Mario Advance 3";
+    default:
+        return "A Link to the Past";
+    }
 }
 
 bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info, std::string& error)
@@ -185,17 +321,25 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
         }
     }
 
-    // The driver's tables come from the code that reads them, which the revisions' compilers built differently.
-    const bool mario = !FindThumb(rom, ParseThumbPattern(kSuperMarioAdvance2Level)).empty();
+    // The driver's tables come from the code that reads them. The revisions' compilers built that code differently.
+    // With no init found, detection searches the whole ROM.
+    const DriverCopy copy = {info.init, inits.size() > 1 ? inits[1] : rom.End()};
+    const bool mario = FindInCopy(rom, copy, kSuperMarioAdvance2Level) != 0;
     info.revision = mario ? Revision::kSuperMarioAdvance2 : Revision::kLinkToThePast;
+    if (!mario && FindInCopy(rom, copy, kSuperMarioAdvance3Level))
+    {
+        info.revision = Revision::kSuperMarioAdvance3;
+    }
+
     const RevisionPatterns& patterns = mario ? kSuperMarioAdvance2Patterns : kLinkToThePastPatterns;
-    info.pitch_table = FindTable(rom, patterns.pitch_table);
-    info.frequency_table = FindTable(rom, patterns.pitch_table, patterns.frequency_index);
-    info.noise_table = FindTable(rom, patterns.noise_table);
-    info.lfo_table = FindTable(rom, patterns.lfo_table);
-    info.wave_volumes = FindTable(rom, kWaveVolumes);
-    info.voice_classes = FindTable(rom, patterns.voice_classes);
-    info.key_envelope = FindTable(rom, kKeyEnvelope);
+    info.pitch_table = FindTable(rom, copy, patterns.pitch_table);
+    info.frequency_table = FindTable(rom, copy, patterns.pitch_table, patterns.frequency_index);
+    info.noise_table = FindTable(rom, copy, patterns.noise_table);
+    info.lfo_table = FindTable(rom, copy, patterns.lfo_table);
+    info.wave_volumes = FindTable(rom, copy, kWaveVolumes);
+    info.voice_classes = FindTable(rom, copy, patterns.voice_classes);
+    info.key_envelope = FindTable(rom, copy, kKeyEnvelope);
+
     const struct
     {
         uint32_t address;
@@ -223,10 +367,12 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
     // table of bank lists, so the shorter gives the count.
     uint32_t count = std::min(EntryCount(rom, info.sequences), EntryCount(rom, info.bank_lists));
     count = std::min<uint32_t>(count, kMaxSequences);
+    const uint32_t game_count = count;
     if (overrides.sequence_count > 0)
     {
         count = std::min<uint32_t>(uint32_t(overrides.sequence_count), kMaxSequences);
     }
+
     for (uint32_t i = 0; i < count; i++)
     {
         const uint32_t sequence = Entry(rom, info.sequences, i);
@@ -244,6 +390,8 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
         error = "found Nintendo R&D2's sound driver, but its sequence table at " + Hex(info.sequences) + " is empty";
         return false;
     }
+
+    const std::string music = ReadMusicSettings(rom, game_count, info);
 
     int unreadable = 0;
     for (uint32_t sequence : info.sequence_addresses)
@@ -274,6 +422,10 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
     }
     info.log.push_back("pitch table: " + Hex(info.pitch_table) + ", frequency table: " + Hex(info.frequency_table) +
                        ", noise table: " + Hex(info.noise_table) + ", LFO table: " + Hex(info.lfo_table));
+    if (!music.empty())
+    {
+        info.log.push_back(music);
+    }
 
     return true;
 }

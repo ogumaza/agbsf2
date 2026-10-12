@@ -123,6 +123,7 @@ Lookup LookUpInstrument(const Rom& rom, const DriverInfo& info, uint16_t bank, u
         lk.envelope = base + rom.U16(lk.region + 4);
         lk.found = true;
     }
+
     lk.missing = lk.region == base;
     if (!lk.found || !lk.region)
     {
@@ -250,8 +251,15 @@ void Sequencer::Start()
         return;
     }
 
+    // The game's play-music routine requests the sample voices that the sequence plays with, then the sequence, then
+    // the player's second volume. The driver handles the requests in that order.
+    const MusicSettings settings =
+        size_t(sequence_) < info_.music_settings.size() ? info_.music_settings[size_t(sequence_)] : MusicSettings();
+    SetSampleVoices(settings.sample_voices);
+
     StopPlayer();
     player_ = Player();
+    player_.volume2 = uint8_t(settings.volume2);
     player_.sequence = info_.sequence_addresses[size_t(sequence_)];
     player_.banks = info_.bank_list_addresses[size_t(sequence_)];
 
@@ -882,6 +890,25 @@ int Sequencer::AllocateVoice(uint8_t voice_class, uint8_t priority)
     return v;
 }
 
+// Takes sample voices out of use until `count` are left, as the driver's request 0x0304 does. The driver allocates
+// each one as a note of the highest priority would. That takes the first free voice, or else the first voice that
+// plays. The driver then takes the voice off the list of voices that play and keeps it on a separate list. Neither the
+// notes nor the mixer use that list.
+void Sequencer::SetSampleVoices(int count)
+{
+    for (int left = kSampleVoices; left > count; left--)
+    {
+        const int v = AllocateVoice(0, 0xFF);
+        if (v < 0)
+        {
+            break;
+        }
+
+        Unlink(v, active_);
+        voices_[size_t(v)].state = 0;
+    }
+}
+
 void Sequencer::Unlink(int v, int& head)
 {
     const Voice& x = voices_[size_t(v)];
@@ -1281,7 +1308,9 @@ uint32_t Sequencer::SampleLevel(Voice& v)
         v.volume = level;
     }
 
-    return mario ? level >> 8 : (level * 3) >> 9;
+    // A Link to the Past's revision multiplies the level by 3 and shifts it right by 9. The other two shift it right
+    // by 8.
+    return info_.revision == Revision::kLinkToThePast ? (level * 3) >> 9 : level >> 8;
 }
 
 // Returns a PSG voice's NRx2 for the frame, or for the wave voice its volume (0-4), or 8 to leave the channel as it is.

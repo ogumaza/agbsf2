@@ -30,9 +30,14 @@ constexpr uint16_t kQuarterTicks = 480;
 // The longest that a song plays: an hour.
 constexpr uint32_t kMaxFrames = 60 * 60 * 60;
 
-// The sequence channels that play notes, in the order of the MIDI file's tracks: the PSG's three, then channel 9.
+// The sequence channels that play notes, in the order of the MIDI file's tracks, and the tracks' names: the PSG's
+// three, then channel 9.
 constexpr std::array<int, 4> kChannels = {0, 1, 2, kKitChannel};
 const char* const kChannelNames[4] = {"Square 1", "Square 2", "Wave", "Kit"};
+
+// The MIDI channel of each of those channels. Channel 9 plays on MIDI channel 11. Players treat notes on MIDI channel
+// 10 as drums, and some ignore their note-offs or their samples' loops. The kit's notes require both.
+constexpr std::array<int, 4> kMidiChannels = {0, 1, 2, 10};
 
 // Returns the seconds that `frames` frames last.
 double FrameSeconds(double frames)
@@ -101,6 +106,7 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops,
         {
             continue;
         }
+
         if (!n.ended || n.off > sim.plan.end)
         {
             n.ended = true;
@@ -177,21 +183,24 @@ uint32_t QuarterTick(double quarters)
 }
 
 // Writes the MIDI file: a conductor track with the tempo map, then a track for each channel that plays notes. Each
-// event goes on the song's beat, or with `frame_timing`, on the frame the driver plays it in. Channel 9 plays on MIDI
-// channel 10, whose presets are in bank 128, and the PSG's channels play in the banks numbered after them.
+// event goes on the song's beat, or with `frame_timing`, on the frame the driver plays it in. Each channel plays on its
+// MIDI channel in kMidiChannels and in the bank numbered after it.
 bool WriteMidi(const std::string& path, const std::string& title, const std::string& about, const Plan& plan,
                const BeatGrid& grid, bool frame_timing, const std::array<std::vector<Note>, 4>& notes,
                std::string& error)
 {
-    // The song's end is on the beat, and a loop marker comes no later than any channel's events from its frame on.
+    // The song's end is on the beat.
     const auto song_tick = [&](double frame)
     {
         return QuarterTick(frame_timing ? grid.Quarters(frame) : grid.Snap(frame));
     };
+
+    // A loop marker comes no later than any channel's events from its frame on.
     const auto loop_tick = [&](double frame)
     {
         return QuarterTick(frame_timing ? grid.Quarters(frame) : grid.Marker(frame));
     };
+
     const uint32_t end = song_tick(plan.end);
     const auto tick = [&](int c, double frame)
     {
@@ -207,6 +216,7 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
     {
         conductor.Tempo(QuarterTick(t.quarter), uint32_t(std::lround(FrameSeconds(t.frames) * 1e6)));
     }
+
     // The beat's tempo at the loop's start is given again after the marker. The loop's end can have another, which a
     // player that keeps its tempo when it jumps back would otherwise play the loop's start at.
     if (plan.loops)
@@ -230,6 +240,7 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
         mt.Name(kChannelNames[c]);
         mt.SetEnd(end);
         const int ch = kChannels[c];
+        const int midi_channel = kMidiChannels[c];
         int bank = -1;
         int program = -1;
         bool restated = loop_start == 0;
@@ -242,22 +253,22 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
                 bank = program = -1;
                 restated = true;
             }
-            if (ch != kKitChannel && bank != ch)
+            if (bank != ch)
             {
-                mt.Bank(on, ch, ch);
+                mt.Bank(on, midi_channel, ch);
                 bank = ch;
             }
             if (program != n.program)
             {
-                mt.Program(on, ch, n.program);
+                mt.Program(on, midi_channel, n.program);
                 program = n.program;
             }
-            mt.NoteOn(on, ch, n.key, Velocity(n));
-            mt.NoteOff(off, ch, n.key);
+            mt.NoteOn(on, midi_channel, n.key, Velocity(n));
+            mt.NoteOff(off, midi_channel, n.key);
         }
     }
 
-    return midi.Write(path, error);
+    return WriteFile(path, midi.Encode(), error);
 }
 
 // Converts a song, or with `write` false, works out what the conversion would be.
@@ -292,6 +303,7 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
         {
             continue;
         }
+
         notes[size_t(c)].push_back(n);
         if (n.channel == kKitChannel)
         {
@@ -366,6 +378,7 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
     std::snprintf(about, sizeof about, "%s (%s) music %d, resource %d at 0x%08X, converted by %s", rom.Title().c_str(),
                   rom.GameCode().c_str(), song, info.songs[size_t(song)], unsigned(piece.address), kProgramName);
     const std::string stem = Utf8(PathFromUtf8(opt.out_dir) / PathFromUtf8(SafeFileName(opt.base_name) + "_" + number));
+
     std::string error;
     sum.midi_path = stem + ".mid";
     if (!WriteMidi(sum.midi_path, title, about, sim.plan, grid, opt.frame_timing, notes, error))

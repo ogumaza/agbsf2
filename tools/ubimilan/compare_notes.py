@@ -11,19 +11,19 @@ the song's beat and may be up to a frame and a half from the driver's timing. Th
 --frame-timing to keep events on the driver's frames. Both conversions must have identical SoundFonts and the same
 notes, keys and programs, in the same order on each channel and within 1.65 frames of each other: the frame and a
 half, and the rounding of a tick. It then runs the driver under driver_emu.py for every frame of the --frame-timing
-MIDI file, and each sample that the driver starts on a voice must be a note on MIDI channel 10:
+MIDI file. Each sample that the driver starts on a voice must be a note on MIDI channel 11:
 
   - starting on the frame on which the driver starts the sample;
   - at the velocity that the voice's volume gives: 127 times the volume over 64, a sample's full scale;
-  - with a zone for its key, in the preset of its program in bank 128, whose sample holds the driver's points at the
-    rate the mixer plays them, and loops where the driver's does;
+  - with a zone for its key in the preset of its program in bank 9. The zone's sample holds the driver's points at the
+    rate the mixer plays them and loops where the driver's sample loops;
   - ending on the frame on which the driver stops the voice, or on the frame after the one in which the voice reaches
     the end of a sample without a loop, or with the file.
 
 A sample that the driver starts at volume 0 plays nothing, and the MIDI file leaves it out. A key of channel 9 outside
 its kit makes the driver play a sample from a mirror of the ROM, which the MIDI file leaves out too; those are counted.
 The PSG's notes that sound, from the driver's writes to NR12, NR22, NR32 and NR42, must match the MIDI file's notes on
-channels 1 to 3 and on channel 10's keys up to 11, frame for frame.
+channels 1 to 3 and on channel 11's keys up to 11, frame for frame.
 """
 import argparse
 import re
@@ -41,7 +41,8 @@ from gbarom import ROM_BASE, load_rom
 FRAME_RATE = 16777216 / 280896
 MAX_SHIFT = 1.65  # frames that an event on the beat can be from the driver's frame, with a margin for the MIDI's ticks
 MIRROR = 0x0A000000
-KIT_CHANNEL = 9
+KIT_CHANNEL = 10  # the MIDI channel of the driver's channel 9, MIDI's channel 11, counted from 0
+KIT_BANK = 9
 POINTS_COMPARED = 256  # points of each sample compared with the SoundFont's
 NR31 = 0x04000072
 PSG_CHANNELS = {0x04000062: 0, 0x04000068: 1, NR31: 2, 0x04000078: KIT_CHANNEL}  # the MIDI channel of each register
@@ -103,7 +104,7 @@ def read_midi(path):
         elif kind == 0xC:
             program[ch] = args[0]
         elif kind == 0x9 and args[1]:
-            note = dict(channel=ch, key=args[0], velocity=args[1], bank=128 if ch == KIT_CHANNEL else bank.get(ch, 0),
+            note = dict(channel=ch, key=args[0], velocity=args[1], bank=bank.get(ch, 0),
                         program=program.get(ch, 0), on=frames(tick), off=None)
             open_notes[(ch, args[0])] = note
             notes.append(note)
@@ -211,7 +212,7 @@ def check_song(rom, song, framed, frames_limit):
     mirrored = sum(1 for n in notes if n['data'] >= MIRROR)
     expected = [n for n in notes if n['data'] < MIRROR and n['volume'] and n['on'] < end - 0.5]
     if len(expected) != len(kit):
-        problems.append('the driver starts %d samples that sound, the MIDI file has %d notes on channel 10' %
+        problems.append('the driver starts %d samples that sound, but the MIDI file has %d notes on channel 11' %
                         (len(expected), len(kit)))
     for d, m in zip(expected, kit):
         where = 'frame %d, voice %d' % (d['on'], d['voice'])
@@ -225,7 +226,9 @@ def check_song(rom, song, framed, frames_limit):
         off = min(d['off'] if d['off'] is not None else end, end)
         if abs(m['off'] - off) > 0.5:
             problems.append('%s: the MIDI note ends on frame %.2f, the driver stops it on %d' % (where, m['off'], off))
-        sample = presets.get((128, m['program']), {}).get(m['key'])
+        if m['bank'] != KIT_BANK:
+            problems.append('%s: the MIDI note plays in bank %d instead of bank %d' % (where, m['bank'], KIT_BANK))
+        sample = presets.get((m['bank'], m['program']), {}).get(m['key'])
         if sample is None:
             problems.append('%s: the SoundFont has no zone for key %d of program %d' % (where, m['key'],
                                                                                       m['program']))

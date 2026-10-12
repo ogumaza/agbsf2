@@ -132,6 +132,7 @@ public:
                 std::fprintf(out, "%lld w %08x %d %0*x\n", f, unsigned(w.address), int(w.size), 2 * int(w.size),
                              unsigned(w.value));
             }
+
             for (int c = 0; c < seq.ChannelCount(); c++)
             {
                 const std::array<uint8_t, 0x38> record = Sequencer::RecordBytes(seq.GetChannel(c));
@@ -141,6 +142,7 @@ public:
                     PrintHex(out, record.data(), record.size());
                 }
             }
+
             for (int v = 0; v < seq.VoiceCount(); v++)
             {
                 const std::array<uint8_t, 0x10> voice = seq.VoiceRecord(v);
@@ -155,12 +157,14 @@ public:
                     PrintHex(out, voice.data(), voice.size());
                 }
             }
+
             if (f == 0 || seq.GetGlobals() != last)
             {
                 last = seq.GetGlobals();
                 std::fprintf(out, "%lld g ", f);
                 PrintHex(out, last.data(), seq.GlobalsSize());
             }
+
             if (f > 0 && !seq.Playing())
             {
                 break;

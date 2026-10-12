@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <map>
@@ -221,7 +222,7 @@ public:
             at += size;
         }
         Put32(at, 0);
-        SUPERGBAMIDI_CHECK(at + 4 <= FileAddress(file + 1));
+        SEQLIB_CHECK(at + 4 <= FileAddress(file + 1));
 
         return data;
     }
@@ -300,16 +301,19 @@ private:
         {
             Put8(kLengthTable + i, kLengths[i]);
         }
+
         for (int n = 0; n < 84; n++)
         {
             const double hz = 65.40639 * std::pow(2.0, n / 12.0);
             Put16(kFrequencyTable + 2 * uint32_t(n), uint16_t(std::lround(std::max(0.0, 2048 - 131072 / hz))));
         }
+
         for (int n = 0; n < 53; n++)
         {
             Put16(kPcmPitchTable + 2 * uint32_t(n),
                   uint16_t(int16_t(std::lround(1000 * (std::pow(2.0, (n - 24) / 12.0) - 1)))));
         }
+
         for (uint32_t i = 0; i < 256; i++)
         {
             Put8(kLfoTable + i, uint8_t(int8_t(std::lround(127 * std::sin(i * 6.283185307179586 / 256)))));
@@ -396,8 +400,8 @@ DriverInfo Detect(const Rom& rom)
 {
     DriverInfo info;
     std::string error;
-    SUPERGBAMIDI_CHECK(DetectDriver(rom, DriverOverrides(), info, error));
-    SUPERGBAMIDI_CHECK(error.empty());
+    SEQLIB_CHECK(DetectDriver(rom, DriverOverrides(), info, error));
+    SEQLIB_CHECK(error.empty());
 
     return info;
 }
@@ -452,21 +456,21 @@ void TestDetection()
 
     const DriverInfo info = Detect(rom);
 
-    SUPERGBAMIDI_CHECK(info.revision == Revision::kA);
-    SUPERGBAMIDI_CHECK_EQ(info.play, kPlay);
-    SUPERGBAMIDI_CHECK_EQ(info.length_table, kLengthTable);
-    SUPERGBAMIDI_CHECK_EQ(info.frequency_table, kFrequencyTable);
-    SUPERGBAMIDI_CHECK_EQ(info.pcm_pitch_table, kPcmPitchTable);
-    SUPERGBAMIDI_CHECK_EQ(info.lfo_table, kLfoTable);
-    SUPERGBAMIDI_CHECK_EQ(info.waves, FileAddress(kWaveFile));
-    SUPERGBAMIDI_CHECK_EQ(info.macros[0], FileAddress(kMacroFile));
-    SUPERGBAMIDI_CHECK_EQ(info.macros[1], 0);
-    SUPERGBAMIDI_CHECK_EQ(info.samples[0], FileAddress(kSampleFile));
-    SUPERGBAMIDI_CHECK_EQ(info.samples[1], 0);
-    SUPERGBAMIDI_CHECK_EQ(info.songs, FileAddress(kMusicFile));
-    SUPERGBAMIDI_REQUIRE_EQ(info.song_addresses.size(), 2);
-    SUPERGBAMIDI_REQUIRE_EQ(info.sample_addresses[0].size(), 2);
-    SUPERGBAMIDI_CHECK(info.warnings.empty());
+    SEQLIB_CHECK(info.revision == Revision::kA);
+    SEQLIB_CHECK_EQ(info.play, kPlay);
+    SEQLIB_CHECK_EQ(info.length_table, kLengthTable);
+    SEQLIB_CHECK_EQ(info.frequency_table, kFrequencyTable);
+    SEQLIB_CHECK_EQ(info.pcm_pitch_table, kPcmPitchTable);
+    SEQLIB_CHECK_EQ(info.lfo_table, kLfoTable);
+    SEQLIB_CHECK_EQ(info.waves, FileAddress(kWaveFile));
+    SEQLIB_CHECK_EQ(info.macros[0], FileAddress(kMacroFile));
+    SEQLIB_CHECK_EQ(info.macros[1], 0);
+    SEQLIB_CHECK_EQ(info.samples[0], FileAddress(kSampleFile));
+    SEQLIB_CHECK_EQ(info.samples[1], 0);
+    SEQLIB_CHECK_EQ(info.songs, FileAddress(kMusicFile));
+    SEQLIB_REQUIRE_EQ(info.song_addresses.size(), 2);
+    SEQLIB_REQUIRE_EQ(info.sample_addresses[0].size(), 2);
+    SEQLIB_CHECK(info.warnings.empty());
 
     // Detection starts from nothing. A game without the driver keeps none of an earlier game's tables.
     DriverInfo reused = info;
@@ -476,7 +480,7 @@ void TestDetection()
 
     const bool found_blank = DetectDriver(blank, DriverOverrides(), reused, reused_error);
 
-    SUPERGBAMIDI_CHECK(!found_blank && reused.play == 0 && reused.song_addresses.empty());
+    SEQLIB_CHECK(!found_blank && reused.play == 0 && reused.song_addresses.empty());
 
     // The J revision has the sound effects' noise macros and samples too.
     Cart cart_j(Revision::kJ);
@@ -487,12 +491,12 @@ void TestDetection()
 
     const DriverInfo info_j = Detect(rom_j);
 
-    SUPERGBAMIDI_CHECK(info_j.revision == Revision::kJ);
-    SUPERGBAMIDI_CHECK_EQ(info_j.macros[0], FileAddress(kMacroFile));
-    SUPERGBAMIDI_CHECK_EQ(info_j.macros[1], FileAddress(kSfxMacroFile));
-    SUPERGBAMIDI_CHECK_EQ(info_j.samples[1], FileAddress(kSfxSampleFile));
-    SUPERGBAMIDI_REQUIRE_EQ(info_j.sample_addresses[1].size(), 3);
-    SUPERGBAMIDI_REQUIRE_EQ(info_j.song_addresses.size(), 1);
+    SEQLIB_CHECK(info_j.revision == Revision::kJ);
+    SEQLIB_CHECK_EQ(info_j.macros[0], FileAddress(kMacroFile));
+    SEQLIB_CHECK_EQ(info_j.macros[1], FileAddress(kSfxMacroFile));
+    SEQLIB_CHECK_EQ(info_j.samples[1], FileAddress(kSfxSampleFile));
+    SEQLIB_REQUIRE_EQ(info_j.sample_addresses[1].size(), 3);
+    SEQLIB_REQUIRE_EQ(info_j.song_addresses.size(), 1);
 
     // An override of the song count.
     DriverOverrides one;
@@ -500,8 +504,8 @@ void TestDetection()
     DriverInfo first;
     std::string error;
 
-    SUPERGBAMIDI_CHECK(DetectDriver(rom, one, first, error));
-    SUPERGBAMIDI_REQUIRE_EQ(first.song_addresses.size(), 1);
+    SEQLIB_CHECK(DetectDriver(rom, one, first, error));
+    SEQLIB_REQUIRE_EQ(first.song_addresses.size(), 1);
 
     // A cartridge without the driver shows no sign of it, unless the music file is given.
     Cart bare(Revision::kA, false);
@@ -511,10 +515,10 @@ void TestDetection()
     table.song_table = FileAddress(kMusicFile);
     DriverInfo none, given;
 
-    SUPERGBAMIDI_CHECK(!DetectDriver(bare_rom, DriverOverrides(), none, error));
-    SUPERGBAMIDI_CHECK(error.empty());
-    SUPERGBAMIDI_CHECK(!DetectDriver(bare_rom, table, given, error));
-    SUPERGBAMIDI_CHECK(error == "no Quintet sound driver found, so it has no length table");
+    SEQLIB_CHECK(!DetectDriver(bare_rom, DriverOverrides(), none, error));
+    SEQLIB_CHECK(error.empty());
+    SEQLIB_CHECK(!DetectDriver(bare_rom, table, given, error));
+    SEQLIB_CHECK(error == "no Quintet sound driver found, so it has no length table");
 }
 
 void TestDecoding()
@@ -542,15 +546,15 @@ void TestDecoding()
     const Command macros_j = DecodeCommand(rom, info_j, kAt + 12, 3);
     const Command end = DecodeCommand(rom, info, kAt + 13, 0);
 
-    SUPERGBAMIDI_CHECK(note.note && note.ticks == 64 && note.text == "note A#, 64 ticks (1/6)");
-    SUPERGBAMIDI_CHECK(rest.note && rest.ticks == 96 && rest.text == "rest, 96 ticks (1/4)");
-    SUPERGBAMIDI_CHECK(envelope.size == 6 &&
-                       envelope.text == "volume envelope: 100% to 80% over 3 frames, then to 60% over 15 frames");
-    SUPERGBAMIDI_CHECK(range.size == 4 && range.text == "play 0% to 98% of the sample, then loop from 0%");
-    SUPERGBAMIDI_CHECK(bank_a.text == "nothing");
-    SUPERGBAMIDI_CHECK(bank_j.text == "switch to the other bank of samples");
-    SUPERGBAMIDI_CHECK(macros_j.text == "switch to the other bank of noise macros");
-    SUPERGBAMIDI_CHECK(end.end && end.text == "end, or back to the loop point");
+    SEQLIB_CHECK(note.note && note.ticks == 64 && note.text == "note A#, 64 ticks (1/6)");
+    SEQLIB_CHECK(rest.note && rest.ticks == 96 && rest.text == "rest, 96 ticks (1/4)");
+    SEQLIB_CHECK(envelope.size == 6 &&
+                 envelope.text == "volume envelope: 100% to 80% over 3 frames, then to 60% over 15 frames");
+    SEQLIB_CHECK(range.size == 4 && range.text == "play 0% to 98% of the sample, then loop from 0%");
+    SEQLIB_CHECK(bank_a.text == "nothing");
+    SEQLIB_CHECK(bank_j.text == "switch to the other bank of samples");
+    SEQLIB_CHECK(macros_j.text == "switch to the other bank of noise macros");
+    SEQLIB_CHECK(end.end && end.text == "end, or back to the loop point");
 }
 
 void TestTiming()
@@ -577,7 +581,7 @@ void TestTiming()
         }
     }
 
-    SUPERGBAMIDI_CHECK(frames.size() >= 4 && frames[1] == 39 && frames[2] == 78 && frames[3] == 117);
+    SEQLIB_CHECK(frames.size() >= 4 && frames[1] == 39 && frames[2] == 78 && frames[3] == 117);
 
     // The MIDI file follows: a frame at tempo 90 is 90 ticks, and each note after a loop starts its frame.
     ConvertOptions opt;
@@ -592,12 +596,12 @@ void TestTiming()
     std::vector<uint32_t> ons;
     for (const auto& [tick, bytes] : midi.Find(0x90))
     {
-        ons.push_back(tick);
+        ons.push_back(uint32_t(tick));
     }
 
-    SUPERGBAMIDI_CHECK(sum.ok);
-    SUPERGBAMIDI_CHECK_EQ(midi.division, 3552);
-    SUPERGBAMIDI_CHECK(ons.size() == 4 && ons[0] == 0 && ons[1] == 3510 && ons[2] == 7020 && ons[3] == 10530);
+    SEQLIB_CHECK(sum.ok);
+    SEQLIB_CHECK_EQ(midi.division, 3552);
+    SEQLIB_CHECK(ons.size() == 4 && ons[0] == 0 && ons[1] == 3510 && ons[2] == 7020 && ons[3] == 10530);
 }
 
 // A channel that stops at FF on its loop point holds its note, and counts as finished. Here the only channel holds
@@ -616,8 +620,8 @@ void TestHold()
     const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     const MidiEvents midi = ReadMidi(sum.midi_path);
-    SUPERGBAMIDI_CHECK(sum.ok && sum.seconds > 0.65 && sum.seconds < 0.67 && sum.loop_start < 0);
-    SUPERGBAMIDI_CHECK(!midi.Find(0xE0).empty() && midi.Find(0xE0).size() <= 41);
+    SEQLIB_CHECK(sum.ok && sum.seconds > 0.65 && sum.seconds < 0.67 && sum.loop_start < 0);
+    SEQLIB_CHECK(!midi.Find(0xE0).empty() && midi.Find(0xE0).size() <= 41);
 }
 
 // Square 2 repeats a command 255 times 255 times, without a note, and the guard ends it after 10000 commands. Square 1
@@ -641,8 +645,8 @@ void TestCommandGuard()
         return std::any_of(sum.warnings.begin(), sum.warnings.end(),
                            [&text](const std::string& w) { return w.find(text) != std::string::npos; });
     };
-    SUPERGBAMIDI_CHECK(sum.ok && sum.seconds < 2);
-    SUPERGBAMIDI_CHECK(has("without reaching a note") && !has("cut off"));
+    SEQLIB_CHECK(sum.ok && sum.seconds < 2);
+    SEQLIB_CHECK(has("without reaching a note") && !has("cut off"));
 }
 
 void TestWaveSwitch()
@@ -672,15 +676,15 @@ void TestWaveSwitch()
     const auto root = [&sf2](size_t zone)
     {
         const std::map<uint16_t, uint16_t> gens = sf2.ZoneGens(zone);
-        const auto key = gens.find(sf2gen::kOverridingRootKey);
-        return key != gens.end() ? int(key->second) : int(sf2.Record("shdr", 46, gens.at(sf2gen::kSampleId))[40]);
+        const auto key = gens.find(sf2::kOverridingRootKey);
+        return key != gens.end() ? int(key->second) : int(sf2.Record("shdr", 46, gens.at(sf2::kSampleId))[40]);
     };
 
-    SUPERGBAMIDI_CHECK(sum.ok && zones == 2);
+    SEQLIB_CHECK(sum.ok && zones == 2);
     if (zones == 2)
     {
-        SUPERGBAMIDI_CHECK_EQ(root(first), 72);
-        SUPERGBAMIDI_CHECK_EQ(root(first + 1), 72);
+        SEQLIB_CHECK_EQ(root(first), 72);
+        SEQLIB_CHECK_EQ(root(first + 1), 72);
     }
 }
 
@@ -701,9 +705,9 @@ void TestLoopStarts()
     const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     const double length = sum.loop_end - sum.loop_start;
-    SUPERGBAMIDI_CHECK(sum.ok && sum.loop_start > 0);
-    SUPERGBAMIDI_CHECK(std::fabs(sum.loop_start - length / 2) < 0.02);
-    SUPERGBAMIDI_CHECK(std::fabs(sum.seconds - (sum.loop_start + 2 * length)) < 0.001);
+    SEQLIB_CHECK(sum.ok && sum.loop_start > 0);
+    SEQLIB_CHECK(std::fabs(sum.loop_start - length / 2) < 0.02);
+    SEQLIB_CHECK(std::fabs(sum.seconds - (sum.loop_start + 2 * length)) < 0.001);
 }
 
 void TestLoopAfterTempoChange()
@@ -730,8 +734,8 @@ void TestLoopAfterTempoChange()
     const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     const double length = sum.loop_end - sum.loop_start;
-    SUPERGBAMIDI_CHECK(sum.ok && sum.loop_start > length);
-    SUPERGBAMIDI_CHECK(std::fabs(sum.seconds - (sum.loop_start + 2 * length)) < 0.001);
+    SEQLIB_CHECK(sum.ok && sum.loop_start > length);
+    SEQLIB_CHECK(std::fabs(sum.seconds - (sum.loop_start + 2 * length)) < 0.001);
 }
 
 void TestLoopLengths()
@@ -753,9 +757,9 @@ void TestLoopLengths()
     const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     const double note = sum.loop_start / 2;
-    SUPERGBAMIDI_CHECK(sum.ok && sum.loop_start > 0);
-    SUPERGBAMIDI_CHECK(std::fabs(sum.loop_end - sum.loop_start - 12 * note) < 0.1);
-    SUPERGBAMIDI_CHECK(std::fabs(sum.seconds - (sum.loop_start + 24 * note)) < 0.1);
+    SEQLIB_CHECK(sum.ok && sum.loop_start > 0);
+    SEQLIB_CHECK(std::fabs(sum.loop_end - sum.loop_start - 12 * note) < 0.1);
+    SEQLIB_CHECK(std::fabs(sum.seconds - (sum.loop_start + 24 * note)) < 0.1);
 }
 
 // Square 1's loop sets octave 2 after its first note, so the first time through, that note plays at the octave 3 set
@@ -788,7 +792,7 @@ void TestLoopAtSecondPass()
         {
             if (bytes.size() > 3 && bytes[1] == 0x06 && std::string(bytes.begin() + 3, bytes.end()) == "loopStart")
             {
-                loop_start = tick;
+                loop_start = uint32_t(tick);
             }
         }
 
@@ -803,11 +807,11 @@ void TestLoopAtSecondPass()
 
         // At tempo 90, the two quarter notes take 2 × 96 × 37 / 90 = 78.9 frames, which the driver plays in 78.
         const double kPass = 78 * 280896.0 / 16777216;
-        SUPERGBAMIDI_CHECK(sum.ok);
-        SUPERGBAMIDI_CHECK(std::fabs(sum.loop_start - (moves ? kPass : 0)) < 0.001);
-        SUPERGBAMIDI_CHECK(std::fabs(sum.loop_end - sum.loop_start - kPass) < 0.001);
-        SUPERGBAMIDI_CHECK(std::fabs(sum.seconds - sum.loop_start - 2 * kPass) < 0.001);
-        SUPERGBAMIDI_CHECK(keys == std::vector<int>({60, 64, 60, 64}));
+        SEQLIB_CHECK(sum.ok);
+        SEQLIB_CHECK(std::fabs(sum.loop_start - (moves ? kPass : 0)) < 0.001);
+        SEQLIB_CHECK(std::fabs(sum.loop_end - sum.loop_start - kPass) < 0.001);
+        SEQLIB_CHECK(std::fabs(sum.seconds - sum.loop_start - 2 * kPass) < 0.001);
+        SEQLIB_CHECK(keys == std::vector<int>({60, 64, 60, 64}));
     }
 }
 
@@ -839,11 +843,11 @@ void TestLoopSeam()
         const std::string text = bytes.size() > 3 ? std::string(bytes.begin() + 3, bytes.end()) : "";
         if (bytes[1] == 0x06 && text == "loopStart")
         {
-            loop_start = tick;
+            loop_start = uint32_t(tick);
         }
         else if (bytes[1] == 0x06 && text == "loopEnd")
         {
-            loop_end = tick;
+            loop_end = uint32_t(tick);
         }
     }
 
@@ -859,10 +863,10 @@ void TestLoopSeam()
     // Square 1's first pass ends at frame 78, and the loop starts as much after that as square 2's loop point is into
     // the song, 2072 MIDI ticks, and lasts 78 frames.
     const double kFrame = 280896.0 / 16777216;
-    SUPERGBAMIDI_CHECK(sum.ok);
-    SUPERGBAMIDI_CHECK(std::fabs(sum.loop_start - (78 + 2072 / 90.0) * kFrame) < 1e-6);
-    SUPERGBAMIDI_CHECK(std::fabs(sum.loop_end - sum.loop_start - 78 * kFrame) < 1e-6);
-    SUPERGBAMIDI_CHECK(notes == (std::array<int, 2>{2, 2}));
+    SEQLIB_CHECK(sum.ok);
+    SEQLIB_CHECK(std::fabs(sum.loop_start - (78 + 2072 / 90.0) * kFrame) < 1e-6);
+    SEQLIB_CHECK(std::fabs(sum.loop_end - sum.loop_start - 78 * kFrame) < 1e-6);
+    SEQLIB_CHECK(notes == (std::array<int, 2>{2, 2}));
 }
 
 // Square 1 plays a note at volume 15, and then loops a note at volume 15 and one at 8. The first time through, the
@@ -893,7 +897,7 @@ void TestLoopSettingsAgain()
     {
         if (bytes.size() > 3 && bytes[1] == 0x06 && std::string(bytes.begin() + 3, bytes.end()) == "loopStart")
         {
-            loop_start = tick;
+            loop_start = uint32_t(tick);
         }
     }
 
@@ -902,15 +906,15 @@ void TestLoopSettingsAgain()
     {
         if (bytes[1] == cc::kExpression)
         {
-            levels.emplace_back(tick, bytes[2]);
+            levels.emplace_back(uint32_t(tick), bytes[2]);
         }
     }
 
     // The setup's level of 0, the first note's, the same again at the loop's start, and then the note at volume 8's.
-    SUPERGBAMIDI_CHECK(sum.ok && loop_start > 0);
-    SUPERGBAMIDI_REQUIRE(levels.size() > 3);
-    SUPERGBAMIDI_CHECK(levels[2] == std::make_pair(loop_start, levels[1].second));
-    SUPERGBAMIDI_CHECK(levels[3].first > loop_start && levels[3].second < levels[2].second);
+    SEQLIB_CHECK(sum.ok && loop_start > 0);
+    SEQLIB_REQUIRE(levels.size() > 3);
+    SEQLIB_CHECK(levels[2] == std::make_pair(loop_start, levels[1].second));
+    SEQLIB_CHECK(levels[3].first > loop_start && levels[3].second < levels[2].second);
 }
 
 void TestHourLimit()
@@ -932,8 +936,8 @@ void TestHourLimit()
     {
         return w.find("cut off after an hour") != std::string::npos;
     };
-    SUPERGBAMIDI_CHECK(sum.ok && std::any_of(sum.warnings.begin(), sum.warnings.end(), cut_off));
-    SUPERGBAMIDI_CHECK(std::fabs(sum.seconds - 216000 * 280896.0 / 16777216) < 0.1);
+    SEQLIB_CHECK(sum.ok && std::any_of(sum.warnings.begin(), sum.warnings.end(), cut_off));
+    SEQLIB_CHECK(std::fabs(sum.seconds - 216000 * 280896.0 / 16777216) < 0.1);
 }
 
 void TestRegisters()
@@ -946,8 +950,8 @@ void TestRegisters()
 
     const auto writes = Writes(rom, info, 0, 2);
 
-    SUPERGBAMIDI_CHECK_EQ(LastWrite(writes[1], 0x04000062), 0xC87F);
-    SUPERGBAMIDI_CHECK_EQ(LastWrite(writes[1], 0x04000064), 0x8000 | rom.U16(kFrequencyTable + 48));
+    SEQLIB_CHECK_EQ(LastWrite(writes[1], 0x04000062), 0xC87F);
+    SEQLIB_CHECK_EQ(LastWrite(writes[1], 0x04000064), 0x8000 | rom.U16(kFrequencyTable + 48));
 }
 
 void TestWaveVolumes()
@@ -972,13 +976,13 @@ void TestWaveVolumes()
 
         if (revision == Revision::kA)
         {
-            SUPERGBAMIDI_CHECK_EQ(first, 0x20FC);
-            SUPERGBAMIDI_CHECK_EQ(second, 0x20FC);
+            SEQLIB_CHECK_EQ(first, 0x20FC);
+            SEQLIB_CHECK_EQ(second, 0x20FC);
         }
         else
         {
-            SUPERGBAMIDI_CHECK_EQ(first, 0x80FC);
-            SUPERGBAMIDI_CHECK_EQ(second, 0x20FC);
+            SEQLIB_CHECK_EQ(first, 0x80FC);
+            SEQLIB_CHECK_EQ(second, 0x20FC);
         }
     }
 }
@@ -998,17 +1002,17 @@ void TestPcm()
         const auto writes = Writes(rom, info, 0, 2);
         const std::vector<RegisterWrite>& frame = writes[1];
 
-        SUPERGBAMIDI_CHECK_EQ(LastWrite(frame, 0x040000BC), data[0] + 32);
-        SUPERGBAMIDI_CHECK_EQ(LastWrite(frame, 0x040000C6), 0xB640);
-        SUPERGBAMIDI_CHECK_EQ(LastWrite(frame, 0x04000100), 0x800000 | (0x10000 - 16780000 / 10000));
-        SUPERGBAMIDI_CHECK(!frame.empty() && (frame.back().address == 0x04000100) == (revision == Revision::kJ));
+        SEQLIB_CHECK_EQ(LastWrite(frame, 0x040000BC), data[0] + 32);
+        SEQLIB_CHECK_EQ(LastWrite(frame, 0x040000C6), 0xB640);
+        SEQLIB_CHECK_EQ(LastWrite(frame, 0x04000100), 0x800000 | (0x10000 - 16780000 / 10000));
+        SEQLIB_CHECK(!frame.empty() && (frame.back().address == 0x04000100) == (revision == Revision::kJ));
     }
 
     // The driver checks a FIFO once a frame, and stops or loops it when the next frame would reach the end: from 0, at
     // 600 60ths of a byte a frame and an end of 100 bytes, it does so at the 9th check, after 8 frames.
-    SUPERGBAMIDI_CHECK_EQ(FifoFrames(0, 600, 100), 8);
-    SUPERGBAMIDI_CHECK_EQ(FifoFrames(5000, 600, 100), 0);
-    SUPERGBAMIDI_CHECK_EQ(FifoFrames(0, 0, 100), 0);
+    SEQLIB_CHECK_EQ(FifoFrames(0, 600, 100), 8);
+    SEQLIB_CHECK_EQ(FifoFrames(5000, 600, 100), 0);
+    SEQLIB_CHECK_EQ(FifoFrames(0, 0, 100), 0);
 }
 
 void TestBanks()
@@ -1044,10 +1048,10 @@ void TestBanks()
         }
     }
 
-    SUPERGBAMIDI_REQUIRE(sources.size() >= 3);
-    SUPERGBAMIDI_CHECK_EQ(sources[0], music[0]);
-    SUPERGBAMIDI_CHECK_EQ(sources[1], effects[1]);
-    SUPERGBAMIDI_CHECK_EQ(sources[2], effects[0]);
+    SEQLIB_REQUIRE(sources.size() >= 3);
+    SEQLIB_CHECK_EQ(sources[0], music[0]);
+    SEQLIB_CHECK_EQ(sources[1], effects[1]);
+    SEQLIB_CHECK_EQ(sources[2], effects[0]);
 }
 
 void TestNoiseDrums()
@@ -1068,9 +1072,9 @@ void TestNoiseDrums()
     const Sf2Records sf2 = ReadSf2(sum.sf2_path);
     const MidiEvents midi = ReadMidi(sum.midi_path);
     const auto ons = midi.Find(0x93);
-    SUPERGBAMIDI_CHECK(sum.ok);
-    SUPERGBAMIDI_CHECK(ons.size() == 2 && ons[0].second[1] == ons[1].second[1]);
-    SUPERGBAMIDI_CHECK_EQ(sf2.Count("shdr", 46), 2);
+    SEQLIB_CHECK(sum.ok);
+    SEQLIB_CHECK(ons.size() == 2 && ons[0].bytes[1] == ons[1].bytes[1]);
+    SEQLIB_CHECK_EQ(sf2.Count("shdr", 46), 2);
 
     // The sample's peak in each of its first 4 frames of 1097 points.
     const std::vector<uint8_t>& pcm = sf2.chunks.at("smpl");
@@ -1087,7 +1091,7 @@ void TestNoiseDrums()
         volumes.push_back(int(std::lround(peak * 15.0 / 32767)));
     }
 
-    SUPERGBAMIDI_CHECK(volumes == std::vector<int>({15, 10, 5, 0}));
+    SEQLIB_CHECK(volumes == std::vector<int>({15, 10, 5, 0}));
 }
 
 void TestNoiseMacros()
@@ -1111,10 +1115,10 @@ void TestNoiseMacros()
 
         const auto writes = Writes(rom, info, 0, 4);
 
-        SUPERGBAMIDI_CHECK_EQ(LastWrite(writes[1], 0x0400007C), j ? 0x8045 : 0x8027);
-        SUPERGBAMIDI_CHECK_EQ(LastWrite(writes[2], 0x0400007C), j ? 0x0056 : 0x0035);
-        SUPERGBAMIDI_CHECK_EQ(LastWrite(writes[3], 0x0400007C), 0x8000);
-        SUPERGBAMIDI_CHECK_EQ(LastWrite(writes[3], 0x04000078) >> 12, 0);
+        SEQLIB_CHECK_EQ(LastWrite(writes[1], 0x0400007C), j ? 0x8045 : 0x8027);
+        SEQLIB_CHECK_EQ(LastWrite(writes[2], 0x0400007C), j ? 0x0056 : 0x0035);
+        SEQLIB_CHECK_EQ(LastWrite(writes[3], 0x0400007C), 0x8000);
+        SEQLIB_CHECK_EQ(LastWrite(writes[3], 0x04000078) >> 12, 0);
     }
 }
 
@@ -1158,23 +1162,22 @@ void TestConversion()
 
     const auto is_tempo = [](const auto& e)
     {
-        return e.second.size() > 5 && e.second[1] == 0x51 &&
-               (e.second[3] << 16 | e.second[4] << 8 | e.second[5]) == 660779;
+        return e.bytes.size() > 5 && e.bytes[1] == 0x51 && (e.bytes[3] << 16 | e.bytes[4] << 8 | e.bytes[5]) == 660779;
     };
     const auto is_marker = [](const auto& e)
     {
-        return e.second.size() > 1 && e.second[1] == 0x06;
+        return e.bytes.size() > 1 && e.bytes[1] == 0x06;
     };
 
     // A level of 30 of 128 on the left alone is panned hard left, and CC11 is 127 × sqrt(30/128 / (sqrt(2) × 127/128)),
     // about 52.
-    SUPERGBAMIDI_CHECK(sum.ok && sum.loop_start == 0 && sum.loop_end > 0);
-    SUPERGBAMIDI_CHECK_EQ(cc11, 52);
-    SUPERGBAMIDI_CHECK_EQ(start_cc10, 0);
-    SUPERGBAMIDI_CHECK_EQ(cc10, -1);
-    SUPERGBAMIDI_CHECK(between);
-    SUPERGBAMIDI_CHECK(std::any_of(tempos.begin(), tempos.end(), is_tempo));
-    SUPERGBAMIDI_CHECK(std::any_of(tempos.begin(), tempos.end(), is_marker));
+    SEQLIB_CHECK(sum.ok && sum.loop_start == 0 && sum.loop_end > 0);
+    SEQLIB_CHECK_EQ(cc11, 52);
+    SEQLIB_CHECK_EQ(start_cc10, 0);
+    SEQLIB_CHECK_EQ(cc10, -1);
+    SEQLIB_CHECK(between);
+    SEQLIB_CHECK(std::any_of(tempos.begin(), tempos.end(), is_tempo));
+    SEQLIB_CHECK(std::any_of(tempos.begin(), tempos.end(), is_marker));
 }
 
 // The listing follows the driver's repeats. A count of 0 makes 256 passes there. The listing also says what a range of
@@ -1189,18 +1192,17 @@ void TestDump()
     const std::string path = Utf8(TempPath("dump.txt"));
     std::string error;
 
-    SUPERGBAMIDI_CHECK(DumpSong(rom, info, 0, path, error));
+    SEQLIB_CHECK(DumpSong(rom, info, 0, path, error));
 
     const std::vector<uint8_t> text = ReadAll(path);
     const std::string s(text.begin(), text.end());
-    SUPERGBAMIDI_CHECK(s.find("tempo 90, for every channel") != std::string::npos);
-    SUPERGBAMIDI_CHECK(s.find("0x08007011       96  30                 note C, 96 ticks (1/4)") != std::string::npos);
-    SUPERGBAMIDI_CHECK(s.find("0x08007014      192  FF                 end, or back to the loop point") !=
-                       std::string::npos);
-    SUPERGBAMIDI_CHECK(s.find("play the sample once, from the last range's start, or from its start after DC or DD") !=
-                       std::string::npos);
-    SUPERGBAMIDI_CHECK(s.find("play the repeat 256 times") != std::string::npos);
-    SUPERGBAMIDI_CHECK(s.find("   24576  FF ") != std::string::npos);
+    SEQLIB_CHECK(s.find("tempo 90, for every channel") != std::string::npos);
+    SEQLIB_CHECK(s.find("0x08007011       96  30                 note C, 96 ticks (1/4)") != std::string::npos);
+    SEQLIB_CHECK(s.find("0x08007014      192  FF                 end, or back to the loop point") != std::string::npos);
+    SEQLIB_CHECK(s.find("play the sample once, from the last range's start, or from its start after DC or DD") !=
+                 std::string::npos);
+    SEQLIB_CHECK(s.find("play the repeat 256 times") != std::string::npos);
+    SEQLIB_CHECK(s.find("   24576  FF ") != std::string::npos);
 }
 
 // OpenMusic() finds Quintet's driver from its code. A game without the driver's code isn't read, even with the music
@@ -1223,10 +1225,10 @@ void TestMusic()
     const std::unique_ptr<Music> bare_music = quintet::OpenMusic(bare_rom, table, table_error);
     const std::unique_ptr<Music> bare_forced = quintet::OpenMusic(bare_rom, forced, forced_error);
 
-    SUPERGBAMIDI_CHECK(music && music->Log().front() == "Quintet's sound driver");
-    SUPERGBAMIDI_CHECK(music && music->SongCount() == 1);
-    SUPERGBAMIDI_CHECK(!bare_music && table_error.empty());
-    SUPERGBAMIDI_CHECK(!bare_forced && forced_error == "no Quintet sound driver found, so it has no length table");
+    SEQLIB_CHECK(music && music->Log().front() == "Quintet's sound driver");
+    SEQLIB_CHECK(music && music->SongCount() == 1);
+    SEQLIB_CHECK(!bare_music && table_error.empty());
+    SEQLIB_CHECK(!bare_forced && forced_error == "no Quintet sound driver found, so it has no length table");
 }
 
 } // namespace

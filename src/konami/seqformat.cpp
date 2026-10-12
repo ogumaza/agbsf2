@@ -501,6 +501,7 @@ bool WalkTrack(const Rom& rom, const SongHeader& song, int track, Revision revis
     uint32_t start = song.offsets[track];
     uint32_t pos = 0;
     uint32_t frame = 0;
+
     // The call that the walk follows: the start and position to go back to, and the commands left to play.
     uint32_t saved_start = 0;
     uint32_t ret = 0;

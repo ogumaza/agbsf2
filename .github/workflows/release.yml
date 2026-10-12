@@ -24,24 +24,14 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
 
       - id: version
-        name: Read the version
-        run: |
-          version=$(sed -n 's/^project(supergbamidi VERSION \([0-9][0-9.]*\) .*/\1/p' CMakeLists.txt)
-          if [ -z "$version" ]; then
-            echo "::error::project() in CMakeLists.txt has no version"
-            exit 1
-          fi
-          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
-            echo "::error::the tag $GITHUB_REF_NAME doesn't match the project's version $version; expected v$version"
-            exit 1
-          fi
-          if [ ! -f "docs/release-notes/$version.md" ]; then
-            echo "::error::there are no release notes in docs/release-notes/$version.md"
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+        uses: ./externals/xsflib/ci/release-version
+        with:
+          project: supergbamidi
 
   windows:
     needs: version
@@ -49,62 +39,38 @@ jobs:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v7
-
-      - name: Build
-        run: |
-          cmake -S . -B build -A x64 -DSUPERGBAMIDI_BUILD_TESTS=OFF
-          cmake --build build --config Release --parallel --target supergbamidi
-
-      # Check both --version and the version resource that Windows shows in the file's properties.
-      - name: Check the version
-        shell: pwsh
-        run: |
-          $version = '${{ needs.version.outputs.version }}'
-          $said = (& build/Release/supergbamidi.exe --version) -join ''
-          if ($said -ne "supergbamidi $version") { throw "--version printed '$said'; expected 'supergbamidi $version'" }
-          $info = (Get-Item build/Release/supergbamidi.exe).VersionInfo
-          if ($info.ProductVersion -ne $version -or $info.FileVersion -ne $version) {
-            throw "the version resource has file version '$($info.FileVersion)' and product version '$($info.ProductVersion)'; expected $version"
-          }
-
-      - uses: actions/upload-artifact@v7
         with:
-          name: win-x64
-          path: build/Release/supergbamidi.exe
+          submodules: recursive
+          token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
+
+      - uses: ./externals/xsflib/ci/release-windows
+        with:
+          version: ${{ needs.version.outputs.version }}
+          cmake: -A x64 -T ClangCL -DSUPERGBAMIDI_BUILD_TESTS=OFF
+          targets: supergbamidi
+          programs: supergbamidi
+          files: build/Release/supergbamidi.exe
+          artifact: win-x64
 
   package:
     needs: [version, windows]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
-    env:
-      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
-
-      - uses: actions/download-artifact@v8
         with:
-          name: win-x64
-          path: artifacts/win-x64
+          submodules: recursive
+          token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
 
-      - name: Package
-        run: |
-          mkdir -p dist stage
-          cp artifacts/win-x64/supergbamidi.exe README.md LICENSE THIRD_PARTY_NOTICES stage/
-          (cd stage && zip -q -X "../dist/supergbamidi-$VERSION-win-x64.zip" *)
-          unzip -l "dist/supergbamidi-$VERSION-win-x64.zip"
-
-      - name: Publish the release
-        if: github.ref_type == 'tag'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --title "supergbamidi $VERSION" \
-            --notes-file "docs/release-notes/$VERSION.md"
-
-      - name: Upload the package (manual run)
-        if: github.ref_type != 'tag'
-        uses: actions/upload-artifact@v7
+      - uses: ./externals/xsflib/ci/package-converter
         with:
-          name: supergbamidi-${{ env.VERSION }}
-          path: dist/
+          program: supergbamidi
+          version: ${{ needs.version.outputs.version }}
+          documents: README.md LICENSE THIRD_PARTY_NOTICES
+
+      - uses: ./externals/xsflib/ci/release-publish
+        with:
+          title: supergbamidi
+          version: ${{ needs.version.outputs.version }}
+          artifact: supergbamidi-${{ needs.version.outputs.version }}

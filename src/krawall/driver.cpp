@@ -116,11 +116,12 @@ int64_t CallLiteral(const Rom& rom, uint32_t routine, uint32_t skip)
 {
     for (uint32_t call : FindCalls(rom, routine))
     {
-        const uint16_t before = rom.U16(call - 2);
         if (call == skip)
         {
             continue;
         }
+
+        const uint16_t before = rom.U16(call - 2);
         if ((before & 0xFF00) == 0x2000)
         {
             return before & 0xFF;
@@ -176,6 +177,7 @@ bool PlausiblePattern(const Rom& rom, uint32_t at)
         {
             return false;
         }
+
         last = offset;
     }
 
@@ -239,14 +241,6 @@ void FindModuleTable(const Rom& rom, const std::vector<uint32_t>& modules, uint3
 }
 
 } // namespace
-
-std::string Hex(uint32_t v)
-{
-    char b[16];
-    std::snprintf(b, sizeof b, "0x%08X", unsigned(v));
-
-    return b;
-}
 
 bool ReadModule(const Rom& rom, uint32_t address, ModuleInfo& module)
 {
@@ -323,6 +317,7 @@ bool ReadModule(const Rom& rom, uint32_t address, ModuleInfo& module)
         {
             return false;
         }
+
         module.patterns.push_back(pattern);
     }
 
@@ -336,11 +331,11 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
 
     // The player's code, which this build of Krawall compiled the same in every game. A game with another build has the
     // library's version string, which names the build.
-    const std::string version = kVersionText;
-    info.version = FindBytes(rom, std::vector<uint8_t>(version.begin(), version.end()), 1);
+    const std::string kVersion = kVersionText;
+    info.version = FindBytes(rom, std::vector<uint8_t>(kVersion.begin(), kVersion.end()), 1);
     info.play = FindFirst(rom, kPlayPattern);
-    const uint32_t tables = FindFirst(rom, kTablesPattern);
-    if (!info.play || !tables)
+    const uint32_t table_code = FindFirst(rom, kTablesPattern);
+    if (!info.play || !table_code)
     {
         if (info.version)
         {
@@ -350,8 +345,8 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
         return false;
     }
 
-    info.instruments = ThumbLiteral(rom, tables + 2 * kInstrumentsIndex);
-    info.samples = ThumbLiteral(rom, tables + 2 * kSamplesIndex);
+    info.instruments = ThumbLiteral(rom, table_code + 2 * kInstrumentsIndex);
+    info.samples = ThumbLiteral(rom, table_code + 2 * kSamplesIndex);
 
     // The player's tables.
     info.sine = FindTable(rom, kSine);
@@ -366,7 +361,7 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
         uint32_t address;
         uint32_t size;
         const char* name;
-    } kTables[] = {
+    } tables[] = {
         {info.sine, 128, "vibrato's sine"},
         {info.ramp, 128, "vibrato's ramp"},
         {info.square, 128, "vibrato's square"},
@@ -376,7 +371,7 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
         {info.linear, 3072, "table of linear frequencies"},
         {info.samples, 4, "table of samples"},
     };
-    for (const auto& t : kTables)
+    for (const auto& t : tables)
     {
         if (!rom.Contains(t.address, t.size))
         {

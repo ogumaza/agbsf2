@@ -13,6 +13,8 @@
 #include <utility>
 #include <vector>
 
+#include "seqlib/sf2/units.h"
+
 #include "files.h"
 #include "midi.h"
 #include "music.h"
@@ -1099,22 +1101,22 @@ uint32_t QuarterMicros(int tempo)
 // Returns the SF2 time in timecents for `frames` frames.
 int FrameTimecents(int frames)
 {
-    return int(std::lround(1200 * std::log2(FrameSeconds(frames))));
+    return sf2::ToTimecents(FrameSeconds(frames) * 1000.0);
 }
 
 // Returns a zone that plays `sample` on every key, looping it if `loop` is set.
-Sf2Zone SampleZone(int sample, bool loop)
+sf2::Zone SampleZone(int sample, bool loop)
 {
-    Sf2Zone z;
-    z.gens.push_back(Sf2Gen::Range(sf2gen::kKeyRange, 0, 127));
-    z.gens.push_back(Sf2Gen::Value(sf2gen::kSampleModes, loop ? 1 : 0));
-    z.gens.push_back(Sf2Gen::Value(sf2gen::kSampleId, sample));
+    sf2::Zone z;
+    z.generators.push_back(sf2::Generator::Range(sf2::kKeyRange, 0, 127));
+    z.generators.push_back(sf2::Generator::Value(sf2::kSampleModes, loop ? 1 : 0));
+    z.generators.push_back(sf2::Generator::Value(sf2::kSampleId, sample));
 
     return z;
 }
 
 // Returns the zones of an instrument that plays sample `first` for `frames` frames of each note, and then `second`.
-std::vector<Sf2Zone> SwitchZones(int first, int frames, int second)
+std::vector<sf2::Zone> SwitchZones(int first, int frames, int second)
 {
     if (frames == 0)
     {
@@ -1123,12 +1125,12 @@ std::vector<Sf2Zone> SwitchZones(int first, int frames, int second)
 
     // The first sample holds for the frames and then falls silent; the second waits for them.
     const int time = FrameTimecents(frames);
-    Sf2Zone a = SampleZone(first, true);
-    a.gens.insert(a.gens.begin() + 1,
-                  {Sf2Gen::Value(sf2gen::kHoldVolEnv, time), Sf2Gen::Value(sf2gen::kDecayVolEnv, -12000),
-                   Sf2Gen::Value(sf2gen::kSustainVolEnv, 1440)});
-    Sf2Zone b = SampleZone(second, true);
-    b.gens.insert(b.gens.begin() + 1, Sf2Gen::Value(sf2gen::kDelayVolEnv, time));
+    sf2::Zone a = SampleZone(first, true);
+    a.generators.insert(a.generators.begin() + 1, {sf2::Generator::Value(sf2::kHoldVolEnv, time),
+                                                   sf2::Generator::Value(sf2::kDecayVolEnv, -12000),
+                                                   sf2::Generator::Value(sf2::kSustainVolEnv, 1440)});
+    sf2::Zone b = SampleZone(second, true);
+    b.generators.insert(b.generators.begin() + 1, sf2::Generator::Value(sf2::kDelayVolEnv, time));
 
     return {a, b};
 }
@@ -1140,7 +1142,7 @@ std::vector<std::string> AddPresets(SoundfontBuilder& sf, const NoteMaker& maker
     std::vector<std::string> warnings;
     for (const auto& [inst, program] : maker.Programs())
     {
-        std::vector<Sf2Zone> zones;
+        std::vector<sf2::Zone> zones;
         std::string name;
         char text[64];
         switch (inst.kind)
@@ -1173,8 +1175,8 @@ std::vector<std::string> AddPresets(SoundfontBuilder& sf, const NoteMaker& maker
                 const int second = SoundfontBuilder::WaveKeyOffset(maker.Shape(inst.second));
                 if (zones.size() == 2 && first != second)
                 {
-                    zones[1].gens.insert(zones[1].gens.end() - 1,
-                                         Sf2Gen::Value(sf2gen::kOverridingRootKey, 60 + first));
+                    zones[1].generators.insert(zones[1].generators.end() - 1,
+                                               sf2::Generator::Value(sf2::kOverridingRootKey, 60 + first));
                 }
 
                 std::snprintf(text, sizeof text, inst.frames ? "Wave %d to %d" : "Wave %d", inst.first, inst.second);
@@ -1186,11 +1188,12 @@ std::vector<std::string> AddPresets(SoundfontBuilder& sf, const NoteMaker& maker
             for (const auto& [sound, key] : maker.Drums())
             {
                 const int sample = sf.NoiseSample(sound);
-                Sf2Zone z;
-                z.gens.push_back(Sf2Gen::Range(sf2gen::kKeyRange, key, key));
-                z.gens.push_back(Sf2Gen::Value(sf2gen::kOverridingRootKey, key));
-                z.gens.push_back(Sf2Gen::Value(sf2gen::kSampleModes, sf.File().samples[size_t(sample)].loop ? 1 : 0));
-                z.gens.push_back(Sf2Gen::Value(sf2gen::kSampleId, sample));
+                sf2::Zone z;
+                z.generators.push_back(sf2::Generator::Range(sf2::kKeyRange, key, key));
+                z.generators.push_back(sf2::Generator::Value(sf2::kOverridingRootKey, key));
+                z.generators.push_back(
+                    sf2::Generator::Value(sf2::kSampleModes, Looped(sf.File().samples[size_t(sample)]) ? 1 : 0));
+                z.generators.push_back(sf2::Generator::Value(sf2::kSampleId, sample));
                 zones.push_back(z);
             }
             name = "Noise drums";
@@ -1288,13 +1291,7 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
         mt.Control(0, c, cc::kChorus, 0);
         if (range)
         {
-            // RPN 0 sets the bend range; the null RPN then keeps later data entry from changing it.
-            mt.Control(0, c, cc::kRpnMsb, 0);
-            mt.Control(0, c, cc::kRpnLsb, 0);
-            mt.Control(0, c, cc::kDataEntry, range);
-            mt.Control(0, c, cc::kDataEntryLsb, 0);
-            mt.Control(0, c, cc::kRpnMsb, 127);
-            mt.Control(0, c, cc::kRpnLsb, 127);
+            mt.BendRange(0, c, range);
             mt.PitchBend(0, c, 8192);
         }
 
@@ -1373,7 +1370,7 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
         }
     }
 
-    return midi.Write(path, error);
+    return WriteFile(path, midi.Encode(), error);
 }
 
 // Converts a song, writing its files if `write` is set.
@@ -1453,6 +1450,7 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
                   rom.GameCode().c_str(), song, unsigned(info.song_addresses[size_t(song)]), kProgramName);
     const std::string stem =
         Utf8(PathFromUtf8(opt.out_dir) / PathFromUtf8(SafeFileName(opt.base_name) + "_" + TwoDigits(song)));
+
     std::string error;
     sum.midi_path = stem + ".mid";
     if (!WriteMidi(sum.midi_path, title, about, sim, notes, slots, error))

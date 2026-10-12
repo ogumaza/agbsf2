@@ -1025,13 +1025,13 @@ TrackKeymap BuildKeymap(const std::map<int, std::set<int>>& usage, SoundfontBuil
 }
 
 // Returns a zone that plays SF2 sample `sample` on keys lo to hi, with `root` as the key of its own pitch.
-Sf2Zone MakeZone(int sample, int lo, int hi, int root, bool loop)
+sf2::Zone MakeZone(int sample, int lo, int hi, int root, bool loop)
 {
-    Sf2Zone z;
-    z.gens.push_back(Sf2Gen::Range(sf2gen::kKeyRange, lo, hi));
-    z.gens.push_back(Sf2Gen::Value(sf2gen::kOverridingRootKey, root));
-    z.gens.push_back(Sf2Gen::Value(sf2gen::kSampleModes, loop ? 1 : 0));
-    z.gens.push_back(Sf2Gen::Value(sf2gen::kSampleId, sample));
+    sf2::Zone z;
+    z.generators.push_back(sf2::Generator::Range(sf2::kKeyRange, lo, hi));
+    z.generators.push_back(sf2::Generator::Value(sf2::kOverridingRootKey, root));
+    z.generators.push_back(sf2::Generator::Value(sf2::kSampleModes, loop ? 1 : 0));
+    z.generators.push_back(sf2::Generator::Value(sf2::kSampleId, sample));
 
     return z;
 }
@@ -1290,20 +1290,17 @@ Programs AddPresets(const Usage& usage, SoundfontBuilder& sf, const Rom& rom, co
     Sf2File& file = sf.File();
     sf.Banks().Begin(song);
 
-    auto add_preset = [&](const std::string& name, std::vector<Sf2Zone> zones)
+    auto add_preset = [&](const std::string& name, std::vector<sf2::Zone> zones)
     {
-        Sf2Instrument inst;
+        sf2::Instrument inst;
         inst.name = prefix + name;
         inst.zones = std::move(zones);
         file.instruments.push_back(std::move(inst));
 
         const std::optional<BankProgram> slot = sf.Banks().Next();
         programs.fits = programs.fits && slot;
-        Sf2Preset p;
-        p.name = prefix + name;
-        p.bank = uint16_t(slot ? slot->bank : 0);
-        p.program = uint16_t(slot ? slot->program : 0);
-        p.instrument = int(file.instruments.size()) - 1;
+        const sf2::Preset p = MakePreset(prefix + name, uint16_t(slot ? slot->bank : 0),
+                                         uint16_t(slot ? slot->program : 0), int(file.instruments.size()) - 1);
         file.presets.push_back(p);
 
         return ProgramRef{p.bank, p.program};
@@ -1326,7 +1323,7 @@ Programs AddPresets(const Usage& usage, SoundfontBuilder& sf, const Rom& rom, co
 
     // Each noise note gets a key of its own: the one 36 above its number, or failing that the nearest free key above
     // it, then below it. A song with more noise notes than there are keys goes on to a second preset.
-    std::vector<std::vector<Sf2Zone>> noise_zones;
+    std::vector<std::vector<sf2::Zone>> noise_zones;
     std::vector<std::set<int>> noise_taken;
     for (int n : usage.noise_notes)
     {
@@ -1369,7 +1366,7 @@ Programs AddPresets(const Usage& usage, SoundfontBuilder& sf, const Rom& rom, co
         const auto& presets = programs.keymaps[size_t(t)].presets;
         for (size_t p = 0; p < presets.size(); p++)
         {
-            std::vector<Sf2Zone> zones;
+            std::vector<sf2::Zone> zones;
             for (const Zone& z : presets[p])
             {
                 zones.push_back(MakeZone(z.sample, z.lo, z.hi, z.root, z.loop));
@@ -1531,13 +1528,7 @@ void WriteTrack(MidiTrack& mt, int ch, int range, const std::vector<Event>& even
     mt.Control(0, ch, cc::kReverb, 0);
     mt.Control(0, ch, cc::kChorus, 0);
 
-    // Pitch bend range through RPN 0, then the null RPN so later data entry changes nothing.
-    mt.Control(0, ch, cc::kRpnMsb, 0);
-    mt.Control(0, ch, cc::kRpnLsb, 0);
-    mt.Control(0, ch, cc::kDataEntry, range);
-    mt.Control(0, ch, cc::kDataEntryLsb, 0);
-    mt.Control(0, ch, cc::kRpnMsb, 127);
-    mt.Control(0, ch, cc::kRpnLsb, 127);
+    mt.BendRange(0, ch, range);
     mt.PitchBend(0, ch, 8192);
 
     // The channel's settings, the echo that the track's events last gave, and the key that's playing (-1 if none).
@@ -1713,13 +1704,13 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
                 }
             }
 
-            std::vector<Sf2Preset>& presets = sf.File().presets;
+            std::vector<sf2::Preset>& presets = sf.File().presets;
             const size_t count = presets.size();
             for (size_t i = 0; i < count; i++)
             {
                 if (used.count({presets[i].bank, presets[i].program}))
                 {
-                    Sf2Preset copy = presets[i];
+                    sf2::Preset copy = presets[i];
                     copy.bank = 128;
                     presets.push_back(copy);
                 }
@@ -1805,7 +1796,7 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
         Utf8(PathFromUtf8(opt.out_dir) / PathFromUtf8(SafeFileName(opt.base_name) + "_" + TwoDigits(song)));
     std::string error;
     sum.midi_path = stem + ".mid";
-    if (!midi.Write(sum.midi_path, error))
+    if (!WriteFile(sum.midi_path, midi.Encode(), error))
     {
         sum.warnings.push_back(error);
         return sum;

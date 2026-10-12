@@ -5,9 +5,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
-#include <cstdio>
-#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -26,7 +25,6 @@ namespace
 
 using test::Le16;
 using test::Le32;
-using test::ReadAll;
 using test::ReadMidi;
 using test::ReadSf2;
 using test::TempPath;
@@ -313,25 +311,25 @@ void TestDetection()
     const bool found = DetectDriver(rom, DriverOverrides(), info, error);
     const bool found_blank = DetectDriver(blank, DriverOverrides(), blank_info, blank_error);
 
-    SUPERGBAMIDI_CHECK(found && error.empty());
-    SUPERGBAMIDI_CHECK_EQ(info.step_routine, kStep);
-    SUPERGBAMIDI_CHECK_EQ(info.bank, kBank);
-    SUPERGBAMIDI_CHECK_EQ(info.resource_count, kResourceCount);
-    SUPERGBAMIDI_CHECK(info.songs == std::vector<int>({kOnceId, kLoopsId, kMixId}));
-    SUPERGBAMIDI_CHECK_EQ(info.kit, cart.Resource(kKitId) + 4);
-    SUPERGBAMIDI_CHECK_EQ(info.instrument_tables[0], kSquare1Table);
-    SUPERGBAMIDI_CHECK_EQ(info.instrument_tables[1], kSquare2Table);
-    SUPERGBAMIDI_CHECK_EQ(info.instrument_tables[2], kWaveInstruments);
-    SUPERGBAMIDI_CHECK_EQ(info.noise_table, kNoiseTable);
-    SUPERGBAMIDI_CHECK_EQ(info.frequency_table, kFrequencyTable);
-    SUPERGBAMIDI_CHECK_EQ(info.wave_table, kWaveTable);
-    SUPERGBAMIDI_CHECK_EQ(info.timer_reload, 0xFDFF);
-    SUPERGBAMIDI_CHECK(info.warnings.empty());
-    SUPERGBAMIDI_CHECK(!found_blank && blank_error.empty());
+    SEQLIB_CHECK(found && error.empty());
+    SEQLIB_CHECK_EQ(info.step_routine, kStep);
+    SEQLIB_CHECK_EQ(info.bank, kBank);
+    SEQLIB_CHECK_EQ(info.resource_count, kResourceCount);
+    SEQLIB_CHECK(info.songs == std::vector<int>({kOnceId, kLoopsId, kMixId}));
+    SEQLIB_CHECK_EQ(info.kit, cart.Resource(kKitId) + 4);
+    SEQLIB_CHECK_EQ(info.instrument_tables[0], kSquare1Table);
+    SEQLIB_CHECK_EQ(info.instrument_tables[1], kSquare2Table);
+    SEQLIB_CHECK_EQ(info.instrument_tables[2], kWaveInstruments);
+    SEQLIB_CHECK_EQ(info.noise_table, kNoiseTable);
+    SEQLIB_CHECK_EQ(info.frequency_table, kFrequencyTable);
+    SEQLIB_CHECK_EQ(info.wave_table, kWaveTable);
+    SEQLIB_CHECK_EQ(info.timer_reload, 0xFDFF);
+    SEQLIB_CHECK(info.warnings.empty());
+    SEQLIB_CHECK(!found_blank && blank_error.empty());
 
     // Detection starts from nothing. A game without the driver keeps none of an earlier game's tables.
-    SUPERGBAMIDI_CHECK(!DetectDriver(blank, DriverOverrides(), info, error));
-    SUPERGBAMIDI_CHECK(info.step_routine == 0 && info.songs.empty());
+    SEQLIB_CHECK(!DetectDriver(blank, DriverOverrides(), info, error));
+    SEQLIB_CHECK(info.step_routine == 0 && info.songs.empty());
 }
 
 // Returns the notes that the model plays in the first `frames` frames of `song`, and its warnings.
@@ -361,12 +359,12 @@ void TestTiming()
 
     const std::vector<Note> notes = Play(rom, info, 0, 40, nullptr);
 
-    SUPERGBAMIDI_REQUIRE_EQ(notes.size(), 2);
-    SUPERGBAMIDI_CHECK(notes[0].key == 40 && notes[0].velocity == 64 && notes[0].on == 0);
-    SUPERGBAMIDI_CHECK(notes[0].ended && notes[0].off == 1);
-    SUPERGBAMIDI_CHECK_EQ(notes[0].sample, cart.Resource(kShortId));
-    SUPERGBAMIDI_CHECK(notes[1].key == 41 && notes[1].velocity == 32 && notes[1].on == 10);
-    SUPERGBAMIDI_CHECK(notes[1].ended && notes[1].off == 30);
+    SEQLIB_REQUIRE_EQ(notes.size(), 2);
+    SEQLIB_CHECK(notes[0].key == 40 && notes[0].velocity == 64 && notes[0].on == 0);
+    SEQLIB_CHECK(notes[0].ended && notes[0].off == 1);
+    SEQLIB_CHECK_EQ(notes[0].sample, cart.Resource(kShortId));
+    SEQLIB_CHECK(notes[1].key == 41 && notes[1].velocity == 32 && notes[1].on == 10);
+    SEQLIB_CHECK(notes[1].ended && notes[1].off == 30);
 }
 
 // A note takes the last free voice, so a second note while the first plays takes voice 2. A note-off stops the voice
@@ -382,15 +380,15 @@ void TestVoices()
 
     const std::vector<Note> notes = Play(rom, info, 2, 40, &warnings);
 
-    SUPERGBAMIDI_REQUIRE_EQ(notes.size(), 4);
-    SUPERGBAMIDI_CHECK(notes[0].channel == 0 && notes[0].key == 60 && notes[0].program == 1);
-    SUPERGBAMIDI_CHECK(notes[0].envelope == 0x70 && notes[0].duty == 0x80 && notes[0].off == 20);
-    SUPERGBAMIDI_CHECK(notes[1].key == 42 && notes[1].on == 0 && notes[1].off == 15);
-    SUPERGBAMIDI_CHECK(notes[2].key == 41 && notes[2].on == 5 && notes[2].off == 10);
-    SUPERGBAMIDI_CHECK(notes[3].channel == 0 && notes[3].key == 62 && notes[3].envelope == 0);
-    SUPERGBAMIDI_CHECK(notes[3].on == 20 && notes[3].off == 25);
-    SUPERGBAMIDI_CHECK(warnings ==
-                       std::vector<std::string>({"channel 9's key 50 plays no sample, which the game doesn't check"}));
+    SEQLIB_REQUIRE_EQ(notes.size(), 4);
+    SEQLIB_CHECK(notes[0].channel == 0 && notes[0].key == 60 && notes[0].program == 1);
+    SEQLIB_CHECK(notes[0].envelope == 0x70 && notes[0].duty == 0x80 && notes[0].off == 20);
+    SEQLIB_CHECK(notes[1].key == 42 && notes[1].on == 0 && notes[1].off == 15);
+    SEQLIB_CHECK(notes[2].key == 41 && notes[2].on == 5 && notes[2].off == 10);
+    SEQLIB_CHECK(notes[3].channel == 0 && notes[3].key == 62 && notes[3].envelope == 0);
+    SEQLIB_CHECK(notes[3].on == 20 && notes[3].off == 25);
+    SEQLIB_CHECK(warnings ==
+                 std::vector<std::string>({"channel 9's key 50 plays no sample, which the game doesn't check"}));
 }
 
 // The piece that loops plays its sequence again after its end, with the kit on the voice it took at the start, and the
@@ -408,17 +406,18 @@ void TestLoopingPiece()
     }
     const std::array<uint32_t, 5> track = seq.TrackState();
 
-    SUPERGBAMIDI_CHECK(seq.SegmentStarts() == std::vector<uint32_t>({0, 30}));
-    SUPERGBAMIDI_CHECK(seq.VoicePlays(3) && !seq.VoicePlays(2));
-    SUPERGBAMIDI_CHECK_EQ(seq.VoiceState(3)[4], 63);
-    SUPERGBAMIDI_CHECK_EQ(track[2], cart.Resource(kLoopSeqId) + 4);
-    SUPERGBAMIDI_CHECK_EQ(track[3], 1);
-    SUPERGBAMIDI_REQUIRE_EQ(seq.Notes().size(), 3);
+    SEQLIB_CHECK(seq.SegmentStarts() == std::vector<uint32_t>({0, 30}));
+    SEQLIB_CHECK(seq.VoicePlays(3) && !seq.VoicePlays(2));
+    SEQLIB_CHECK_EQ(seq.VoiceState(3)[4], 63);
+    SEQLIB_CHECK_EQ(track[2], cart.Resource(kLoopSeqId) + 4);
+    SEQLIB_CHECK_EQ(track[3], 1);
+    SEQLIB_REQUIRE_EQ(seq.Notes().size(), 3);
 }
 
-// The conversion writes channel 9 on MIDI channel 10, with its kit's offset as the program, and velocities of 127
-// times the driver's over 64. The SoundFont's kit is in bank 128, with a zone for each key that plays the key's sample
-// at the mixer's rate, unpitched, and the looping sample's loop rounded up to a whole number of 8 points.
+// The conversion writes channel 9 on MIDI channel 11, away from the drum channel. Channel 9 plays in bank 9. Its
+// program is the kit's offset. A velocity is 127 times the driver's volume over 64. The SoundFont's kit is in bank 9.
+// Each key's zone plays the key's sample unpitched at the mixer's rate. The looping sample's loop is rounded up to a
+// whole number of 8 points.
 void TestConversion()
 {
     const Cart cart;
@@ -430,29 +429,32 @@ void TestConversion()
 
     const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
 
-    SUPERGBAMIDI_CHECK(sum.ok && !sum.silent && sum.tracks == 1 && sum.loop_start < 0);
-    SUPERGBAMIDI_CHECK(sum.warnings.empty());
+    SEQLIB_CHECK(sum.ok && !sum.silent && sum.tracks == 1 && sum.loop_start < 0);
+    SEQLIB_CHECK(sum.warnings.empty());
     const test::MidiEvents midi = ReadMidi(sum.midi_path);
-    const auto ons = midi.Find(0x99);
-    SUPERGBAMIDI_REQUIRE_EQ(ons.size(), 2);
-    SUPERGBAMIDI_CHECK(ons[0].second == std::vector<uint8_t>({0x99, 40, 127}));
-    SUPERGBAMIDI_CHECK(ons[1].second == std::vector<uint8_t>({0x99, 41, 64}));
-    SUPERGBAMIDI_REQUIRE_EQ(midi.Find(0xC9).size(), 1);
-    SUPERGBAMIDI_CHECK(midi.Find(0xB9).empty());
+    const auto ons = midi.Find(0x9A);
+    SEQLIB_REQUIRE_EQ(ons.size(), 2);
+    SEQLIB_CHECK(ons[0].bytes == std::vector<uint8_t>({0x9A, 40, 127}));
+    SEQLIB_CHECK(ons[1].bytes == std::vector<uint8_t>({0x9A, 41, 64}));
+    SEQLIB_REQUIRE_EQ(midi.Find(0xCA).size(), 1);
+    const auto banks = midi.Find(0xBA);
+    SEQLIB_REQUIRE_EQ(banks.size(), 2);
+    SEQLIB_CHECK(banks[0].bytes == std::vector<uint8_t>({0xBA, 0, 9}));
+    SEQLIB_CHECK(midi.Find(0x99).empty() && midi.Find(0xB9).empty() && midi.Find(0xC9).empty());
 
     const test::Sf2Records sf = ReadSf2(sum.sf2_path);
-    SUPERGBAMIDI_CHECK_EQ(sf.Count("phdr", 38), 2);
+    SEQLIB_CHECK_EQ(sf.Count("phdr", 38), 2);
     if (sf.Count("phdr", 38) == 2)
     {
-        SUPERGBAMIDI_CHECK_EQ(Le16(sf.Record("phdr", 38, 0) + 22), 128);
+        SEQLIB_CHECK_EQ(Le16(sf.Record("phdr", 38, 0) + 22), 9);
     }
-    SUPERGBAMIDI_CHECK_EQ(sf.Count("shdr", 46), 3);
+    SEQLIB_CHECK_EQ(sf.Count("shdr", 46), 3);
     if (sf.Count("shdr", 46) == 3)
     {
         const uint8_t* looped = sf.Record("shdr", 46, 1);
-        SUPERGBAMIDI_CHECK_EQ(Le32(looped + 36), 16352);
-        SUPERGBAMIDI_CHECK_EQ(Le32(looped + 28) - Le32(looped + 20), 20);
-        SUPERGBAMIDI_CHECK_EQ(Le32(looped + 32) - Le32(looped + 20), 92);
+        SEQLIB_CHECK_EQ(Le32(looped + 36), 16352);
+        SEQLIB_CHECK_EQ(Le32(looped + 28) - Le32(looped + 20), 20);
+        SEQLIB_CHECK_EQ(Le32(looped + 32) - Le32(looped + 20), 92);
     }
 }
 
@@ -468,17 +470,17 @@ void TestLoopMarkers()
 
     const SongSummary sum = ConvertSong(rom, info, 1, opt, nullptr);
 
-    SUPERGBAMIDI_CHECK(sum.ok && sum.loop_start == 0);
-    SUPERGBAMIDI_CHECK(std::fabs(sum.loop_end - 30 * double(kFrameCycles) / kSecondCycles) < 1e-9);
-    SUPERGBAMIDI_CHECK(std::fabs(sum.seconds - 60 * double(kFrameCycles) / kSecondCycles) < 1e-9);
+    SEQLIB_CHECK(sum.ok && sum.loop_start == 0);
+    SEQLIB_CHECK(std::fabs(sum.loop_end - 30 * double(kFrameCycles) / kSecondCycles) < 1e-9);
+    SEQLIB_CHECK(std::fabs(sum.seconds - 60 * double(kFrameCycles) / kSecondCycles) < 1e-9);
     const test::MidiEvents midi = ReadMidi(sum.midi_path);
-    SUPERGBAMIDI_REQUIRE_EQ(midi.Find(0x99).size(), 4);
+    SEQLIB_REQUIRE_EQ(midi.Find(0x9A).size(), 4);
     int markers = 0;
     for (const auto& [tick, bytes] : midi.Find(0xFF))
     {
         markers += bytes.size() > 1 && bytes[1] == 0x06 ? 1 : 0;
     }
-    SUPERGBAMIDI_CHECK_EQ(markers, 2);
+    SEQLIB_CHECK_EQ(markers, 2);
 }
 
 // The PSG's note at volume 7 plays on MIDI channel 1, with square 1's bank and its instrument's program, at 127 times
@@ -494,15 +496,15 @@ void TestPsgConversion()
 
     const SongSummary sum = ConvertSong(rom, info, 2, opt, nullptr);
 
-    SUPERGBAMIDI_CHECK(sum.ok && sum.tracks == 2);
+    SEQLIB_CHECK(sum.ok && sum.tracks == 2);
     const test::MidiEvents midi = ReadMidi(sum.midi_path);
     const auto ons = midi.Find(0x90);
-    SUPERGBAMIDI_REQUIRE_EQ(ons.size(), 1);
-    SUPERGBAMIDI_CHECK(ons[0].second == std::vector<uint8_t>({0x90, 60, 59}));
-    SUPERGBAMIDI_REQUIRE_EQ(midi.Find(0xC0).size(), 1);
-    SUPERGBAMIDI_REQUIRE_EQ(midi.Find(0x99).size(), 2);
-    SUPERGBAMIDI_CHECK(!sum.warnings.empty() &&
-                       sum.warnings.front() == "channel 9's key 50 plays no sample, which the game doesn't check");
+    SEQLIB_REQUIRE_EQ(ons.size(), 1);
+    SEQLIB_CHECK(ons[0].bytes == std::vector<uint8_t>({0x90, 60, 59}));
+    SEQLIB_REQUIRE_EQ(midi.Find(0xC0).size(), 1);
+    SEQLIB_REQUIRE_EQ(midi.Find(0x9A).size(), 2);
+    SEQLIB_CHECK(!sum.warnings.empty() &&
+                 sum.warnings.front() == "channel 9's key 50 plays no sample, which the game doesn't check");
 }
 
 // The driver comes through OpenMusic with its name, and lists the pieces of music.
@@ -514,12 +516,12 @@ void TestMusic()
 
     const std::unique_ptr<Music> music = supergbamidi::OpenMusic(rom, Overrides(), error);
 
-    SUPERGBAMIDI_CHECK(music && error.empty());
+    SEQLIB_CHECK(music && error.empty());
     if (music)
     {
-        SUPERGBAMIDI_CHECK(music->Log().front() == "Ubisoft Milan's sound driver");
-        SUPERGBAMIDI_CHECK_EQ(music->SongCount(), 3);
-        SUPERGBAMIDI_CHECK_EQ(music->InspectSong(0, ConvertSettings()).address, cart.Resource(kOnceId));
+        SEQLIB_CHECK(music->Log().front() == "Ubisoft Milan's sound driver");
+        SEQLIB_CHECK_EQ(music->SongCount(), 3);
+        SEQLIB_CHECK_EQ(music->InspectSong(0, ConvertSettings()).address, cart.Resource(kOnceId));
     }
 }
 

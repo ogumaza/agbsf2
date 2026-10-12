@@ -666,13 +666,7 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
         mt.Control(0, ch, cc::kChorus, 0);
         if (range)
         {
-            // RPN 0 sets the bend range; the null RPN then keeps later data entry from changing it.
-            mt.Control(0, ch, cc::kRpnMsb, 0);
-            mt.Control(0, ch, cc::kRpnLsb, 0);
-            mt.Control(0, ch, cc::kDataEntry, range);
-            mt.Control(0, ch, cc::kDataEntryLsb, 0);
-            mt.Control(0, ch, cc::kRpnMsb, 127);
-            mt.Control(0, ch, cc::kRpnLsb, 127);
+            mt.BendRange(0, ch, range);
             mt.PitchBend(0, ch, 8192);
         }
 
@@ -739,7 +733,7 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
         }
     }
 
-    return midi.Write(path, error);
+    return WriteFile(path, midi.Encode(), error);
 }
 
 // Converts a module, writing its files if `write` is set.
@@ -821,6 +815,7 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
                       rom.Title().c_str(), rom.GameCode().c_str(), entry.song, place, unsigned(module), kProgramName);
     }
     const std::string stem = Utf8(PathFromUtf8(opt.out_dir) / PathFromUtf8(SafeFileName(opt.base_name) + "_" + number));
+
     std::string error;
     sum.midi_path = stem + ".mid";
     if (!WriteMidi(sum.midi_path, title, about, sim, timing, notes, error))
@@ -877,40 +872,41 @@ Sf2File InstrumentSet::Build(const Rom& rom, const DriverInfo& info) const
         auto it = samples.find(header);
         if (it == samples.end())
         {
-            Sf2Sample s;
+            sf2::Sample s;
             s.name = name;
-            s.rate = SampleRate(rom, info, header);
-            s.root_key = uint8_t(kRootKey);
+            s.sample_rate = SampleRate(rom, info, header);
+            s.original_key = uint8_t(kRootKey);
 
             const uint32_t data = header + 0x12;
             const uint32_t end = rom.U32(header + 4);
-            const uint32_t loop_length = rom.U32(header);
-            const uint8_t loop = rom.U8(header + 0x10);
             const uint32_t length = end > data && rom.Contains(data, end - data) ? end - data : 0;
             for (uint32_t i = 0; i < length; i++)
             {
-                s.pcm.push_back(int16_t((rom.U8(data + i) - 128) * 256));
+                s.data.push_back(int16_t((rom.U8(data + i) - 128) * 256));
             }
+
+            const uint32_t loop_length = rom.U32(header);
+            const uint8_t loop = rom.U8(header + 0x10);
             if (loop && loop_length > 0 && loop_length <= length)
             {
-                s.loop = true;
                 s.loop_start = length - loop_length;
                 if (loop == 2)
                 {
                     for (uint32_t i = 0; i < loop_length; i++)
                     {
-                        s.pcm.push_back(s.pcm[length - 1 - i]);
+                        s.data.push_back(s.data[length - 1 - i]);
                     }
                 }
-                s.loop_end = uint32_t(s.pcm.size());
+                s.loop_end = uint32_t(s.data.size());
                 for (uint32_t i = 0; i < kGuardPoints; i++)
                 {
-                    s.pcm.push_back(s.pcm[s.loop_start + i % (s.loop_end - s.loop_start)]);
+                    s.data.push_back(s.data[s.loop_start + i % (s.loop_end - s.loop_start)]);
                 }
             }
-            if (s.pcm.empty())
+
+            if (s.data.empty())
             {
-                s.pcm.push_back(0);
+                s.data.push_back(0);
             }
 
             f.samples.push_back(std::move(s));
@@ -918,32 +914,28 @@ Sf2File InstrumentSet::Build(const Rom& rom, const DriverInfo& info) const
         }
 
         // A note that starts within the sample starts its zone there.
-        const Sf2Sample& sample = f.samples[size_t(it->second)];
-        Sf2Zone z;
-        z.gens.push_back(Sf2Gen::Range(sf2gen::kKeyRange, 0, 127));
+        const sf2::Sample& sample = f.samples[size_t(it->second)];
+        sf2::Zone z;
+        z.generators.push_back(sf2::Generator::Range(sf2::kKeyRange, 0, 127));
         if (offset)
         {
-            z.gens.push_back(Sf2Gen::Value(sf2gen::kStartAddrsOffset, int(offset % 32768)));
+            z.generators.push_back(sf2::Generator::Value(sf2::kStartAddrsOffset, int(offset % 32768)));
             if (offset >= 32768)
             {
-                z.gens.push_back(Sf2Gen::Value(sf2gen::kStartAddrsCoarseOffset, int(offset / 32768)));
+                z.generators.push_back(sf2::Generator::Value(sf2::kStartAddrsCoarseOffset, int(offset / 32768)));
             }
             std::snprintf(name, sizeof name, "Sample %03d +%u", inst.index, unsigned(offset));
         }
-        z.gens.push_back(Sf2Gen::Value(sf2gen::kSampleModes, sample.loop ? 1 : 0));
-        z.gens.push_back(Sf2Gen::Value(sf2gen::kSampleId, it->second));
+        z.generators.push_back(sf2::Generator::Value(sf2::kSampleModes, Looped(sample) ? 1 : 0));
+        z.generators.push_back(sf2::Generator::Value(sf2::kSampleId, it->second));
 
-        Sf2Instrument instrument;
+        sf2::Instrument instrument;
         instrument.name = name;
         instrument.zones.push_back(std::move(z));
         f.instruments.push_back(std::move(instrument));
 
-        Sf2Preset p;
-        p.name = name;
-        p.bank = uint16_t(inst.program / 128);
-        p.program = uint16_t(inst.program % 128);
-        p.instrument = int(f.instruments.size()) - 1;
-        f.presets.push_back(std::move(p));
+        f.presets.push_back(MakePreset(name, uint16_t(inst.program / 128), uint16_t(inst.program % 128),
+                                       int(f.instruments.size()) - 1));
     }
 
     return f;

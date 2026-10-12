@@ -11,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+#include "seqlib/sf2/units.h"
+
 #include "beat_grid.h"
 #include "brownie/sequencer.h"
 #include "files.h"
@@ -872,16 +874,16 @@ private:
 };
 
 // Returns a zone that plays `sample` on keys `lo` to `hi`, looping it if `loop` is set, tuned by `cents`.
-Sf2Zone SampleZone(int sample, bool loop, int lo, int hi, int cents)
+sf2::Zone SampleZone(int sample, bool loop, int lo, int hi, int cents)
 {
-    Sf2Zone z;
-    z.gens.push_back(Sf2Gen::Range(sf2gen::kKeyRange, lo, hi));
+    sf2::Zone z;
+    z.generators.push_back(sf2::Generator::Range(sf2::kKeyRange, lo, hi));
     if (cents)
     {
-        z.gens.push_back(Sf2Gen::Value(sf2gen::kFineTune, cents));
+        z.generators.push_back(sf2::Generator::Value(sf2::kFineTune, cents));
     }
-    z.gens.push_back(Sf2Gen::Value(sf2gen::kSampleModes, loop ? 1 : 0));
-    z.gens.push_back(Sf2Gen::Value(sf2gen::kSampleId, sample));
+    z.generators.push_back(sf2::Generator::Value(sf2::kSampleModes, loop ? 1 : 0));
+    z.generators.push_back(sf2::Generator::Value(sf2::kSampleId, sample));
 
     return z;
 }
@@ -889,11 +891,11 @@ Sf2Zone SampleZone(int sample, bool loop, int lo, int hi, int cents)
 // Returns the SF2 time in timecents for `frames` frames.
 int FrameTimecents(int frames)
 {
-    return int(std::lround(1200 * std::log2(FrameSeconds(frames))));
+    return sf2::ToTimecents(FrameSeconds(frames) * 1000.0);
 }
 
 // Returns the zones of an instrument that plays sample `first` for `frames` frames of each note, and then `second`.
-std::vector<Sf2Zone> SwitchZones(int first, int frames, int second, int cents)
+std::vector<sf2::Zone> SwitchZones(int first, int frames, int second, int cents)
 {
     if (frames == 0)
     {
@@ -902,12 +904,12 @@ std::vector<Sf2Zone> SwitchZones(int first, int frames, int second, int cents)
 
     // The first sample holds for the frames and then falls silent; the second waits for them.
     const int time = FrameTimecents(frames);
-    Sf2Zone a = SampleZone(first, true, 0, 127, cents);
-    a.gens.insert(a.gens.begin() + 1,
-                  {Sf2Gen::Value(sf2gen::kHoldVolEnv, time), Sf2Gen::Value(sf2gen::kDecayVolEnv, -12000),
-                   Sf2Gen::Value(sf2gen::kSustainVolEnv, 1440)});
-    Sf2Zone b = SampleZone(second, true, 0, 127, cents);
-    b.gens.insert(b.gens.begin() + 1, Sf2Gen::Value(sf2gen::kDelayVolEnv, time));
+    sf2::Zone a = SampleZone(first, true, 0, 127, cents);
+    a.generators.insert(a.generators.begin() + 1, {sf2::Generator::Value(sf2::kHoldVolEnv, time),
+                                                   sf2::Generator::Value(sf2::kDecayVolEnv, -12000),
+                                                   sf2::Generator::Value(sf2::kSustainVolEnv, 1440)});
+    sf2::Zone b = SampleZone(second, true, 0, 127, cents);
+    b.generators.insert(b.generators.begin() + 1, sf2::Generator::Value(sf2::kDelayVolEnv, time));
 
     return {a, b};
 }
@@ -942,9 +944,10 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
         return QuarterTick(frame_timing ? grid.Quarters(frame) : grid.Marker(frame));
     };
 
-    // Returns the tick of `frame` on channel `c`, up to the song's end.
     const Plan& plan = sim.plan;
     const uint32_t end = song_tick(plan.end);
+
+    // Returns the tick of `frame` on channel `c`, up to the song's end.
     const auto tick = [&](int c, double frame)
     {
         return std::min(end, QuarterTick(frame_timing ? grid.Quarters(frame) : grid.Quarters(c, frame)));
@@ -959,6 +962,7 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
     {
         conductor.Tempo(QuarterTick(t.quarter), uint32_t(std::lround(FrameSeconds(t.frames) * 1e6)));
     }
+
     // The beat's tempo at the loop's start is given again after the marker. The loop's end can have another, which a
     // player that keeps its tempo when it jumps back would otherwise play the loop's start at.
     if (plan.loops)
@@ -1011,13 +1015,7 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
         mt.Control(0, ch, cc::kChorus, 0);
         if (range)
         {
-            // RPN 0 sets the bend range; the null RPN then keeps later data entry from changing it.
-            mt.Control(0, ch, cc::kRpnMsb, 0);
-            mt.Control(0, ch, cc::kRpnLsb, 0);
-            mt.Control(0, ch, cc::kDataEntry, range);
-            mt.Control(0, ch, cc::kDataEntryLsb, 0);
-            mt.Control(0, ch, cc::kRpnMsb, 127);
-            mt.Control(0, ch, cc::kRpnLsb, 127);
+            mt.BendRange(0, ch, range);
             mt.PitchBend(0, ch, 8192);
         }
 
@@ -1104,7 +1102,7 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
         }
     }
 
-    return midi.Write(path, error);
+    return WriteFile(path, midi.Encode(), error);
 }
 
 // Converts a song, writing its files if `write` is set.
@@ -1172,6 +1170,7 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
                   rom.Title().c_str(), rom.GameCode().c_str(), song,
                   unsigned(rom.U32(info.song_table + 4 * uint32_t(song))), kProgramName);
     const std::string stem = Utf8(PathFromUtf8(opt.out_dir) / PathFromUtf8(SafeFileName(opt.base_name) + "_" + number));
+
     std::string error;
     sum.midi_path = stem + ".mid";
     if (!WriteMidi(sum.midi_path, title, about, info.revision, sim, grid, opt.frame_timing, notes, error))
@@ -1262,7 +1261,7 @@ std::vector<std::string> InstrumentSet::Build(SoundfontBuilder& sf, int cents) c
     for (size_t program = 0; program < order.size(); program++)
     {
         const Instrument& inst = *order[program];
-        std::vector<Sf2Zone> zones;
+        std::vector<sf2::Zone> zones;
         std::string name;
         char text[64];
         switch (inst.kind)
@@ -1295,8 +1294,8 @@ std::vector<std::string> InstrumentSet::Build(SoundfontBuilder& sf, int cents) c
                 const int second = SoundfontBuilder::WaveKeyOffset(ShapeAt(inst.second));
                 if (zones.size() == 2 && first != second)
                 {
-                    zones[1].gens.insert(zones[1].gens.end() - 1,
-                                         Sf2Gen::Value(sf2gen::kOverridingRootKey, 60 + first));
+                    zones[1].generators.insert(zones[1].generators.end() - 1,
+                                               sf2::Generator::Value(sf2::kOverridingRootKey, 60 + first));
                 }
 
                 std::snprintf(text, sizeof text, inst.frames ? "Wave %d to %d" : "Wave %d", inst.first, inst.second);
@@ -1314,11 +1313,12 @@ std::vector<std::string> InstrumentSet::Build(SoundfontBuilder& sf, int cents) c
 
                 const int key = kFirstDrumKey + index % kKitDrums;
                 const int sample = sf.NoiseSample(sound);
-                Sf2Zone z;
-                z.gens.push_back(Sf2Gen::Range(sf2gen::kKeyRange, key, key));
-                z.gens.push_back(Sf2Gen::Value(sf2gen::kOverridingRootKey, key));
-                z.gens.push_back(Sf2Gen::Value(sf2gen::kSampleModes, sf.File().samples[size_t(sample)].loop ? 1 : 0));
-                z.gens.push_back(Sf2Gen::Value(sf2gen::kSampleId, sample));
+                sf2::Zone z;
+                z.generators.push_back(sf2::Generator::Range(sf2::kKeyRange, key, key));
+                z.generators.push_back(sf2::Generator::Value(sf2::kOverridingRootKey, key));
+                z.generators.push_back(
+                    sf2::Generator::Value(sf2::kSampleModes, Looped(sf.File().samples[size_t(sample)]) ? 1 : 0));
+                z.generators.push_back(sf2::Generator::Value(sf2::kSampleId, sample));
                 zones.push_back(z);
             }
             std::snprintf(text, sizeof text, inst.first ? "Noise drums %d" : "Noise drums", inst.first + 1);
@@ -1341,8 +1341,10 @@ std::vector<std::string> InstrumentSet::Build(SoundfontBuilder& sf, int cents) c
                             continue;
                         }
 
-                        Sf2Zone z = SampleZone(index, sf.File().samples[size_t(index)].loop, key, key, entry.cents);
-                        z.gens.insert(z.gens.end() - 1, Sf2Gen::Value(sf2gen::kOverridingRootKey, entry.root));
+                        sf2::Zone z =
+                            SampleZone(index, Looped(sf.File().samples[size_t(index)]), key, key, entry.cents);
+                        z.generators.insert(z.generators.end() - 1,
+                                            sf2::Generator::Value(sf2::kOverridingRootKey, entry.root));
                         zones.push_back(z);
                     }
                 }

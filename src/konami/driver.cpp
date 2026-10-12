@@ -40,14 +40,6 @@ constexpr Pattern HiByte(uint16_t v)
     return {v, 0xFF00};
 }
 
-std::string Hex(uint32_t v)
-{
-    char buf[16];
-    std::snprintf(buf, sizeof buf, "0x%08X", v);
-
-    return buf;
-}
-
 // Finds every halfword-aligned match of `pat` in the ROM (Thumb code).
 std::vector<uint32_t> FindThumb(const Rom& rom, const std::vector<Pattern>& pat)
 {

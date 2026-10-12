@@ -416,6 +416,7 @@ Notes CollectVoiceNotes(const Rom& rom, const Simulation& sim, const Plan& plan,
     {
         release(n, plan.end);
     }
+
     notes.erase(std::remove_if(notes.begin(), notes.end(), [](const Note& n) { return n.removed || !n.audible; }),
                 notes.end());
 
@@ -610,7 +611,7 @@ bool WriteMidiFile(MidiFile& midi, MidiTrack& conductor, const FrameGrid* frames
         midi.SetDivision(uint16_t(kTicksPerQuarter * kMidiTicksPerTick));
     }
 
-    return midi.Write(path, error);
+    return WriteFile(path, midi.Encode(), error);
 }
 
 // Returns the elapsed seconds at `tick`, at the GBA's frame rate.
@@ -802,13 +803,7 @@ void WriteChannelSetup(MidiTrack& mt, int ch, int range, int reverb)
     mt.Control(0, ch, cc::kChorus, 0);
     if (range > 0)
     {
-        // RPN 0 sets the bend range; the null RPN then keeps later data entry from changing it.
-        mt.Control(0, ch, cc::kRpnMsb, 0);
-        mt.Control(0, ch, cc::kRpnLsb, 0);
-        mt.Control(0, ch, cc::kDataEntry, range);
-        mt.Control(0, ch, cc::kDataEntryLsb, 0);
-        mt.Control(0, ch, cc::kRpnMsb, 127);
-        mt.Control(0, ch, cc::kRpnLsb, 127);
+        mt.BendRange(0, ch, range);
     }
 }
 

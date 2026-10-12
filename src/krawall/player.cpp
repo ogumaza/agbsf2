@@ -823,6 +823,7 @@ void Player::FindRow()
             left--;
             continue;
         }
+
         data_ += (follow & 0x20 ? 2 : 0) + (follow & 0x40 ? 1 : 0) + (follow & 0x80 ? 2 : 0);
     }
 }
@@ -1954,13 +1955,14 @@ void Player::PortaNote(Channel& c, bool on_row)
         return;
     }
 
-    // The period slides towards the goal and stops there. With glissando, the note plays the nearest note of the table
-    // on the slide's side.
-    const int16_t step = int16_t(c.porta_step << 2);
     const auto period_of = [&](int note)
     {
         return int(rom_.U16(info_.periods + 2 * uint32_t(int16_t(note))));
     };
+
+    // The period slides towards the goal and stops there. With glissando, the note plays the nearest note of the table
+    // on the slide's side.
+    const int16_t step = int16_t(c.porta_step << 2);
     if (c.period > c.porta_goal)
     {
         c.period = int16_t(c.period - step);

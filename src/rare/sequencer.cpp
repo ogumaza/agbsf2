@@ -16,6 +16,10 @@ constexpr int kMaxCommandsPerFrame = 100000;
 // The level below which a decay stops a note.
 constexpr int32_t kAudibleLevel = 0x1000;
 
+// The music volume, out of 128, at which Donkey Kong Country 3 plays most of its tunes. The driver's init sets 128.
+// The game sets the volume for each tune after it requests the tune.
+constexpr uint32_t kGameMusicVolume = 69;
+
 // The full level divided by 16. The driver works out the attack's and the decay's steps from it with its 16-bit
 // division, then multiplies them by 16.
 constexpr uint32_t kAttackRange = 0x8000;
@@ -335,7 +339,9 @@ void Sequencer::Control(int t, const Event& e, Track& track)
 
     case kCtrlVolume:
         {
-            // The model doesn't work out the voices' levels, so it only passes the volume on to the conversion.
+            // The model works out a voice's level only to find whether it's 0, and passes the volume on to the
+            // conversion.
+            c.volume = e.b;
             Action a;
             a.kind = Action::kVolume;
             a.track = uint8_t(t);
@@ -429,9 +435,10 @@ void Sequencer::UpdateEnvelope(int index)
     Instrument inst;
     ReadInstrument(rom_, s.instrument, inst);
 
-    // The channel's settings from controllers 20-23 count where each phase starts, and the conversion learns which
-    // settings each note's phases took.
+    // The channel's settings from controllers 20-23 count where each phase starts.
     const EnvelopeSettings& settings = channels_[size_t(s.channel)].envelope;
+
+    // The conversion learns which settings each note's phases took.
     auto took = [&](const EnvelopeSettings& used)
     {
         if (!used.None())
@@ -603,6 +610,11 @@ void Sequencer::Mix()
 {
     // The mixer takes the voices whose notes are on, then those that are releasing, each in slot order, up to its
     // limit. The others are silent for the frame.
+    for (Slot& s : slots_)
+    {
+        s.mix = s.state == kSlotOn || s.state == kSlotReleased ? MixResult::kSkipped : MixResult::kIdle;
+    }
+
     int left = info_.voice_limit;
     for (uint8_t state : {kSlotOn, kSlotReleased})
     {
@@ -613,6 +625,17 @@ void Sequencer::Mix()
                 continue;
             }
 
+            // A note's level before its velocity and envelope count is the music volume × (the channel's volume + 1)
+            // / 128, × the channel's level / 128. Only the game turns the channel's level down. In Donkey Kong Country
+            // 3's revision, a note at a level of 0 isn't mixed and doesn't count towards the limit. At the game's music
+            // volume, that leaves out the notes of a channel at a volume of 0.
+            if (info_.skips_silent_notes && (kGameMusicVolume * (channels_[size_t(s.channel)].volume + 1)) >> 7 == 0)
+            {
+                s.mix = MixResult::kSilent;
+                continue;
+            }
+
+            s.mix = MixResult::kMixed;
             MixVoice(s);
             if (--left == 0)
             {

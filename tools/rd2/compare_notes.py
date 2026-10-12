@@ -43,8 +43,10 @@ TOP_INDEX = 0x78     # the highest pitch index the driver reads
 DRUM_CHANNEL = 9     # the MIDI channel the conversion leaves out
 TUNE_TOLERANCE_CENTS = 1
 BEND_TOLERANCE_CENTS = 2
-# The MIDI file's tempos are whole microseconds a quarter note, so its frames drift from the driver's by a few
-# microseconds over a sequence. Times are compared with this margin, in frames.
+# The MIDI file's tempos are whole microseconds a quarter note. Timed by them, its events drift from the driver's frames
+# by up to half a microsecond a quarter note: at tempo 240, up to 0.024 frames in 12000 frames. read_midi() therefore
+# works out each tempo's frame length in ticks from its microseconds, and times the events in frames from that. Times
+# are compared with this margin, in frames.
 MARGIN = 0.01
 
 
@@ -163,14 +165,19 @@ def read_midi(path):
     events.sort(key=lambda e: (e[0], order[e[3]], e[1], e[2]))
     tempos = [(0, 500000)] + [(e[0], e[5]) for e in events if e[3] == 'tempo']
 
+    # A frame at the driver's tempo T lasts T ticks. The MIDI file's tempo is the frame's length in microseconds times
+    # division / T, rounded to a whole microsecond. Rounding the ticks a frame back to a whole number undoes that.
+    def frame_ticks(tempo):
+        return max(1, round(division * 1e6 / (tempo * FRAME_RATE)))
+
     def seconds(tick):
-        s, at, tempo = 0.0, 0, 500000
+        frames, at, tempo = 0.0, 0, 500000
         for t, value in tempos:
             if t > tick:
                 break
-            s += (t - at) * tempo / division / 1e6
+            frames += (t - at) / frame_ticks(tempo)
             at, tempo = t, value
-        return s + (tick - at) * tempo / division / 1e6
+        return (frames + (tick - at) / frame_ticks(tempo)) / FRAME_RATE
 
     notes, open_notes, bends, ranges = [], {}, {}, {}
     bank, program, rpn = {}, {}, {}

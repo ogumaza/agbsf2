@@ -18,7 +18,6 @@ namespace supergbamidi::rd2
 {
 
 // The voices: the mixer's sample voices, then one for each of the PSG's channels.
-constexpr int kSampleVoices = 7;
 constexpr int kPsgVoices = 4;
 constexpr int kVoices = kSampleVoices + kPsgVoices;
 
@@ -295,6 +294,7 @@ private:
     void StopPlayer();
 
     // The voices.
+    void SetSampleVoices(int count);
     int AllocateVoice(uint8_t voice_class, uint8_t priority);
     void Unlink(int v, int& head);
     void PushFront(int v, int& head);

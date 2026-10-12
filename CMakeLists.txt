@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.20)
-project(supergbamidi VERSION 1.5.0 LANGUAGES CXX)
+project(supergbamidi VERSION 1.6.0 LANGUAGES CXX)
 
 # The name of the macOS droplet app.
 set(SUPERGBAMIDI_APP_NAME Supergbamidi)
@@ -19,10 +19,23 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 option(SUPERGBAMIDI_BUILD_TESTS "Build and register the tests" ON)
 
+# seqlib, the library that writes the MIDI files and SoundFonts, is a submodule.
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/externals/seqlib/CMakeLists.txt")
+    message(FATAL_ERROR "externals/seqlib is missing. Run: git submodule update --init")
+endif()
+add_subdirectory(externals/seqlib EXCLUDE_FROM_ALL)
+
+# xsflib, a library for players and rippers of the PSF formats, is a submodule too. supergbamidi takes xsflib's PSF
+# container, console code and common files. The container needs no zlib: supergbamidi decompresses the programs itself
+# (src/inflate.cpp).
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/externals/xsflib/CMakeLists.txt")
+    message(FATAL_ERROR "externals/xsflib is missing. Run: git submodule update --init")
+endif()
+add_subdirectory(externals/xsflib EXCLUDE_FROM_ALL)
+
 add_library(supergbamidi_core STATIC
     src/beat_grid.cpp
     src/inflate.cpp
-    src/midi.cpp
     src/music.cpp
     src/rom.cpp
     src/sf2.cpp
@@ -77,6 +90,7 @@ add_library(supergbamidi_core STATIC
     src/thumb.cpp
 )
 target_include_directories(supergbamidi_core PUBLIC src)
+target_link_libraries(supergbamidi_core PUBLIC seqlib::seqlib xsflib::psf_container)
 
 # Disable fused multiply-add so output stays byte-identical across platforms. GCC and Clang can fuse a * b + c on
 # CPUs such as ARM64, changing the rounding. MSVC's default /fp:precise disables this in Visual Studio 2022 and later;
@@ -91,51 +105,32 @@ else()
 endif()
 
 add_executable(supergbamidi src/main.cpp)
-target_link_libraries(supergbamidi PRIVATE supergbamidi_core)
-if(WIN32)
-    target_link_libraries(supergbamidi PRIVATE shell32)  # CommandLineToArgvW
-    # Embed the version and description shown in Explorer's file properties.
-    configure_file(platform/windows/version.rc.in version.rc @ONLY)
-    target_sources(supergbamidi PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/version.rc")
-endif()
-target_compile_definitions(supergbamidi PRIVATE SUPERGBAMIDI_VERSION="${PROJECT_VERSION}")
+target_link_libraries(supergbamidi PRIVATE supergbamidi_core xsflib::console)
+# The version, and on Windows the version and description that Explorer shows in the file's properties.
+xsflib_add_version(supergbamidi VERSION ${PROJECT_VERSION} DEFINE SUPERGBAMIDI_VERSION
+                   DESCRIPTION "MIDI and SoundFont converter for GBA game music" PRODUCT supergbamidi
+                   COPYRIGHT "Copyright (c) 2026 the supergbamidi authors. MIT License.")
 include(GNUInstallDirs)
 install(TARGETS supergbamidi RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 install(FILES LICENSE THIRD_PARTY_NOTICES DESTINATION "${CMAKE_INSTALL_DATADIR}/supergbamidi")
 
-# macOS: a droplet app, so files can be dropped on supergbamidi in the Finder.
-if(APPLE)
-    find_program(OSACOMPILE osacompile)
-    find_program(OSASCRIPT osascript)
-    find_program(CODESIGN codesign)
-    if(OSACOMPILE AND CODESIGN)
-        set(SUPERGBAMIDI_APP "${CMAKE_CURRENT_BINARY_DIR}/${SUPERGBAMIDI_APP_NAME}.app")
-        set(SUPERGBAMIDI_APP_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/platform/macos/${SUPERGBAMIDI_APP_NAME}.applescript")
-        add_custom_command(
-            OUTPUT "${SUPERGBAMIDI_APP}/Contents/Resources/supergbamidi"
-            COMMAND "${CMAKE_COMMAND}" -E rm -rf "${SUPERGBAMIDI_APP}"
-            COMMAND "${OSACOMPILE}" -o "${SUPERGBAMIDI_APP}" "${SUPERGBAMIDI_APP_SCRIPT}"
-            COMMAND "${CMAKE_COMMAND}" -E copy "$<TARGET_FILE:supergbamidi>"
-                    "${SUPERGBAMIDI_APP}/Contents/Resources/supergbamidi"
-            COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
-                    "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY_NOTICES" "${SUPERGBAMIDI_APP}/Contents/Resources/"
-            COMMAND "${CODESIGN}" --force --deep --sign - "${SUPERGBAMIDI_APP}"
-            DEPENDS supergbamidi "${SUPERGBAMIDI_APP_SCRIPT}" LICENSE THIRD_PARTY_NOTICES
-            COMMENT "Building ${SUPERGBAMIDI_APP_NAME}.app"
-            VERBATIM)
-        add_custom_target(supergbamidi_app ALL DEPENDS "${SUPERGBAMIDI_APP}/Contents/Resources/supergbamidi")
-    endif()
-endif()
+# macOS: a droplet app, so files can be dropped on supergbamidi in the Finder. The app holds the licences beside the
+# program.
+set(SUPERGBAMIDI_APP "${CMAKE_BINARY_DIR}/${SUPERGBAMIDI_APP_NAME}.app")
+xsflib_add_droplet(supergbamidi VERSION ${PROJECT_VERSION} APP_NAME ${SUPERGBAMIDI_APP_NAME}
+                   SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/platform/macos/${SUPERGBAMIDI_APP_NAME}.applescript"
+                   RESOURCES LICENSE THIRD_PARTY_NOTICES)
 
 if(SUPERGBAMIDI_BUILD_TESTS)
     enable_testing()
     add_executable(supergbamidi_tests tests/test_main.cpp tests/test_util.cpp tests/konami_test.cpp tests/rare_test.cpp
                                       tests/quintet_test.cpp tests/mp2k_test.cpp tests/rd2_test.cpp
                                       tests/brownie_test.cpp tests/krawall_test.cpp tests/ubimilan_test.cpp)
-    target_link_libraries(supergbamidi_tests PRIVATE supergbamidi_core)
+    target_link_libraries(supergbamidi_tests PRIVATE supergbamidi_core seqlib::testing)
     add_test(NAME supergbamidi_tests COMMAND supergbamidi_tests)
 
     # Test the droplet app's conversion report using a stand-in for the program.
+    find_program(OSASCRIPT osascript)
     if(TARGET supergbamidi_app AND OSASCRIPT)
         add_test(NAME droplet
                  COMMAND "${OSASCRIPT}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/droplet_test.applescript"
@@ -144,8 +139,5 @@ if(SUPERGBAMIDI_BUILD_TESTS)
     endif()
 
     # Load local_tests.cmake from each immediate subdirectory to register tests that use locally supplied files.
-    file(GLOB local_tests CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*/local_tests.cmake")
-    foreach(file IN LISTS local_tests)
-        include("${file}")
-    endforeach()
+    xsflib_include_local_tests()
 endif()

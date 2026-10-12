@@ -2,7 +2,6 @@
 
 #include "rare/driver.h"
 
-#include <cstdio>
 #include <initializer_list>
 
 #include "thumb.h"
@@ -66,6 +65,9 @@ constexpr uint32_t kLoadR4 = 0xE5944000;    // ldr r4, [r4]
 constexpr uint32_t kCompareR2 = 0xE3520000; // cmp r2, #imm8, without the operand
 constexpr uint32_t kFreeState = 0xE3A03010; // mov r3, #0x10, the state of a free slot
 constexpr uint32_t kStoreR0 = 0xE5C03000;   // strb r3, [r0]
+constexpr uint32_t kScaleR4 = 0xE0040493;   // mul r4, r3, r4
+constexpr uint32_t kShiftR4 = 0xE1A043A4;   // lsr r4, r4, #7
+constexpr uint32_t kTestR4 = 0xE3540000;    // cmp r4, #0
 
 // The size of a note slot in the driver's RAM.
 constexpr uint32_t kSlotSize = 0x28;
@@ -80,14 +82,6 @@ struct ArmMatch
 // Any branch, and any branch taken when the last comparison was equal.
 constexpr ArmMatch kAnyBranch = {0xEA000000, 0xFF000000};
 constexpr ArmMatch kAnyBranchIfEqual = {0x0A000000, 0xFF000000};
-
-std::string Hex(uint32_t v)
-{
-    char b[16];
-    std::snprintf(b, sizeof b, "0x%08X", unsigned(v));
-
-    return b;
-}
 
 // Returns true if the halfword is `ldr r<reg>, [pc, #imm]`.
 bool IsLdrLiteral(uint16_t h, int reg)
@@ -292,6 +286,10 @@ bool ReadDriverCode(const Rom& rom, const InitCode& init, DriverInfo& info)
     // and 1: mov r3, #0x10; strb r3, [r0]; b; mov r3, #0x10; strb r3, [r0]. The older revisions store mode 1's through
     // r8, which doesn't hold the slot's address.
     info.frees_loop_once = HasArmCode(rom, init, {{kFreeState}, {kStoreR0}, kAnyBranch, {kFreeState}, {kStoreR0}});
+
+    // The mixer of Donkey Kong Country 3's revision scales a note's level by its channel's level, and leaves the note
+    // out when that gives 0: mul r4, r3, r4; lsr r4, r4, #7; cmp r4, #0; beq.
+    info.skips_silent_notes = HasArmCode(rom, init, {{kScaleR4}, {kShiftR4}, {kTestR4}, kAnyBranchIfEqual});
 
     return true;
 }

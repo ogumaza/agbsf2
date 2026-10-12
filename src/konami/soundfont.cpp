@@ -34,15 +34,14 @@ constexpr uint8_t kDutyPatterns[4] = {0x01, 0x81, 0x87, 0x7E};
 
 // Stores one waveform cycle as three copies looping over the middle one, so players get lead-in and lead-out points
 // around the loop.
-void SetCycle(Sf2Sample& out, const std::vector<int16_t>& cycle)
+void SetCycle(sf2::Sample& out, const std::vector<int16_t>& cycle)
 {
-    out.pcm.clear();
+    out.data.clear();
     for (int i = 0; i < 3; i++)
     {
-        out.pcm.insert(out.pcm.end(), cycle.begin(), cycle.end());
+        out.data.insert(out.data.end(), cycle.begin(), cycle.end());
     }
 
-    out.loop = true;
     out.loop_start = uint32_t(cycle.size());
     out.loop_end = uint32_t(2 * cycle.size());
 }
@@ -139,28 +138,27 @@ int SoundfontBuilder::DsSample(int index)
         return cache_[key] = -1;
     }
 
-    Sf2Sample out;
+    sf2::Sample out;
     char name[32];
     std::snprintf(name, sizeof name, "Sample %03d", index);
     out.name = name;
-    out.rate = uint32_t(std::max(1L, std::lround(s.Rate(info_.mix_rate))));
-    out.root_key = uint8_t(DsRootKey(index));
+    out.sample_rate = uint32_t(std::max(1L, std::lround(s.Rate(info_.mix_rate))));
+    out.original_key = uint8_t(DsRootKey(index));
 
-    out.pcm.reserve(size_t(s.length) + kGuardPoints);
+    out.data.reserve(size_t(s.length) + kGuardPoints);
     for (int32_t i = 0; i < s.length; i++)
     {
-        out.pcm.push_back(int16_t(rom_.S8(s.data + uint32_t(i)) * 256));
+        out.data.push_back(int16_t(rom_.S8(s.data + uint32_t(i)) * 256));
     }
 
     if (s.Looped())
     {
-        out.loop = true;
         out.loop_start = uint32_t(s.loop_start);
         out.loop_end = uint32_t(s.length);
         const int32_t loop_len = s.length - s.loop_start;
         for (int i = 0; i < kGuardPoints; i++)
         {
-            out.pcm.push_back(out.pcm[size_t(s.loop_start + i % loop_len)]);
+            out.data.push_back(out.data[size_t(s.loop_start + i % loop_len)]);
         }
     }
 
@@ -177,7 +175,7 @@ int SoundfontBuilder::SquareSample(int duty)
         return it->second;
     }
 
-    Sf2Sample out;
+    sf2::Sample out;
     out.name = std::string("Square ") + kDutyNames[duty];
 
     constexpr int kPerStep = 8; // 64 points per cycle
@@ -194,8 +192,8 @@ int SoundfontBuilder::SquareSample(int duty)
 
     // Root key C4; one cycle lasts 64 points.
     const double c4 = square_note0_hz_ * std::pow(2.0, (60 - square_base_) / 12.0);
-    out.rate = uint32_t(std::lround(64 * c4));
-    out.root_key = 60;
+    out.sample_rate = uint32_t(std::lround(64 * c4));
+    out.original_key = 60;
 
     file_.samples.push_back(std::move(out));
     return cache_[key] = int(file_.samples.size()) - 1;
@@ -336,7 +334,7 @@ int SoundfontBuilder::WaveSample(int wave, int volume)
     }
     mean /= 32;
 
-    Sf2Sample out;
+    sf2::Sample out;
     char name[32];
     std::snprintf(name, sizeof name, "Wave %02d vol %d", wave, volume);
     out.name = name;
@@ -354,8 +352,8 @@ int SoundfontBuilder::WaveSample(int wave, int volume)
 
     // At the root key the period plays at the frequency of wave note 36.
     const double period_hz = square_note0_hz_ / 2 * 8;
-    out.rate = uint32_t(std::lround(128 * period_hz));
-    out.root_key = uint8_t(std::clamp(WaveKey(wave, 36), 0, 127));
+    out.sample_rate = uint32_t(std::lround(128 * period_hz));
+    out.original_key = uint8_t(std::clamp(WaveKey(wave, 36), 0, 127));
 
     file_.samples.push_back(std::move(out));
     return cache_[key] = int(file_.samples.size()) - 1;
@@ -370,18 +368,18 @@ int SoundfontBuilder::NoiseSample(uint16_t setting)
         return it->second;
     }
 
-    Sf2Sample out;
+    sf2::Sample out;
     char name[32];
     std::snprintf(name, sizeof name, "Noise %02X", unsigned(nr43));
     out.name = name;
-    out.rate = 32768; // the GBA's default output rate: the hardware point-samples the LFSR
-    out.root_key = 60;
+    out.sample_rate = 32768; // the GBA's default output rate: the hardware point-samples the LFSR
+    out.original_key = 60;
 
     const int shift = nr43 >> 4, ratio = nr43 & 7;
     const bool narrow = nr43 & 8;
     if (shift >= 14)
     {
-        out.pcm.assign(64, 0); // no clock: silence
+        out.data.assign(64, 0); // no clock: silence
     }
     else
     {
@@ -413,17 +411,16 @@ int SoundfontBuilder::NoiseSample(uint16_t setting)
                 }
             }
 
-            out.pcm.push_back((lfsr & 1) ? -32767 : 32767);
+            out.data.push_back((lfsr & 1) ? -32767 : 32767);
         }
     }
 
     // Loop the whole sequence, wrapped in copies of its ends as lead-in/out.
-    const size_t n = out.pcm.size();
-    std::vector<int16_t> wrapped(out.pcm.end() - kGuardPoints, out.pcm.end());
-    wrapped.insert(wrapped.end(), out.pcm.begin(), out.pcm.end());
-    wrapped.insert(wrapped.end(), out.pcm.begin(), out.pcm.begin() + kGuardPoints);
-    out.pcm = std::move(wrapped);
-    out.loop = true;
+    const size_t n = out.data.size();
+    std::vector<int16_t> wrapped(out.data.end() - kGuardPoints, out.data.end());
+    wrapped.insert(wrapped.end(), out.data.begin(), out.data.end());
+    wrapped.insert(wrapped.end(), out.data.begin(), out.data.begin() + kGuardPoints);
+    out.data = std::move(wrapped);
     out.loop_start = kGuardPoints;
     out.loop_end = uint32_t(kGuardPoints + n);
 

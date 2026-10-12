@@ -55,33 +55,34 @@ public:
             return kit_[address] = -1;
         }
 
-        // The mixer reads 8 points at a time and checks for a loop's end after each 8, so a loop lasts a whole number
-        // of 8 points from its start, and its last points can come from after the loop's end in the ROM.
-        Sf2Sample s;
+        sf2::Sample s;
         char name[24];
         std::snprintf(name, sizeof name, "Sample %06X", unsigned(address & 0xFFFFFF));
         s.name = name;
-        s.rate = uint32_t(std::lround(PointRate(info_)));
-        s.root_key = 60;
+        s.sample_rate = uint32_t(std::lround(PointRate(info_)));
+        s.original_key = 60;
+
+        // The mixer reads 8 points at a time and checks for a loop's end after each 8, so a loop lasts a whole number
+        // of 8 points from its start, and its last points can come from after the loop's end in the ROM.
         uint32_t points = game.length;
         if (game.loop && game.loop_end > game.loop_start)
         {
             const uint32_t length = (game.loop_end - game.loop_start + kRunPoints - 1) / kRunPoints * kRunPoints;
             points = game.loop_start + length;
-            s.loop = true;
             s.loop_start = game.loop_start;
             s.loop_end = points;
         }
         for (uint32_t i = 0; i < points; i++)
         {
             const uint32_t at = game.data + i;
-            s.pcm.push_back(int16_t(rom_.Contains(at) ? rom_.S8(at) * 256 : 0));
+            s.data.push_back(int16_t(rom_.Contains(at) ? rom_.S8(at) * 256 : 0));
         }
-        if (s.loop)
+
+        if (Looped(s))
         {
             for (uint32_t i = 0; i < kLoopGuard; i++)
             {
-                s.pcm.push_back(s.pcm[s.loop_start + i % (s.loop_end - s.loop_start)]);
+                s.data.push_back(s.data[s.loop_start + i % (s.loop_end - s.loop_start)]);
             }
         }
 
@@ -100,13 +101,13 @@ public:
         }
 
         static const char* const kDutyNames[4] = {"12.5%", "25%", "50%", "75%"};
-        Sf2Sample s;
+        sf2::Sample s;
         s.name = std::string("Square ") + kDutyNames[duty];
         const int16_t amplitude = int16_t(std::lround(32767 * kPsgLevel));
         for (int step = 0; step < 8; step++)
         {
             const bool high = (kDutyPatterns[duty] >> (7 - step)) & 1;
-            s.pcm.insert(s.pcm.end(), 8, high ? amplitude : int16_t(-amplitude));
+            s.data.insert(s.data.end(), 8, high ? amplitude : int16_t(-amplitude));
         }
         Cycle(s);
         file_.samples.push_back(s);
@@ -129,7 +130,8 @@ public:
         {
             return waves_[program] = -1;
         }
-        Sf2Sample s;
+
+        sf2::Sample s;
         char name[24];
         std::snprintf(name, sizeof name, "Wave %d", program);
         s.name = name;
@@ -137,7 +139,7 @@ public:
         {
             const uint8_t byte = rom_.U8(address + i / 2);
             const int point = i % 2 ? byte & 0xF : byte >> 4;
-            s.pcm.push_back(int16_t(std::lround((point - 7.5) * 32767 / 7.5 * kPsgLevel)));
+            s.data.push_back(int16_t(std::lround((point - 7.5) * 32767 / 7.5 * kPsgLevel)));
         }
         Cycle(s);
         file_.samples.push_back(s);
@@ -155,16 +157,17 @@ public:
             return cached->second;
         }
 
-        Sf2Sample s;
+        sf2::Sample s;
         s.name = narrow ? "Noise 7-bit" : "Noise 15-bit";
-        s.rate = kNoiseRate;
-        s.root_key = 60;
+        s.sample_rate = kNoiseRate;
+        s.original_key = 60;
+
         const uint32_t points = narrow ? 127 * 8 : 32767;
         const int16_t amplitude = int16_t(std::lround(32767 * kPsgLevel));
         uint32_t lfsr = 0x7FFF;
         for (uint32_t i = 0; i < points + kLoopGuard; i++)
         {
-            s.pcm.push_back((lfsr & 1) ? int16_t(-amplitude) : amplitude);
+            s.data.push_back((lfsr & 1) ? int16_t(-amplitude) : amplitude);
             const uint32_t bit = (lfsr ^ (lfsr >> 1)) & 1;
             lfsr = (lfsr >> 1) | (bit << 14);
             if (narrow)
@@ -172,7 +175,7 @@ public:
                 lfsr = (lfsr & ~0x40u) | (bit << 6);
             }
         }
-        s.loop = true;
+
         s.loop_start = 0;
         s.loop_end = points;
         file_.samples.push_back(s);
@@ -182,16 +185,15 @@ public:
 
 private:
     // Makes `s` a looped cycle at middle C, with the guard points after it.
-    static void Cycle(Sf2Sample& s)
+    static void Cycle(sf2::Sample& s)
     {
-        const uint32_t points = uint32_t(s.pcm.size());
+        const uint32_t points = uint32_t(s.data.size());
         for (uint32_t i = 0; i < kLoopGuard; i++)
         {
-            s.pcm.push_back(s.pcm[i % points]);
+            s.data.push_back(s.data[i % points]);
         }
-        s.rate = uint32_t(std::lround(points * kMiddleC));
-        s.root_key = 60;
-        s.loop = true;
+        s.sample_rate = uint32_t(std::lround(points * kMiddleC));
+        s.original_key = 60;
         s.loop_start = 0;
         s.loop_end = points;
     }
@@ -207,35 +209,35 @@ private:
 
 // Returns an instrument whose global zone makes velocity scale the level in a straight line, as the driver does. The
 // default curve squares it, and this takes its place.
-Sf2Instrument LinearInstrument(const std::string& name)
+sf2::Instrument LinearInstrument(const std::string& name)
 {
-    Sf2Instrument si;
+    sf2::Instrument si;
     si.name = name;
-    Sf2Zone global;
-    global.mods.push_back(
-        {sf2src::kNoteOnVelocity | sf2src::kNegative | sf2src::kConcave, sf2gen::kInitialAttenuation, 480, 0, 0});
+    sf2::Zone global;
+    global.modulators.push_back(
+        {sf2::kNoteOnVelocity | sf2::kNegative | sf2::kConcave, sf2::kInitialAttenuation, 480, 0, 0});
     si.zones.push_back(global);
 
     return si;
 }
 
 // Returns a zone for keys `lo` to `hi` that plays sample `sample` with its root at key `root`, and `cents` sharper.
-Sf2Zone SampleZone(int lo, int hi, int sample, int root, int cents, bool loop)
+sf2::Zone SampleZone(int lo, int hi, int sample, int root, int cents, bool loop)
 {
-    Sf2Zone z;
-    z.gens.push_back(Sf2Gen::Range(sf2gen::kKeyRange, lo, hi));
-    z.gens.push_back(Sf2Gen::Value(sf2gen::kReleaseVolEnv, kInstantRelease));
+    sf2::Zone z;
+    z.generators.push_back(sf2::Generator::Range(sf2::kKeyRange, lo, hi));
+    z.generators.push_back(sf2::Generator::Value(sf2::kReleaseVolEnv, kInstantRelease));
     if (cents / 100)
     {
-        z.gens.push_back(Sf2Gen::Value(sf2gen::kCoarseTune, cents / 100));
+        z.generators.push_back(sf2::Generator::Value(sf2::kCoarseTune, cents / 100));
     }
     if (cents % 100)
     {
-        z.gens.push_back(Sf2Gen::Value(sf2gen::kFineTune, cents % 100));
+        z.generators.push_back(sf2::Generator::Value(sf2::kFineTune, cents % 100));
     }
-    z.gens.push_back(Sf2Gen::Value(sf2gen::kSampleModes, loop ? 1 : 0));
-    z.gens.push_back(Sf2Gen::Value(sf2gen::kOverridingRootKey, root));
-    z.gens.push_back(Sf2Gen::Value(sf2gen::kSampleId, sample));
+    z.generators.push_back(sf2::Generator::Value(sf2::kSampleModes, loop ? 1 : 0));
+    z.generators.push_back(sf2::Generator::Value(sf2::kOverridingRootKey, root));
+    z.generators.push_back(sf2::Generator::Value(sf2::kSampleId, sample));
 
     return z;
 }
@@ -282,11 +284,13 @@ std::vector<std::string> InstrumentSet::Build(const Rom& rom, const DriverInfo& 
     {
         offsets[program] = true;
     }
+
     for (const auto& [program, unused] : offsets)
     {
         char name[24];
         std::snprintf(name, sizeof name, "Kit %d", program);
-        Sf2Instrument si = LinearInstrument(name);
+        sf2::Instrument si = LinearInstrument(name);
+
         const auto noise = noise_keys_.find(program);
         if (noise != noise_keys_.end())
         {
@@ -295,6 +299,7 @@ std::vector<std::string> InstrumentSet::Build(const Rom& rom, const DriverInfo& 
                 si.zones.push_back(SampleZone(key, key, samples.Noise(control & 8), key, NoiseCents(control), true));
             }
         }
+
         const auto kit = kit_keys_.find(program);
         if (kit != kit_keys_.end())
         {
@@ -305,16 +310,20 @@ std::vector<std::string> InstrumentSet::Build(const Rom& rom, const DriverInfo& 
                 {
                     continue;
                 }
-                si.zones.push_back(SampleZone(key, key, sample, key, 0, file.samples[size_t(sample)].loop));
+
+                si.zones.push_back(SampleZone(key, key, sample, key, 0, Looped(file.samples[size_t(sample)])));
             }
         }
+
         if (si.zones.size() < 2)
         {
             warnings.push_back(std::string(name) + " has nothing to play");
             continue;
         }
+
         file.instruments.push_back(si);
-        file.presets.push_back({name, uint16_t(kKitBank), uint16_t(program), int(file.instruments.size()) - 1});
+        file.presets.push_back(
+            MakePreset(name, uint16_t(kKitBank), uint16_t(program), int(file.instruments.size()) - 1));
     }
 
     // Each PSG instrument: its square's duty or its wave, over all the keys, at the pitch that the key's frequency
@@ -330,10 +339,12 @@ std::vector<std::string> InstrumentSet::Build(const Rom& rom, const DriverInfo& 
             warnings.push_back(std::string(name) + " has nothing to play");
             continue;
         }
-        Sf2Instrument si = LinearInstrument(name);
+
+        sf2::Instrument si = LinearInstrument(name);
         si.zones.push_back(SampleZone(0, 127, sample, 60, 0, true));
         file.instruments.push_back(si);
-        file.presets.push_back({name, uint16_t(channel), uint16_t(program), int(file.instruments.size()) - 1});
+        file.presets.push_back(
+            MakePreset(name, uint16_t(channel), uint16_t(program), int(file.instruments.size()) - 1));
     }
 
     return warnings;

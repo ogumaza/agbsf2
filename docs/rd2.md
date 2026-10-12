@@ -11,6 +11,9 @@ driver and its data elsewhere, and `supergbamidi` finds them from the code
 Super Mario World* has an older revision of the driver, whose differences
 [The Super Mario Advance 2 revision](#the-super-mario-advance-2-revision)
 lists.
+*Super Mario Advance 3: Yoshi's Island* has A Link to the Past's revision with
+another volume for sample voices (see
+[The Super Mario Advance 3 revision](#the-super-mario-advance-3-revision)).
 
 The driver mixes samples in software, at 10512 Hz in stereo, into a buffer for
 each of the two DirectSound FIFOs: FIFO A plays the left side and FIFO B the
@@ -120,6 +123,12 @@ its tempo change (`4`), its second volume (`5`) and its flags (`6`). The second
 table's handlers change the tracks of a player that a mask picks, such as their
 mute and their second volume, and the fourth's include the echo. A request is
 carried out in the first frame after the game hands the requests over.
+Handler `4` of the fourth table sets how many of the 7 sample voices the
+driver uses. To take a voice out of use, it allocates one as a note of the
+highest priority would. That takes the first free voice, or else stops the
+first voice that plays. The handler then keeps the voice on a separate list.
+Neither the notes nor the mixer use that list. To give voices back, the
+handler moves them from that list to the free voices.
 
 A sound effect is one track of one of the sound effects' sequences, which a
 player plays with a priority of 12 and an echo send of `7F`. `supergbamidi`
@@ -588,11 +597,72 @@ note never sounds, and its sample is past the end of its sample set's table,
 which can give an address outside the GBA's memory. `supergbamidi` leaves out
 every note that its instrument has no region for, with a warning.
 
+## The Super Mario Advance 3 revision
+
+*Super Mario Advance 3: Yoshi's Island* (US game code `A3AE`) came out
+between *Super Mario Advance 2* and *A Link to the Past*. Its driver has A
+Link to the Past's code with two changes:
+
+* **Volume.** A sample voice's volume is `level >> 8` rather than
+  `level * 3 >> 9`. `volume` therefore reaches 126 rather than 190. A
+  full-scale sample at the default volumes plays at about 31/128 on each side.
+  That's the level of the Super Mario Advance 2 revision. A released voice
+  stops once its level falls below 256. In A Link to the Past's revision, it
+  stops below 171.
+* **Init.** Init doesn't clear the output buffers.
+
+In `A3AE` the routines are:
+
+| Address | Routine |
+|---|---|
+| `0x0812C214` | the game's sound init, which calls the driver's init with the game's settings at `0x083077C4` |
+| `0x0812CE84` | init, which copies the ARM routines from `0x0812F3FC` to `0x03001368` |
+| `0x0812C3B4` | the game's play-music routine: the low byte of each halfword of the table at `0x083077E4` turns the game's music number into a sequence |
+| `0x0812EEBC` | request a sequence: `r0` = player, `r1` = sequence |
+| `0x0812EEA8` | hand over the requests made since its last call |
+| `0x0812CF50` | the VBlank routine |
+| `0x0812CF5C` | the per-frame routine |
+| `0x0812F3C8` | carry out the requests, through the table of handlers at `0x08307D4C` |
+| `0x0812EB80` | the sequencer |
+| `0x0812E5F8` | run a track for a frame; its command table, for `C2` to `FF`, is at `0x0812E73C` |
+| `0x0812DF58` | note on |
+| `0x0812D2D8` | look up an instrument |
+| `0x0812E408` | allocate a voice |
+| `0x0812E124` | release a voice's note |
+| `0x0812E210` | stop a voice |
+| `0x0812DCC4` | the PSG voices' frame |
+| `0x0812DACC` | the mixer's frame |
+| `0x0812D10C` | mix a sample voice's frame |
+| `0x0812D7C4` | work out a sample voice's level |
+
+The music plays on player 0x13. The driver's variables are A Link to the
+Past's, 0x98 bytes lower. The tracks are at `0x03000B88`, the sample voices
+and then the PSG voices at `0x030016C8`, and the players at `0x03001BF0`.
+
+The game's play-music routine makes two more requests. With request `0x0304`,
+it gives the driver 6 sample voices for the music whose entry in its table has
+bit 10 set, and 7 for the rest. For music `0x1D` and `0x1E`, it also sets the
+music player's second volume, to `0x37` and to `0x40`. The requests come in
+this order: the sample voices, the sequence, then the second volume. The play
+request sets the player's volumes back to `0x80`. A second volume therefore
+lasts until the game plays other music.
+
+`supergbamidi` converts each sequence with the settings of the first music
+number that plays it. The second volume scales the level of every voice,
+sample or PSG, by volume / `0x80`, and the MIDI file's CC11 follows it.
+
 ## Locating the driver
 
 `supergbamidi` finds the driver's init routine by the start of its code:
 
     B530 49xx 6008 49xx 2000 7008 2080 7008 3904 4Axx 1C10 8008 3102 200D 7008
+
+A cartridge can hold a second copy of the driver in the multiboot image that
+the game sends to other GBAs. The two copies can be different revisions. In
+*Super Mario Advance 3*, the image of *Mario Bros.* has the Super Mario
+Advance 2 revision, and the game has a later one. `supergbamidi` reads the
+first copy. Detection searches for the code below only from that copy's init
+up to the next copy's.
 
 The game's settings are the word that the `ldr r0` just before a call to init
 loads. The revision is Super Mario Advance 2's if the routine that works out a
@@ -600,8 +670,12 @@ sample voice's level starts with
 
     B530 1C05 7868 2801 D1xx 7A6C 0224
 
-and A Link to the Past's otherwise. The driver's tables come from the code that
-reads them:
+Otherwise, the revision is Super Mario Advance 3's if the routine ends with
+
+    30E6 6969 4348 0A40 6168 1C04 0A24 1C20
+
+If neither matches, the revision is A Link to the Past's. The driver's tables
+come from the code that reads them:
 
 | Table | Code | ldr |
 |---|---|---|
@@ -624,3 +698,18 @@ In the Super Mario Advance 2 revision, the code of four of them differs:
 The sequence count is the smaller of the entry counts in the sequence table
 and the table of bank lists. `--song-table` overrides the detected settings
 address, and `--song-count` overrides the sequence count.
+
+Detection also looks for the lookup in Super Mario Advance 3's play-music
+routine of the music's entry in the game's table:
+
+    49xx 0060 1840 8801 7805 2080 00C0 4008 2800 D0xx 20xx Fxxx Fxxx
+
+The `ldr` loads the table's address. The `movs` and `lsls` that follow give the
+bit that picks the voices, and the `movs r0` before the `bl` gives the voices
+with the bit set. The `beq` goes to a `movs r0` that gives the voices without
+it, and a `bl` to the same routine. Both ways go on with `adds r1, r5, #0`,
+`movs r0, #player` and a `bl` to the request for the sequence. A run of
+`cmp r4, #music`, `bne`, `movs r0, #player`, `movs r1, #volume` and a `bl` to
+the request for the second volume follows. The table doesn't give its length.
+`supergbamidi` reads it up to the first entry whose sequence the game doesn't
+have.

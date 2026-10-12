@@ -100,7 +100,7 @@ private:
     // Adds a zone that plays `voice` on keys `low` to `high`, at the pitch of key `fixed_key` if it isn't -1, and with
     // the drum kit's pan `rhythm_pan`. Adds nothing for a pulse or saw synth voice, whose zones AddSynthKey() adds, or
     // for a voice that has nothing to play. Returns false for one that has nothing to play.
-    bool AddZone(Sf2Instrument& instrument, const Voice& voice, int low, int high, int fixed_key, int rhythm_pan);
+    bool AddZone(sf2::Instrument& instrument, const Voice& voice, int low, int high, int fixed_key, int rhythm_pan);
 
     // Adds a zone to instrument `instrument`, which plays the voice at `address`, for `key`, if the voice plays it with
     // a pulse or saw synth voice and the instrument has no zone for it.

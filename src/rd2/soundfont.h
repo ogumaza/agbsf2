@@ -19,11 +19,11 @@ namespace supergbamidi::rd2
 {
 
 // Returns the level of a PSG voice at its full volume, as a share of a full-scale sample at the driver's default
-// volumes: the driver mixes the PSG at 50%, so volume 15 is 15/128 of the GBA's full scale, and a sample voice plays a
-// full-scale sample at about 47/128 on each side, or 31/128 in the Super Mario Advance 2 revision.
+// volumes. The driver mixes the PSG at 50%. Volume 15 is therefore 15/128 of the GBA's full scale. A sample voice plays
+// a full-scale sample at about 47/128 on each side, or 31/128 in the Super Mario Advance 2 and 3 revisions.
 constexpr double PsgShare(Revision revision)
 {
-    return revision == Revision::kSuperMarioAdvance2 ? 15.0 / 31.0 : 15.0 / 47.0;
+    return revision == Revision::kLinkToThePast ? 15.0 / 47.0 : 15.0 / 31.0;
 }
 
 // A voice's envelope in a SoundFont's terms: times in timecents and levels in centibels below the full level.
@@ -46,7 +46,7 @@ Sf2Envelope EnvelopeFor(const Rom& rom, uint32_t address, uint8_t release, bool 
 Sf2Envelope WaveEnvelope(uint8_t release);
 
 // Adds an envelope's generators to a zone, before its last generator (the sample).
-void AddEnvelope(Sf2Zone& zone, const Sf2Envelope& envelope);
+void AddEnvelope(sf2::Zone& zone, const Sf2Envelope& envelope);
 
 // A SoundFont being built, with a cache of the samples made for it. The converter adds the instruments and presets.
 class SoundfontBuilder
@@ -79,7 +79,7 @@ public:
     int NoiseSample(uint8_t nr43);
 
     // Adds an instrument with `zones`. Returns its index.
-    int AddInstrument(const std::string& name, std::vector<Sf2Zone> zones);
+    int AddInstrument(const std::string& name, std::vector<sf2::Zone> zones);
 
     // Adds a preset that plays instrument `instrument`.
     void AddPreset(const std::string& name, int bank, int program, int instrument);

@@ -18,9 +18,9 @@
 namespace supergbamidi::ubimilan
 {
 
-// The MIDI bank of channel 9's kits, whose programs are the kit's offsets. The PSG channels' instruments are in the
-// bank numbered after their channel.
-constexpr int kKitBank = 128;
+// The MIDI bank of channel 9's kits. Their programs are the kit's offsets. Like the PSG channels' instruments, the kits
+// are in the bank numbered after their channel.
+constexpr int kKitBank = kKitChannel;
 
 // The instruments that songs play, which become a SoundFont's presets. One set can serve all of a game's songs, for a
 // shared SoundFont.

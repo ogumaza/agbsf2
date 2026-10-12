@@ -10,10 +10,18 @@
 #include <utility>
 #include <vector>
 
+#include "xsflib/text.h"
+
 namespace supergbamidi
 {
 
 constexpr uint32_t kRomBase = 0x08000000;
+
+// Returns `v` as 0x and 8 capital hexadecimal digits, for messages about addresses and values in the ROM.
+inline std::string Hex(uint32_t v)
+{
+    return xsflib::Hex(v, 8, true);
+}
 
 // A cartridge image mapped at 0x08000000. All reads take GBA bus addresses and are bounds-checked: out-of-range reads
 // return 0 rather than failing, so callers must validate addresses with Contains() where it matters.

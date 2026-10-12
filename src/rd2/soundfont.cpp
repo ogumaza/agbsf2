@@ -9,6 +9,8 @@
 #include <utility>
 #include <vector>
 
+#include "seqlib/sf2/units.h"
+
 #include "rd2/driver.h"
 
 namespace supergbamidi::rd2
@@ -55,12 +57,7 @@ constexpr uint32_t kNoisePoints = kNoiseRate;
 // Returns a time in timecents, the unit of SoundFont envelope times.
 int Timecents(double seconds)
 {
-    if (seconds <= 0.001)
-    {
-        return kInstant;
-    }
-
-    return std::clamp(int(std::lround(1200.0 * std::log2(seconds))), kInstant, 8000);
+    return sf2::ToTimecents(seconds * 1000.0, kInstant, 8000);
 }
 
 // Returns the SoundFont duration for a fade to silence over `frames` frames. The driver's level falls linearly, so its
@@ -83,7 +80,6 @@ int Centibels(double level, double full)
 int SampleRelease(uint8_t release)
 {
     const double per_frame = -20.0 * std::log10((release + 0xE6) / 512.0);
-
     return Timecents(100.0 / per_frame / kFrameRate);
 }
 
@@ -97,15 +93,14 @@ std::string Name(const char* kind, uint32_t address)
 
 // Stores one waveform cycle as three copies looping over the middle one, so players get lead-in and lead-out points
 // around the loop.
-void SetCycle(Sf2Sample& out, const std::vector<int16_t>& cycle)
+void SetCycle(sf2::Sample& out, const std::vector<int16_t>& cycle)
 {
-    out.pcm.clear();
+    out.data.clear();
     for (int i = 0; i < 3; i++)
     {
-        out.pcm.insert(out.pcm.end(), cycle.begin(), cycle.end());
+        out.data.insert(out.data.end(), cycle.begin(), cycle.end());
     }
 
-    out.loop = true;
     out.loop_start = uint32_t(cycle.size());
     out.loop_end = uint32_t(2 * cycle.size());
 }
@@ -229,35 +224,35 @@ Sf2Envelope WaveEnvelope(uint8_t release)
     return env;
 }
 
-void AddEnvelope(Sf2Zone& zone, const Sf2Envelope& envelope)
+void AddEnvelope(sf2::Zone& zone, const Sf2Envelope& envelope)
 {
-    std::vector<Sf2Gen> gens;
+    std::vector<sf2::Generator> gens;
     if (envelope.attenuation)
     {
-        gens.push_back(Sf2Gen::Value(sf2gen::kInitialAttenuation, envelope.attenuation));
+        gens.push_back(sf2::Generator::Value(sf2::kInitialAttenuation, envelope.attenuation));
     }
     if (envelope.attack != kInstant)
     {
-        gens.push_back(Sf2Gen::Value(sf2gen::kAttackVolEnv, envelope.attack));
+        gens.push_back(sf2::Generator::Value(sf2::kAttackVolEnv, envelope.attack));
     }
     if (envelope.hold != kInstant)
     {
-        gens.push_back(Sf2Gen::Value(sf2gen::kHoldVolEnv, envelope.hold));
+        gens.push_back(sf2::Generator::Value(sf2::kHoldVolEnv, envelope.hold));
     }
     if (envelope.decay != kInstant)
     {
-        gens.push_back(Sf2Gen::Value(sf2gen::kDecayVolEnv, envelope.decay));
+        gens.push_back(sf2::Generator::Value(sf2::kDecayVolEnv, envelope.decay));
     }
     if (envelope.sustain)
     {
-        gens.push_back(Sf2Gen::Value(sf2gen::kSustainVolEnv, envelope.sustain));
+        gens.push_back(sf2::Generator::Value(sf2::kSustainVolEnv, envelope.sustain));
     }
     if (envelope.release != kInstant)
     {
-        gens.push_back(Sf2Gen::Value(sf2gen::kReleaseVolEnv, envelope.release));
+        gens.push_back(sf2::Generator::Value(sf2::kReleaseVolEnv, envelope.release));
     }
 
-    zone.gens.insert(zone.gens.end() - (zone.gens.empty() ? 0 : 1), gens.begin(), gens.end());
+    zone.generators.insert(zone.generators.end() - (zone.generators.empty() ? 0 : 1), gens.begin(), gens.end());
 }
 
 SoundfontBuilder::SoundfontBuilder(const Rom& rom, double psg_share, int songs)
@@ -287,14 +282,14 @@ int SoundfontBuilder::GameSample(uint32_t address)
         return -1;
     }
 
-    Sf2Sample s;
+    sf2::Sample s;
     s.name = Name("Sample", address);
-    s.rate = rate;
-    s.root_key = 60;
-    s.pcm.reserve(points + kMinLoop + kLoopGuard);
+    s.sample_rate = rate;
+    s.original_key = 60;
+    s.data.reserve(points + kMinLoop + kLoopGuard);
     for (uint32_t i = 0; i < points; i++)
     {
-        s.pcm.push_back(int16_t(rom_.S8(address + 16 + i) * 256));
+        s.data.push_back(int16_t(rom_.S8(address + 16 + i) * 256));
     }
 
     if (loop_end)
@@ -306,16 +301,15 @@ int SoundfontBuilder::GameSample(uint32_t address)
         {
             for (uint32_t i = 0; i < loop; i++)
             {
-                s.pcm.push_back(s.pcm[loop_start + i]);
+                s.data.push_back(s.data[loop_start + i]);
             }
             end += loop;
         }
         for (uint32_t i = 0; i < kLoopGuard; i++)
         {
-            s.pcm.push_back(s.pcm[loop_start + i % (end - loop_start)]);
+            s.data.push_back(s.data[loop_start + i % (end - loop_start)]);
         }
 
-        s.loop = true;
         s.loop_start = loop_start;
         s.loop_end = end;
     }
@@ -349,10 +343,10 @@ int SoundfontBuilder::SquareSample(int duty)
     }
 
     static constexpr const char* kNames[4] = {"Square 12.5%", "Square 25%", "Square 50%", "Square 75%"};
-    Sf2Sample s;
+    sf2::Sample s;
     s.name = kNames[duty];
-    s.rate = uint32_t(std::lround(8 * kStepPoints * kMiddleC));
-    s.root_key = 60;
+    s.sample_rate = uint32_t(std::lround(8 * kStepPoints * kMiddleC));
+    s.original_key = 60;
     SetCycle(s, cycle);
     file_.samples.push_back(std::move(s));
     squares_[duty] = int(file_.samples.size()) - 1;
@@ -379,10 +373,10 @@ int SoundfontBuilder::WaveSample(uint32_t address)
         }
     }
 
-    Sf2Sample s;
+    sf2::Sample s;
     s.name = Name("Wave", address);
-    s.rate = uint32_t(std::lround(32 * kC3));
-    s.root_key = 48;
+    s.sample_rate = uint32_t(std::lround(32 * kC3));
+    s.original_key = 48;
     SetCycle(s, cycle);
     file_.samples.push_back(std::move(s));
     waves_[address] = int(file_.samples.size()) - 1;
@@ -398,12 +392,12 @@ int SoundfontBuilder::NoiseSample(uint8_t nr43)
         return cached->second;
     }
 
-    Sf2Sample s;
+    sf2::Sample s;
     char name[32];
     std::snprintf(name, sizeof name, "Noise %02X", unsigned(nr43));
     s.name = name;
-    s.rate = kNoiseRate;
-    s.root_key = 60;
+    s.sample_rate = kNoiseRate;
+    s.original_key = 60;
 
     // The LFSR's clock is 524288 / r / 2^(s+1) Hz, with r = 0 counting as 0.5, so each point at 65536 Hz moves it on by
     // 8 / ((r ? 2r : 1) << s) steps. The output is high while the LFSR's low bit is 0.
@@ -413,7 +407,7 @@ int SoundfontBuilder::NoiseSample(uint8_t nr43)
     uint32_t clock = 0;
     for (uint32_t i = 0; i < kNoisePoints; i++)
     {
-        s.pcm.push_back(shift < 14 ? int16_t(std::lround(((lfsr & 1) ? -16384 : 16384) * psg_share_)) : 0);
+        s.data.push_back(shift < 14 ? int16_t(std::lround(((lfsr & 1) ? -16384 : 16384) * psg_share_)) : 0);
         if (shift >= 14)
         {
             continue;
@@ -432,12 +426,11 @@ int SoundfontBuilder::NoiseSample(uint8_t nr43)
         }
     }
 
-    s.loop = true;
     s.loop_start = 0;
-    s.loop_end = uint32_t(s.pcm.size());
+    s.loop_end = uint32_t(s.data.size());
     for (uint32_t i = 0; i < kLoopGuard; i++)
     {
-        s.pcm.push_back(s.pcm[i]);
+        s.data.push_back(s.data[i]);
     }
 
     file_.samples.push_back(std::move(s));
@@ -446,7 +439,7 @@ int SoundfontBuilder::NoiseSample(uint8_t nr43)
     return noises_[nr43];
 }
 
-int SoundfontBuilder::AddInstrument(const std::string& name, std::vector<Sf2Zone> zones)
+int SoundfontBuilder::AddInstrument(const std::string& name, std::vector<sf2::Zone> zones)
 {
     file_.instruments.push_back({name, std::move(zones)});
 
@@ -455,7 +448,7 @@ int SoundfontBuilder::AddInstrument(const std::string& name, std::vector<Sf2Zone
 
 void SoundfontBuilder::AddPreset(const std::string& name, int bank, int program, int instrument)
 {
-    file_.presets.push_back({name, uint16_t(bank), uint16_t(program), instrument});
+    file_.presets.push_back(MakePreset(name, uint16_t(bank), uint16_t(program), instrument));
 }
 
 } // namespace supergbamidi::rd2

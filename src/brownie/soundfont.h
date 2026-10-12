@@ -95,7 +95,7 @@ public:
     int GameSampleIndex(const GameSample& sample);
 
     // Adds an instrument with `zones`. Returns its index.
-    int AddInstrument(const std::string& name, std::vector<Sf2Zone> zones);
+    int AddInstrument(const std::string& name, std::vector<sf2::Zone> zones);
 
     // Adds a preset that plays instrument `instrument`.
     void AddPreset(const std::string& name, int bank, int program, int instrument);

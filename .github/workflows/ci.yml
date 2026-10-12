@@ -20,40 +20,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Linux x86-64 GCC
-            os: ubuntu-24.04
-            cmake-args: -DCMAKE_CXX_COMPILER=g++
-          - name: Linux x86-64 Clang
-            os: ubuntu-24.04
-            cmake-args: -DCMAKE_CXX_COMPILER=clang++
           - name: macOS ARM64
             os: macos-15
-          - name: macOS x86-64
-            os: macos-15-intel
-          - name: Windows x86-64 MSVC
+          - name: Windows x86-64 clang-cl
             os: windows-2025
-            cmake-args: -A x64
-          - name: Windows x86-64 MinGW
-            os: windows-2025
-            cmake-args: -G Ninja
-            msys2: UCRT64
-    defaults:
-      run:
-        shell: ${{ matrix.msys2 && 'msys2 {0}' || 'bash' }}
+            cmake-args: -A x64 -T ClangCL
     steps:
       - uses: actions/checkout@v7
-
-      - if: matrix.msys2
-        uses: msys2/setup-msys2@v2
         with:
-          msystem: ${{ matrix.msys2 }}
-          pacboy: gcc:p cmake:p ninja:p
+          submodules: recursive
+          token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
 
-      - name: Configure
-        run: cmake -S . -B build -DCMAKE_COMPILE_WARNING_AS_ERROR=ON ${{ matrix.cmake-args }}
-
-      - name: Build
-        run: cmake --build build --config Release --parallel
-
-      - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
+      - uses: ./externals/xsflib/ci/build-and-test
+        with:
+          cmake: -DCMAKE_COMPILE_WARNING_AS_ERROR=ON ${{ matrix.cmake-args }}
+          test-jobs: "1"

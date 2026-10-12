@@ -20,7 +20,6 @@
 #include "beat_grid.h"
 #include "files.h"
 #include "inflate.h"
-#include "midi.h"
 #include "music.h"
 #include "rom.h"
 #include "sf2.h"
@@ -37,19 +36,19 @@ namespace
 
 void TestFileNames()
 {
-    SUPERGBAMIDI_CHECK(SafeFileName("game") == "game");
-    SUPERGBAMIDI_CHECK(SafeFileName("\xE9\x9F\xB3\xE6\xA5\xBD caf\xC3\xA9") == "\xE9\x9F\xB3\xE6\xA5\xBD caf\xC3\xA9");
-    SUPERGBAMIDI_CHECK(SafeFileName("<>:\"/\\|?*\x01") == "__________");
-    SUPERGBAMIDI_CHECK(SafeFileName("game. . ") == "game");
-    SUPERGBAMIDI_CHECK(SafeFileName("..") == "output");
-    SUPERGBAMIDI_CHECK(SafeFileName("") == "output");
-    SUPERGBAMIDI_CHECK(SafeFileName("con") == "_con");
-    SUPERGBAMIDI_CHECK(SafeFileName("NuL.backup") == "_NuL.backup");
-    SUPERGBAMIDI_CHECK(SafeFileName("COM1") == "_COM1");
-    SUPERGBAMIDI_CHECK(SafeFileName("lpt9") == "_lpt9");
-    SUPERGBAMIDI_CHECK(SafeFileName("COM\xC2\xB9") == "_COM\xC2\xB9");
-    SUPERGBAMIDI_CHECK(SafeFileName("console") == "console");
-    SUPERGBAMIDI_CHECK(SafeFileName("COM10") == "COM10");
+    SEQLIB_CHECK(SafeFileName("game") == "game");
+    SEQLIB_CHECK(SafeFileName("\xE9\x9F\xB3\xE6\xA5\xBD caf\xC3\xA9") == "\xE9\x9F\xB3\xE6\xA5\xBD caf\xC3\xA9");
+    SEQLIB_CHECK(SafeFileName("<>:\"/\\|?*\x01") == "__________");
+    SEQLIB_CHECK(SafeFileName("game. . ") == "game");
+    SEQLIB_CHECK(SafeFileName("..") == "output");
+    SEQLIB_CHECK(SafeFileName("") == "output");
+    SEQLIB_CHECK(SafeFileName("con") == "_con");
+    SEQLIB_CHECK(SafeFileName("NuL.backup") == "_NuL.backup");
+    SEQLIB_CHECK(SafeFileName("COM1") == "_COM1");
+    SEQLIB_CHECK(SafeFileName("lpt9") == "_lpt9");
+    SEQLIB_CHECK(SafeFileName("COM\xC2\xB9") == "_COM\xC2\xB9");
+    SEQLIB_CHECK(SafeFileName("console") == "console");
+    SEQLIB_CHECK(SafeFileName("COM10") == "COM10");
 }
 
 // Returns a zlib stream holding `data` in stored blocks.
@@ -143,67 +142,28 @@ void TestInflate()
     std::vector<uint8_t> out;
     std::string err;
 
-    SUPERGBAMIDI_CHECK(ZlibDecompress(kStored, sizeof kStored, out, err));
-    SUPERGBAMIDI_CHECK(std::string(out.begin(), out.end()) == kText);
-    SUPERGBAMIDI_CHECK(ZlibDecompress(kFixed, sizeof kFixed, out, err));
-    SUPERGBAMIDI_CHECK(std::string(out.begin(), out.end()) == kText);
-    SUPERGBAMIDI_CHECK(ZlibDecompress(kDynamic, sizeof kDynamic, out, err));
-    SUPERGBAMIDI_CHECK(std::string(out.begin(), out.end()) == kWords);
+    SEQLIB_CHECK(ZlibDecompress(kStored, sizeof kStored, out, err));
+    SEQLIB_CHECK(std::string(out.begin(), out.end()) == kText);
+    SEQLIB_CHECK(ZlibDecompress(kFixed, sizeof kFixed, out, err));
+    SEQLIB_CHECK(std::string(out.begin(), out.end()) == kText);
+    SEQLIB_CHECK(ZlibDecompress(kDynamic, sizeof kDynamic, out, err));
+    SEQLIB_CHECK(std::string(out.begin(), out.end()) == kWords);
 
     std::vector<uint8_t> bad(kDynamic, kDynamic + sizeof kDynamic);
     bad.back() ^= 1; // Adler-32 mismatch
 
-    SUPERGBAMIDI_CHECK(!ZlibDecompress(bad.data(), bad.size(), out, err));
-    SUPERGBAMIDI_CHECK(!ZlibDecompress(kDynamic, 20, out, err));                  // truncated
-    SUPERGBAMIDI_CHECK(!ZlibDecompress(kDynamic, sizeof kDynamic - 4, out, err)); // no Adler-32
+    SEQLIB_CHECK(!ZlibDecompress(bad.data(), bad.size(), out, err));
+    SEQLIB_CHECK(!ZlibDecompress(kDynamic, 20, out, err));                  // truncated
+    SEQLIB_CHECK(!ZlibDecompress(kDynamic, sizeof kDynamic - 4, out, err)); // no Adler-32
 
     // A single code that doesn't fill its code space has to be one bit long, as zlib and puff require. The same block
     // with a distance code of two bits is corrupt.
     std::vector<uint8_t> two_bit(kOneBitDistance, kOneBitDistance + sizeof kOneBitDistance);
     two_bit[14] = 0x65;
 
-    SUPERGBAMIDI_CHECK(ZlibDecompress(kOneBitDistance, sizeof kOneBitDistance, out, err));
-    SUPERGBAMIDI_CHECK(std::string(out.begin(), out.end()) == "A");
-    SUPERGBAMIDI_CHECK(!ZlibDecompress(two_bit.data(), two_bit.size(), out, err));
-}
-
-void TestMidiWriter()
-{
-    // A note at tick 0, then an event of every kind at tick 96, added in the opposite of the order they're written in.
-    MidiFile midi(96);
-    MidiTrack& t = midi.AddTrack();
-    t.NoteOn(0, 0, 60, 100);
-    t.NoteOn(96, 0, 62, 100);
-    t.PitchBend(96, 0, 8192);
-    t.Control(96, 0, 11, 64);
-    t.Program(96, 0, 5);
-    t.Bank(96, 0, 1);
-    t.NoteOff(96, 0, 60);
-    t.Meta(96, 0x06, "x");
-
-    const std::string path = Utf8(TempPath("test.mid"));
-    std::string err;
-
-    SUPERGBAMIDI_CHECK(midi.Write(path, err));
-
-    // At the same tick, meta events come first, then note-offs, bank selects, program changes, controllers, pitch bends
-    // and note-ons.
-    const std::vector<uint8_t> f = ReadAll(path);
-    const std::vector<uint8_t> kExpected = {
-        'M',  'T',  'h',  'd',  0,    0,    0,  6,  // the header, 6 bytes long
-        0,    1,    0,    1,    0,    96,           // format 1, one track, 96 ticks to a quarter note
-        'M',  'T',  'r',  'k',  0,    0,    0,  40, // the track, 40 bytes long
-        0x00, 0x90, 60,   100,                      // note-on
-        0x60, 0xFF, 0x06, 1,    'x',                // marker, 96 ticks later
-        0x00, 0x80, 60,   0,                        // note-off
-        0x00, 0xB0, 0,    1,    0x00, 0xB0, 32, 0,  // bank select
-        0x00, 0xC0, 5,                              // program change
-        0x00, 0xB0, 11,   64,                       // controller
-        0x00, 0xE0, 0x00, 0x40,                     // pitch bend
-        0x00, 0x90, 62,   100,                      // note-on
-        0x00, 0xFF, 0x2F, 0x00};                    // end of the track
-    SUPERGBAMIDI_CHECK(f == kExpected);
-    fs::remove(PathFromUtf8(path));
+    SEQLIB_CHECK(ZlibDecompress(kOneBitDistance, sizeof kOneBitDistance, out, err));
+    SEQLIB_CHECK(std::string(out.begin(), out.end()) == "A");
+    SEQLIB_CHECK(!ZlibDecompress(two_bit.data(), two_bit.size(), out, err));
 }
 
 void TestSf2Writer()
@@ -211,65 +171,65 @@ void TestSf2Writer()
     Sf2File sf;
     sf.name = "Test";
 
-    Sf2Sample s;
+    sf2::Sample s;
     s.name = "Saw";
     for (int i = 0; i < 100; i++)
     {
-        s.pcm.push_back(int16_t(i * 100));
+        s.data.push_back(int16_t(i * 100));
     }
-    s.rate = 16000;
-    s.loop = true;
+    s.sample_rate = 16000;
     s.loop_start = 10;
     s.loop_end = 90;
     sf.samples.push_back(s);
 
     // A global zone with a modulator, then a zone whose generators are out of order on purpose.
-    Sf2Instrument inst;
+    sf2::Instrument inst;
     inst.name = "Inst";
-    Sf2Zone global;
-    global.mods.push_back(
-        {sf2src::kNoteOnVelocity | sf2src::kNegative | sf2src::kConcave, sf2gen::kInitialAttenuation, 480, 0, 0});
+    sf2::Zone global;
+    global.modulators.push_back(
+        {sf2::kNoteOnVelocity | sf2::kNegative | sf2::kConcave, sf2::kInitialAttenuation, 480, 0, 0});
     inst.zones.push_back(global);
-    Sf2Zone z;
-    z.gens = {Sf2Gen::Value(sf2gen::kSampleId, 0), Sf2Gen::Range(sf2gen::kKeyRange, 0, 127)};
+    sf2::Zone z;
+    z.generators = {sf2::Generator::Value(sf2::kSampleId, 0), sf2::Generator::Range(sf2::kKeyRange, 0, 127)};
     inst.zones.push_back(z);
     sf.instruments.push_back(inst);
-    sf.presets.push_back({"Preset", 0, 5, 0});
+    sf.presets.push_back(MakePreset("Preset", 0, 5, 0));
 
     const std::string path = Utf8(TempPath("test.sf2"));
     std::string err;
 
-    SUPERGBAMIDI_CHECK(sf.Write(path, err));
+    SEQLIB_CHECK(sf.Write(path, err));
 
     const std::vector<uint8_t> f = ReadAll(path);
-    SUPERGBAMIDI_CHECK(f.size() > 12 && std::memcmp(f.data(), "RIFF", 4) == 0 && std::memcmp(&f[8], "sfbk", 4) == 0);
-    SUPERGBAMIDI_CHECK_EQ(Le32(&f[4]) + 8, f.size());
+    SEQLIB_CHECK(f.size() > 12 && std::memcmp(f.data(), "RIFF", 4) == 0 && std::memcmp(&f[8], "sfbk", 4) == 0);
+    SEQLIB_CHECK_EQ(Le32(&f[4]) + 8, f.size());
 
     const Sf2Records r = ReadSf2(path);
-    SUPERGBAMIDI_CHECK_EQ(r.chunks.at("smpl").size(), (100 + 46) * 2);
-    SUPERGBAMIDI_CHECK_EQ(r.Count("shdr", 46), 2);
+    SEQLIB_CHECK_EQ(r.chunks.at("smpl").size(), (100 + 46) * 2);
+    SEQLIB_CHECK_EQ(r.Count("shdr", 46), 2);
     const uint8_t* h = r.Record("shdr", 46, 0);
-    SUPERGBAMIDI_CHECK(std::string(reinterpret_cast<const char*>(h)) == "Saw");
-    SUPERGBAMIDI_CHECK_EQ(Le32(h + 20), 0);
-    SUPERGBAMIDI_CHECK_EQ(Le32(h + 24), 100);
-    SUPERGBAMIDI_CHECK_EQ(Le32(h + 28), 10);
-    SUPERGBAMIDI_CHECK_EQ(Le32(h + 32), 90);
-    SUPERGBAMIDI_CHECK_EQ(Le32(h + 36), 16000);
+    SEQLIB_CHECK(std::string(reinterpret_cast<const char*>(h)) == "Saw");
+    SEQLIB_CHECK_EQ(Le32(h + 20), 0);
+    SEQLIB_CHECK_EQ(Le32(h + 24), 100);
+    SEQLIB_CHECK_EQ(Le32(h + 28), 10);
+    SEQLIB_CHECK_EQ(Le32(h + 32), 90);
+    SEQLIB_CHECK_EQ(Le32(h + 36), 16000);
 
     // The global zone's bag points at its modulator and no generators, the zone's bag at its two generators after the
     // modulator, and the zone's keyRange comes first.
-    SUPERGBAMIDI_CHECK_EQ(r.Count("imod", 10), 2);
-    SUPERGBAMIDI_CHECK_EQ(Le16(r.Record("imod", 10, 0)), 0x0502);
-    SUPERGBAMIDI_CHECK_EQ(Le16(r.Record("imod", 10, 0) + 2), sf2gen::kInitialAttenuation);
-    SUPERGBAMIDI_CHECK_EQ(Le16(r.Record("imod", 10, 0) + 4), 480);
-    SUPERGBAMIDI_CHECK_EQ(r.Count("ibag", 4), 3);
-    SUPERGBAMIDI_CHECK_EQ(Le16(r.Record("ibag", 4, 0)), 0);
-    SUPERGBAMIDI_CHECK_EQ(Le16(r.Record("ibag", 4, 0) + 2), 0);
-    SUPERGBAMIDI_CHECK_EQ(Le16(r.Record("ibag", 4, 1)), 0);
-    SUPERGBAMIDI_CHECK_EQ(Le16(r.Record("ibag", 4, 1) + 2), 1);
-    SUPERGBAMIDI_CHECK_EQ(Le16(r.Record("ibag", 4, 2)), 2);
-    SUPERGBAMIDI_CHECK_EQ(Le16(r.Record("igen", 4, 0)), sf2gen::kKeyRange);
-    SUPERGBAMIDI_CHECK_EQ(Le16(r.Record("igen", 4, 1)), sf2gen::kSampleId);
+    SEQLIB_CHECK_EQ(r.Count("imod", 10), 2);
+    SEQLIB_CHECK_EQ(Le16(r.Record("imod", 10, 0)), 0x0502);
+    SEQLIB_CHECK_EQ(Le16(r.Record("imod", 10, 0) + 2), sf2::kInitialAttenuation);
+    SEQLIB_CHECK_EQ(Le16(r.Record("imod", 10, 0) + 4), 480);
+    SEQLIB_CHECK_EQ(r.Count("ibag", 4), 3);
+    SEQLIB_CHECK_EQ(Le16(r.Record("ibag", 4, 0)), 0);
+    SEQLIB_CHECK_EQ(Le16(r.Record("ibag", 4, 0) + 2), 0);
+    SEQLIB_CHECK_EQ(Le16(r.Record("ibag", 4, 1)), 0);
+    SEQLIB_CHECK_EQ(Le16(r.Record("ibag", 4, 1) + 2), 1);
+    SEQLIB_CHECK_EQ(Le16(r.Record("ibag", 4, 2)), 2);
+    SEQLIB_CHECK_EQ(Le16(r.Record("igen", 4, 0)), sf2::kKeyRange);
+    SEQLIB_CHECK_EQ(Le16(r.Record("igen", 4, 1)), sf2::kSampleId);
+
     fs::remove(PathFromUtf8(path));
 }
 
@@ -280,7 +240,7 @@ void TestGsfLoading()
     std::error_code ec;
     const fs::path dir = TempPath("gsf_\xC3\xA9\xE3\x81\x82");
     fs::create_directories(dir, ec);
-    SUPERGBAMIDI_CHECK(!ec);
+    SEQLIB_CHECK(!ec);
     if (ec)
     {
         return;
@@ -295,49 +255,54 @@ void TestGsfLoading()
     Rom rom;
     std::string err;
 
-    SUPERGBAMIDI_CHECK(rom.Load(Utf8(dir / "set-01.minigsf"), err));
-    SUPERGBAMIDI_CHECK(rom.FromGsf());
-    SUPERGBAMIDI_CHECK(rom.GsfLibrary() == Utf8(dir / "set.gsflib"));
-    SUPERGBAMIDI_CHECK_EQ(rom.U32(kRomBase + 0x100), 0x12345678); // from the library
-    SUPERGBAMIDI_CHECK_EQ(rom.U8(kRomBase + 0xF00), 0x5A);        // from the mini-GSF
+    SEQLIB_CHECK(rom.Load(Utf8(dir / "set-01.minigsf"), err));
 
-    SUPERGBAMIDI_CHECK(rom.Load(Utf8(dir / "set.gsflib"), err));
-    SUPERGBAMIDI_CHECK(rom.GsfLibrary().empty());
+    SEQLIB_CHECK(rom.FromGsf());
+    SEQLIB_CHECK(rom.GsfLibrary() == Utf8(dir / "set.gsflib"));
+    SEQLIB_CHECK_EQ(rom.U32(kRomBase + 0x100), 0x12345678); // from the library
+    SEQLIB_CHECK_EQ(rom.U8(kRomBase + 0xF00), 0x5A);        // from the mini-GSF
+
+    SEQLIB_CHECK(rom.Load(Utf8(dir / "set.gsflib"), err));
+
+    SEQLIB_CHECK(rom.GsfLibrary().empty());
 
     // _lib2 goes on top of the file's program.
     WriteGsf(dir / "patch.gsflib", kRomBase + 0xF00, {0xA5}, "");
     WriteGsf(dir / "set-02.minigsf", kRomBase + 0xF00, {0x5A}, "_lib=set.gsflib\n_lib2=patch.gsflib\n");
 
-    SUPERGBAMIDI_CHECK(rom.Load(Utf8(dir / "set-02.minigsf"), err));
+    SEQLIB_CHECK(rom.Load(Utf8(dir / "set-02.minigsf"), err));
 
-    SUPERGBAMIDI_CHECK_EQ(rom.U8(kRomBase + 0xF00), 0xA5);
-    SUPERGBAMIDI_CHECK_EQ(rom.U32(kRomBase + 0x100), 0x12345678);
+    SEQLIB_CHECK_EQ(rom.U8(kRomBase + 0xF00), 0xA5);
+    SEQLIB_CHECK_EQ(rom.U32(kRomBase + 0x100), 0x12345678);
 
     // A _lib tag whose case differs from the library's name finds the library.
     WriteGsf(dir / "set-03.minigsf", kRomBase + 0xF00, {0x5A}, "_lib=SET.GSFLIB\n");
 
-    SUPERGBAMIDI_CHECK(rom.Load(Utf8(dir / "set-03.minigsf"), err));
+    SEQLIB_CHECK(rom.Load(Utf8(dir / "set-03.minigsf"), err));
 
-    SUPERGBAMIDI_CHECK_EQ(rom.U32(kRomBase + 0x100), 0x12345678);
+    SEQLIB_CHECK_EQ(rom.U32(kRomBase + 0x100), 0x12345678);
 
     WriteGsf(dir / "orphan.minigsf", kRomBase + 0xF00, {0x5A}, "_lib=missing.gsflib\n");
 
-    SUPERGBAMIDI_CHECK(!rom.Load(Utf8(dir / "orphan.minigsf"), err));
-    SUPERGBAMIDI_CHECK(err == "the library missing.gsflib can't be read");
+    SEQLIB_CHECK(!rom.Load(Utf8(dir / "orphan.minigsf"), err));
+
+    SEQLIB_CHECK(err == "the library missing.gsflib can't be read");
 
     // A folder dropped on the program by mistake.
-    SUPERGBAMIDI_CHECK(!rom.Load(Utf8(dir), err));
-    SUPERGBAMIDI_CHECK(err == "it's a folder, not a ROM or GSF file");
+    SEQLIB_CHECK(!rom.Load(Utf8(dir), err));
+
+    SEQLIB_CHECK(err == "it's a folder, not a ROM or GSF file");
 
     // A zipped ROM, which has to be taken out of its archive first.
     std::vector<uint8_t> zip(0x200, 0);
     std::memcpy(zip.data(), "PK\x03\x04", 4);
     std::string write_error;
-    SUPERGBAMIDI_CHECK(WriteFile(Utf8(dir / "game.zip"), zip, write_error));
+    SEQLIB_CHECK(WriteFile(Utf8(dir / "game.zip"), zip, write_error));
 
-    SUPERGBAMIDI_CHECK(!rom.Load(Utf8(dir / "game.zip"), err));
+    SEQLIB_CHECK(!rom.Load(Utf8(dir / "game.zip"), err));
 
-    SUPERGBAMIDI_CHECK(err.find("it's an archive") == 0);
+    SEQLIB_CHECK(err.find("it's an archive") == 0);
+
     fs::remove_all(dir, ec);
 }
 
@@ -371,34 +336,34 @@ void TestNoDriver()
     const bool found_all = !OpenAllMusic(rom, Overrides(), all, unread).empty();
     const bool found_all_mp2k = !OpenAllMusic(rom, mp2k_only, all_mp2k, unread_mp2k).empty();
 
-    SUPERGBAMIDI_CHECK(!found_any && !found_konami && !found_rare && !found_quintet && !found_rd2 && !found_mp2k &&
-                       !found_brownie && !found_krawall && !found_ubimilan);
-    SUPERGBAMIDI_CHECK(!found_all && !found_all_mp2k && unread.empty() && unread_mp2k.empty());
-    SUPERGBAMIDI_CHECK(all == any && all_mp2k == mp2k);
-    SUPERGBAMIDI_CHECK(
+    SEQLIB_CHECK(!found_any && !found_konami && !found_rare && !found_quintet && !found_rd2 && !found_mp2k &&
+                 !found_brownie && !found_krawall && !found_ubimilan);
+    SEQLIB_CHECK(!found_all && !found_all_mp2k && unread.empty() && unread_mp2k.empty());
+    SEQLIB_CHECK(all == any && all_mp2k == mp2k);
+    SEQLIB_CHECK(
         any ==
         "no Konami, Rare, Quintet, Nintendo R&D2, Brownie Brown, Ubisoft Milan, Krawall or MP2K sound driver found: "
         "this game's music uses another engine, or a driver version supergbamidi doesn't know");
-    SUPERGBAMIDI_CHECK(konami ==
-                       "no Konami sound driver found: this game's music uses another engine, or a driver version "
-                       "supergbamidi doesn't know");
-    SUPERGBAMIDI_CHECK(rare == "no Rare sound driver found (try --song-table)");
-    SUPERGBAMIDI_CHECK(quintet ==
-                       "no Quintet sound driver found: this game's music uses another engine, or a driver version "
-                       "supergbamidi doesn't know");
-    SUPERGBAMIDI_CHECK(rd2 ==
-                       "no Nintendo R&D2 sound driver found: this game's music uses another engine, or a driver "
-                       "version supergbamidi doesn't know");
-    SUPERGBAMIDI_CHECK(mp2k == "no MP2K sound driver found (try --song-table)");
-    SUPERGBAMIDI_CHECK(brownie ==
-                       "no Brownie Brown sound driver found: this game's music uses another engine, or a driver "
-                       "version supergbamidi doesn't know");
-    SUPERGBAMIDI_CHECK(krawall ==
-                       "no Krawall sound driver found: this game's music uses another engine, or a driver version "
-                       "supergbamidi doesn't know");
-    SUPERGBAMIDI_CHECK(ubimilan ==
-                       "no Ubisoft Milan sound driver found: this game's music uses another engine, or a driver "
-                       "version supergbamidi doesn't know");
+    SEQLIB_CHECK(konami ==
+                 "no Konami sound driver found: this game's music uses another engine, or a driver version "
+                 "supergbamidi doesn't know");
+    SEQLIB_CHECK(rare == "no Rare sound driver found (try --song-table)");
+    SEQLIB_CHECK(quintet ==
+                 "no Quintet sound driver found: this game's music uses another engine, or a driver version "
+                 "supergbamidi doesn't know");
+    SEQLIB_CHECK(rd2 ==
+                 "no Nintendo R&D2 sound driver found: this game's music uses another engine, or a driver "
+                 "version supergbamidi doesn't know");
+    SEQLIB_CHECK(mp2k == "no MP2K sound driver found (try --song-table)");
+    SEQLIB_CHECK(brownie ==
+                 "no Brownie Brown sound driver found: this game's music uses another engine, or a driver "
+                 "version supergbamidi doesn't know");
+    SEQLIB_CHECK(krawall ==
+                 "no Krawall sound driver found: this game's music uses another engine, or a driver version "
+                 "supergbamidi doesn't know");
+    SEQLIB_CHECK(ubimilan ==
+                 "no Ubisoft Milan sound driver found: this game's music uses another engine, or a driver "
+                 "version supergbamidi doesn't know");
 }
 
 // A song's loop lasts until every track's loop is back where it started: loops of 3 and 4 bars make one of 12, and a
@@ -406,12 +371,12 @@ void TestNoDriver()
 // of 8 and 9 is, but 90 for loops of 9 and 10 isn't, and the longest loop is the song's.
 void TestLoopLength()
 {
-    SUPERGBAMIDI_CHECK_EQ(LoopLength({7}), uint64_t(7));
-    SUPERGBAMIDI_CHECK_EQ(LoopLength({960, 480}), uint64_t(960));
-    SUPERGBAMIDI_CHECK_EQ(LoopLength({9216, 12288}), uint64_t(36864));
-    SUPERGBAMIDI_CHECK_EQ(LoopLength({8, 9}), uint64_t(72));
-    SUPERGBAMIDI_CHECK_EQ(LoopLength({9, 10}), uint64_t(10));
-    SUPERGBAMIDI_CHECK_EQ(LoopLength({6138, 6144}), uint64_t(6144));
+    SEQLIB_CHECK_EQ(LoopLength({7}), uint64_t(7));
+    SEQLIB_CHECK_EQ(LoopLength({960, 480}), uint64_t(960));
+    SEQLIB_CHECK_EQ(LoopLength({9216, 12288}), uint64_t(36864));
+    SEQLIB_CHECK_EQ(LoopLength({8, 9}), uint64_t(72));
+    SEQLIB_CHECK_EQ(LoopLength({9, 10}), uint64_t(10));
+    SEQLIB_CHECK_EQ(LoopLength({6138, 6144}), uint64_t(6144));
 }
 
 void TestSongBanks()
@@ -424,21 +389,21 @@ void TestSongBanks()
     const std::vector<BankProgram> song2 = banks.Place(2, 130);
     const std::vector<BankProgram> song1 = banks.Place(1, 2);
 
-    SUPERGBAMIDI_CHECK(song0.size() == 3 && song0[2].bank == 0 && song0[2].program == 2);
-    SUPERGBAMIDI_CHECK(song2.size() == 130);
+    SEQLIB_CHECK(song0.size() == 3 && song0[2].bank == 0 && song0[2].program == 2);
+    SEQLIB_CHECK(song2.size() == 130);
     if (song2.size() == 130)
     {
-        SUPERGBAMIDI_CHECK(song2[127].bank == 2 && song2[127].program == 127);
-        SUPERGBAMIDI_CHECK(song2[128].bank == 0 && song2[128].program == 3 && song2[129].program == 4);
+        SEQLIB_CHECK(song2[127].bank == 2 && song2[127].program == 127);
+        SEQLIB_CHECK(song2[128].bank == 0 && song2[128].program == 3 && song2[129].program == 4);
     }
-    SUPERGBAMIDI_CHECK(song1.size() == 2 && song1[0].bank == 1 && song1[0].program == 0);
+    SEQLIB_CHECK(song1.size() == 2 && song1[0].bank == 1 && song1[0].program == 0);
 
     // A SoundFont of one song's goes on from bank 0 into bank 1.
     SongBanks own(1);
 
     const std::vector<BankProgram> one = own.Place(0, 130);
 
-    SUPERGBAMIDI_CHECK(one.size() == 130 && one[128].bank == 1 && one[128].program == 0);
+    SEQLIB_CHECK(one.size() == 130 && one[128].bank == 1 && one[128].program == 0);
 
     // With one free program left in each of the 128 banks, song 128 finds no room for 129 presets and takes nothing,
     // and then finds room for 128.
@@ -451,8 +416,8 @@ void TestSongBanks()
     const bool too_many = full.Place(128, 129).empty();
     const std::vector<BankProgram> fits = full.Place(128, 128);
 
-    SUPERGBAMIDI_CHECK(too_many);
-    SUPERGBAMIDI_CHECK(fits.size() == 128 && fits[0].bank == 0 && fits[0].program == 127);
+    SEQLIB_CHECK(too_many);
+    SEQLIB_CHECK(fits.size() == 128 && fits[0].bank == 0 && fits[0].program == 127);
 }
 
 // Returns true if `a` and `b` are within `tolerance` of each other.
@@ -473,10 +438,12 @@ void TestBeatGridSteady()
         channels[2].push_back(12 + k * 13 / 2);
     }
     channels[2].insert(channels[2].begin(), 1);
+
     for (uint32_t k = 0; k <= 16; k++)
     {
         channels[1].push_back(1 + 26 * k);
     }
+
     for (uint32_t k = 0; k < 32; k++)
     {
         for (uint32_t i = 0; i < 3; i++)
@@ -487,16 +454,16 @@ void TestBeatGridSteady()
 
     const BeatGrid grid(channels, {});
 
-    SUPERGBAMIDI_CHECK_EQ(grid.Tempos().size(), size_t(1));
-    SUPERGBAMIDI_CHECK(Near(grid.Tempos()[0].frames, 26, 0.02));
-    SUPERGBAMIDI_CHECK(Near(grid.Quarters(0, 1), 0));
-    SUPERGBAMIDI_CHECK(Near(grid.Quarters(0, 7), 0.25));
-    SUPERGBAMIDI_CHECK(Near(grid.Quarters(0, 14), 0.5));
-    SUPERGBAMIDI_CHECK(Near(grid.Quarters(0, 20), 0.75));
-    SUPERGBAMIDI_CHECK(Near(grid.Quarters(1, 27), 1));
-    SUPERGBAMIDI_CHECK(Near(grid.Quarters(2, 18) - grid.Quarters(0, 7), 11.0 / 26, 0.002));
-    SUPERGBAMIDI_CHECK(Near(grid.Quarters(3, 14), 0.5));
-    SUPERGBAMIDI_CHECK(Near(grid.Quarters(3, 15) - grid.Quarters(3, 14), 1.0 / 26, 0.002));
+    SEQLIB_CHECK_EQ(grid.Tempos().size(), size_t(1));
+    SEQLIB_CHECK(Near(grid.Tempos()[0].frames, 26, 0.02));
+    SEQLIB_CHECK(Near(grid.Quarters(0, 1), 0));
+    SEQLIB_CHECK(Near(grid.Quarters(0, 7), 0.25));
+    SEQLIB_CHECK(Near(grid.Quarters(0, 14), 0.5));
+    SEQLIB_CHECK(Near(grid.Quarters(0, 20), 0.75));
+    SEQLIB_CHECK(Near(grid.Quarters(1, 27), 1));
+    SEQLIB_CHECK(Near(grid.Quarters(2, 18) - grid.Quarters(0, 7), 11.0 / 26, 0.002));
+    SEQLIB_CHECK(Near(grid.Quarters(3, 14), 0.5));
+    SEQLIB_CHECK(Near(grid.Quarters(3, 15) - grid.Quarters(3, 14), 1.0 / 26, 0.002));
 }
 
 // A ritardando: quarter notes of 23 frames, then six that slow down, then 23 again. The slow notes set the tempo one by
@@ -509,11 +476,13 @@ void TestBeatGridRitardando()
     {
         notes.push_back(frame);
     }
+
     for (const uint32_t length : {26u, 26u, 26u, 28u, 28u, 30u})
     {
         notes.push_back(frame);
         frame += length;
     }
+
     const uint32_t again = frame;
     for (int i = 0; i < 16; i++, frame += 23)
     {
@@ -523,12 +492,12 @@ void TestBeatGridRitardando()
 
     const BeatGrid grid({notes, notes}, {});
 
-    SUPERGBAMIDI_CHECK(Near(grid.Quarters(0, 1 + 23 * 15), 15));
-    SUPERGBAMIDI_CHECK(Near(grid.Quarters(0, again), 22));
-    SUPERGBAMIDI_CHECK(Near(grid.Quarters(0, again + 23), 23));
-    SUPERGBAMIDI_CHECK(Near(grid.Quarters(again + 46), 24));
-    SUPERGBAMIDI_CHECK(grid.Tempos().size() >= 4);
-    SUPERGBAMIDI_CHECK(Near(grid.Tempos().back().frames, 23, 0.01));
+    SEQLIB_CHECK(Near(grid.Quarters(0, 1 + 23 * 15), 15));
+    SEQLIB_CHECK(Near(grid.Quarters(0, again), 22));
+    SEQLIB_CHECK(Near(grid.Quarters(0, again + 23), 23));
+    SEQLIB_CHECK(Near(grid.Quarters(again + 46), 24));
+    SEQLIB_CHECK(grid.Tempos().size() >= 4);
+    SEQLIB_CHECK(Near(grid.Tempos().back().frames, 23, 0.01));
 }
 
 // A tempo that changes from note to note, in a rubato: every note is an 8th note, and has its own tempo. An echo 6
@@ -541,6 +510,7 @@ void TestBeatGridRubato()
     {
         notes.push_back(notes.back() + length);
     }
+
     std::vector<uint32_t> echo = {1};
     for (uint32_t f : notes)
     {
@@ -549,11 +519,11 @@ void TestBeatGridRubato()
 
     const BeatGrid grid({notes, notes, echo}, {});
 
-    SUPERGBAMIDI_CHECK(Near(grid.Quarters(0, notes[1]), 0.5));
-    SUPERGBAMIDI_CHECK(Near(grid.Quarters(1, notes[10]), 5));
-    SUPERGBAMIDI_CHECK(Near(grid.Quarters(0, notes[19]), 9.5));
-    SUPERGBAMIDI_CHECK(grid.Quarters(2, echo[11]) > 5 && grid.Quarters(2, echo[11]) < 5.5);
-    SUPERGBAMIDI_CHECK(Near(grid.Tempos()[0].frames, 40, 0.01));
+    SEQLIB_CHECK(Near(grid.Quarters(0, notes[1]), 0.5));
+    SEQLIB_CHECK(Near(grid.Quarters(1, notes[10]), 5));
+    SEQLIB_CHECK(Near(grid.Quarters(0, notes[19]), 9.5));
+    SEQLIB_CHECK(grid.Quarters(2, echo[11]) > 5 && grid.Quarters(2, echo[11]) < 5.5);
+    SEQLIB_CHECK(Near(grid.Tempos()[0].frames, 40, 0.01));
 }
 
 // A rubato that a loop repeats, each pass slowing at its end to an 8th note of 32 frames: each pass lasts as many
@@ -580,7 +550,7 @@ void TestBeatGridRubatoLoop()
     const double first = grid.Quarters(0, hints[0]);
     for (size_t i = 2; i < hints.size(); i += 2)
     {
-        SUPERGBAMIDI_CHECK(Near(grid.Quarters(0, hints[i]) - grid.Quarters(0, hints[i - 2]), first));
+        SEQLIB_CHECK(Near(grid.Quarters(0, hints[i]) - grid.Quarters(0, hints[i - 2]), first));
     }
 }
 
@@ -612,7 +582,7 @@ void TestBeatGridRubatoAfterRubato()
 
     const BeatGrid grid({notes, notes}, hints);
 
-    SUPERGBAMIDI_CHECK(Near(grid.Quarters(0, rubato + 16) - grid.Quarters(0, rubato), 0.5));
+    SEQLIB_CHECK(Near(grid.Quarters(0, rubato + 16) - grid.Quarters(0, rubato), 0.5));
 }
 
 // The tempo changes where a hint says it may: from 16th notes of 6.5 frames to 7.5, so from 26 frames a quarter note to
@@ -624,6 +594,7 @@ void TestBeatGridTempoChange()
     {
         notes.push_back(1 + k * 13 / 2);
     }
+
     const uint32_t kChange = 1 + 48 * 13 / 2;
     for (uint32_t k = 0; k <= 48; k++)
     {
@@ -632,11 +603,11 @@ void TestBeatGridTempoChange()
 
     const BeatGrid grid({notes, notes}, {kChange, kChange, 100, 100});
 
-    SUPERGBAMIDI_CHECK_EQ(grid.Tempos().size(), size_t(2));
-    SUPERGBAMIDI_CHECK(Near(grid.Tempos()[0].frames, 26, 0.01));
-    SUPERGBAMIDI_CHECK(Near(grid.Tempos()[1].quarter, 12));
-    SUPERGBAMIDI_CHECK(Near(grid.Tempos()[1].frames, 30, 0.01));
-    SUPERGBAMIDI_CHECK(Near(grid.Quarters(0, kChange + 15), 12.5));
+    SEQLIB_CHECK_EQ(grid.Tempos().size(), size_t(2));
+    SEQLIB_CHECK(Near(grid.Tempos()[0].frames, 26, 0.01));
+    SEQLIB_CHECK(Near(grid.Tempos()[1].quarter, 12));
+    SEQLIB_CHECK(Near(grid.Tempos()[1].frames, 30, 0.01));
+    SEQLIB_CHECK(Near(grid.Quarters(0, kChange + 15), 12.5));
 }
 
 // A run of 32nd notes of 4, 4, 4, 3 and 4 frames before 32nd notes of 10/3 frames: the run sets the tempo note by note,
@@ -644,11 +615,12 @@ void TestBeatGridTempoChange()
 void TestBeatGridWholeUnits()
 {
     std::vector<uint32_t> run = {0, 4, 8, 12, 15};
-    std::vector<uint32_t> eighths = {0};
     for (uint32_t k = 0; k < 96; k++)
     {
         run.push_back(19 + (10 * k + 1) / 3);
     }
+
+    std::vector<uint32_t> eighths = {0};
     for (uint32_t k = 0; k < 48; k++)
     {
         eighths.push_back(19 + (40 * k + 1) / 3);
@@ -659,7 +631,7 @@ void TestBeatGridWholeUnits()
     for (size_t i = 5; i < 69; i++)
     {
         const double thirty_seconds = grid.Quarters(0, run[i]) * 8;
-        SUPERGBAMIDI_CHECK(Near(thirty_seconds, std::round(thirty_seconds)));
+        SEQLIB_CHECK(Near(thirty_seconds, std::round(thirty_seconds)));
     }
 }
 
@@ -673,6 +645,7 @@ void TestBeatGridMarker()
     {
         channels[0].push_back(k * 20 / 3);
     }
+
     for (uint32_t q = 0; q <= 24; q++)
     {
         channels[1].push_back(q * 80 / 3);
@@ -684,11 +657,11 @@ void TestBeatGridMarker()
 
     const BeatGrid grid(channels, {});
 
-    SUPERGBAMIDI_CHECK(Near(grid.Quarters(1, 89), 3 + 1.0 / 3));
-    SUPERGBAMIDI_CHECK(grid.Snap(89) > grid.Quarters(1, 89) + 0.001);
-    SUPERGBAMIDI_CHECK(Near(grid.Marker(89), grid.Quarters(1, 89)));
-    SUPERGBAMIDI_CHECK(Near(grid.Marker(80), 3));
-    SUPERGBAMIDI_CHECK(Near(grid.Marker(93), 3.5));
+    SEQLIB_CHECK(Near(grid.Quarters(1, 89), 3 + 1.0 / 3));
+    SEQLIB_CHECK(grid.Snap(89) > grid.Quarters(1, 89) + 0.001);
+    SEQLIB_CHECK(Near(grid.Marker(89), grid.Quarters(1, 89)));
+    SEQLIB_CHECK(Near(grid.Marker(80), 3));
+    SEQLIB_CHECK(Near(grid.Marker(93), 3.5));
 }
 
 // RunThumb() runs ldmia and stmia: one routine loads two words from the ROM with ldmia and adds them, and another
@@ -708,9 +681,9 @@ void TestRunThumb()
     const std::optional<uint32_t> second = RunThumb(rom, kRomBase + 0x14, {3, 9, 0, 0});
     const std::optional<uint32_t> top = RunThumb(rom, kRomBase + 0x20, {0, 0, 0, 0});
 
-    SUPERGBAMIDI_CHECK(sum && *sum == 12);
-    SUPERGBAMIDI_CHECK(second && *second == 9);
-    SUPERGBAMIDI_CHECK(!top);
+    SEQLIB_CHECK(sum && *sum == 12);
+    SEQLIB_CHECK(second && *second == 9);
+    SEQLIB_CHECK(!top);
 }
 
 // Creates a unique directory in the system's temp folder so concurrent test runs don't share files. Returns false on
@@ -745,7 +718,6 @@ int Run()
 
     TestFileNames();
     TestInflate();
-    TestMidiWriter();
     TestSf2Writer();
     TestGsfLoading();
     TestNoDriver();
@@ -771,9 +743,9 @@ int Run()
 
     std::error_code ec;
     fs::remove_all(g_temp, ec);
-    std::printf("%d checks, %d failures\n", g_checks, g_failures);
+    std::printf("%d checks, %d failures\n", seqlib::testing::checks, seqlib::testing::failures);
 
-    return g_failures ? 1 : 0;
+    return seqlib::testing::failures ? 1 : 0;
 }
 
 } // namespace

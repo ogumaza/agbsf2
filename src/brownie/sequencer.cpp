@@ -123,8 +123,8 @@ Sequencer::Sequencer(const Rom& rom, const DriverInfo& info, int song)
         Write(kIoDma1Control, 2, 0);
         Write(kIoDma2Control, 2, 0);
     }
-    mix_cycles_ = uint64_t(kMixPoints) * info.point_cycles;
 
+    mix_cycles_ = uint64_t(kMixPoints) * info.point_cycles;
     std::vector<SongChannel> channels;
     valid_ = mix_cycles_ > 0 && ReadSong(rom, info, song, channels);
     if (valid_)

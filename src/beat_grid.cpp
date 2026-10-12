@@ -487,10 +487,10 @@ void BeatGrid::AddPart(const std::vector<std::vector<Group>>& groups, const Part
     // triplets', are for moving notes onto the beat, since so many of them would hide such a change.
     const double unit = FitBeat(groups, part, part.unit);
     const double per_quarter = PerQuarterFor(unit);
+    const double eighth_triplet = unit * per_quarter / 3;
     beats_.emplace_back(unit, per_quarter);
 
     // Returns true if a note `frames` from the start of the beat is on a unit, or on an 8th-note triplet.
-    const double eighth_triplet = unit * per_quarter / 3;
     const auto steady = [&](double frames)
     {
         return Whole(frames, unit, UnitTolerance(unit)) ||

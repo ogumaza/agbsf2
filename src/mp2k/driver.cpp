@@ -3,7 +3,6 @@
 #include "mp2k/driver.h"
 
 #include <algorithm>
-#include <cstdio>
 #include <iterator>
 
 #include "mp2k/song.h"
@@ -52,14 +51,6 @@ constexpr uint8_t kCamelotPulse[20] = {0x02, 0x60, 0xD3, 0xE5, 0x06, 0x2C, 0x82,
 
 // The greatest distance, in bytes, that the init's setting of the driver's mode can be before its literal pool.
 constexpr uint32_t kInitReach = 0x200;
-
-std::string Hex(uint32_t v)
-{
-    char b[16];
-    std::snprintf(b, sizeof b, "0x%08X", unsigned(v));
-
-    return b;
-}
 
 // Returns true if a Thumb BL instruction starts at `at`.
 bool IsBl(const Rom& rom, uint32_t at)

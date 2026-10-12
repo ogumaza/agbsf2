@@ -60,14 +60,18 @@ public:
     // for the program already.
     void AddPreset(int bank, int program, int instrument);
 
+    // Gives every instrument, those built later included, a modulator that mutes a note while the polyphonic key
+    // pressure of its key is 64 or more. The MIDI file mutes the voices that the driver's mixer leaves out that way.
+    void AddMutes();
+
 private:
     // Returns the index of the SoundFont sample for a sample instrument's sample, or -1 if it isn't valid.
     int SampleFor(const Instrument& inst);
 
     // Returns a zone that plays sample instrument `voice` on keys `low` to `high`, with the envelope settings
     // `settings`. A drum kit's zones play at the sample's pitch whatever the key.
-    Sf2Zone ZoneFor(const Instrument& voice, const EnvelopeSettings& settings, int sample, int low, int high,
-                    bool fixed_pitch) const;
+    sf2::Zone ZoneFor(const Instrument& voice, const EnvelopeSettings& settings, int sample, int low, int high,
+                      bool fixed_pitch) const;
 
     const Rom& rom_;
     const DriverInfo& info_;
@@ -76,6 +80,7 @@ private:
     std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>, int> samples_;
     std::map<std::pair<int, EnvelopeSettings>, int> banks_;
     int next_bank_;
+    bool mutes_ = false;
 };
 
 } // namespace supergbamidi::rare

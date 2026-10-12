@@ -6,8 +6,12 @@
 #include <cctype>
 #include <cstring>
 #include <filesystem>
+#include <optional>
 #include <string_view>
 #include <system_error>
+
+#include "xsflib/bytes.h"
+#include "xsflib/psf/psf.h"
 
 #include "files.h"
 #include "inflate.h"
@@ -17,61 +21,8 @@ namespace supergbamidi
 namespace
 {
 
-uint32_t Le32(const uint8_t* p)
-{
-    return p[0] | (p[1] << 8) | (p[2] << 16) | (uint32_t(p[3]) << 24);
-}
-
-// Parses the "[TAG]" block of a PSF file into key/value pairs (keys lowercased).
-std::vector<std::pair<std::string, std::string>> ParseTags(const uint8_t* p, size_t n)
-{
-    std::vector<std::pair<std::string, std::string>> tags;
-    if (n < 5 || std::memcmp(p, "[TAG]", 5) != 0)
-    {
-        return tags;
-    }
-
-    auto trim = [](std::string s)
-    {
-        while (!s.empty() && uint8_t(s.back()) <= ' ')
-        {
-            s.pop_back();
-        }
-
-        size_t i = 0;
-        while (i < s.size() && uint8_t(s[i]) <= ' ')
-        {
-            i++;
-        }
-
-        return s.substr(i);
-    };
-
-    const std::string text(reinterpret_cast<const char*>(p + 5), n - 5);
-    size_t start = 0;
-    while (start < text.size())
-    {
-        size_t nl = text.find('\n', start);
-        if (nl == std::string::npos)
-        {
-            nl = text.size();
-        }
-
-        const std::string line = text.substr(start, nl - start);
-        start = nl + 1;
-        const size_t eq = line.find('=');
-        if (eq == std::string::npos)
-        {
-            continue;
-        }
-
-        std::string key = trim(line.substr(0, eq));
-        std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-        tags.emplace_back(key, trim(line.substr(eq + 1)));
-    }
-
-    return tags;
-}
+// A GSF file's PSF version.
+constexpr uint8_t kGsfVersion = 0x22;
 
 // Returns true if `file` starts with the signature of a ZIP, 7-Zip, RAR or gzip archive.
 bool IsArchive(const std::vector<uint8_t>& file)
@@ -87,6 +38,19 @@ bool IsArchive(const std::vector<uint8_t>& file)
     }
 
     return false;
+}
+
+// Decompresses a GSF file's program with puff. supergbamidi doesn't check the header's CRC-32. puff checks the zlib
+// stream's Adler-32 instead.
+std::optional<std::string> Decompress(const uint8_t* data, size_t size, uint32_t, std::vector<uint8_t>& program)
+{
+    std::string error;
+    if (!ZlibDecompress(data, size, program, error))
+    {
+        return error;
+    }
+
+    return std::nullopt;
 }
 
 } // namespace
@@ -143,6 +107,7 @@ bool Rom::Load(const std::string& path, std::string& error)
 
         data_ = std::move(file);
     }
+
     if (data_.empty())
     {
         error = "it contains no ROM data";
@@ -154,7 +119,7 @@ bool Rom::Load(const std::string& path, std::string& error)
 
 bool Rom::LoadGsf(const std::string& path, int depth, std::string& error)
 {
-    if (depth > 10)
+    if (depth > xsflib::psf::kMaxLibDepth)
     {
         error = "GSF library chain is too deep (circular _lib reference?)";
         return false;
@@ -169,40 +134,26 @@ bool Rom::LoadGsf(const std::string& path, int depth, std::string& error)
         error = who + " can't be read";
         return false;
     }
-    if (file.size() < 16 || std::memcmp(file.data(), "PSF", 3) != 0)
-    {
-        error = who + " isn't a PSF file";
-        return false;
-    }
-    if (file[3] != 0x22)
-    {
-        error = who + " isn't a GSF (PSF version 0x22) file";
-        return false;
-    }
 
-    const uint32_t reserved_size = Le32(&file[4]);
-    const uint32_t program_size = Le32(&file[8]);
-    if (uint64_t(16) + reserved_size + program_size > file.size())
+    // The header and the tags come first. The program is read after the _lib that it goes on top of.
+    xsflib::psf::ParseOptions options;
+    options.with_program = false;
+    options.version = kGsfVersion;
+    options.not_psf = who + " isn't a PSF file";
+    options.wrong_version = who + " isn't a GSF (PSF version 0x22) file";
+    options.truncated = who + " is truncated";
+    options.decompress = Decompress;
+    xsflib::psf::PsfFile psf;
+    if (const std::optional<std::string> header_error = xsflib::psf::ParsePsf(file, psf, options))
     {
-        error = who + " is truncated";
+        error = *header_error;
         return false;
     }
 
-    const size_t program_pos = 16 + size_t(reserved_size);
-    const size_t tag_pos = program_pos + program_size;
-    const auto tags = ParseTags(file.data() + tag_pos, file.size() - tag_pos);
-
-    auto tag_value = [&](const std::string& key) -> std::string
+    auto tag_value = [&psf](const std::string& key)
     {
-        for (const auto& [k, v] : tags)
-        {
-            if (k == key)
-            {
-                return v;
-            }
-        }
-
-        return {};
+        const auto it = psf.tags.find(key);
+        return it != psf.tags.end() ? it->second : std::string();
     };
 
     // A _lib tag names a file beside this one. Where the folder has no file of the tag's name, one whose name differs
@@ -249,16 +200,15 @@ bool Rom::LoadGsf(const std::string& path, int depth, std::string& error)
         }
     }
 
-    if (program_size > 0)
+    if (psf.compressed_size > 0)
     {
-        std::vector<uint8_t> program;
-        std::string zerr;
-        if (!ZlibDecompress(&file[program_pos], program_size, program, zerr))
+        options.with_program = true;
+        if (const std::optional<std::string> program_error = xsflib::psf::ParsePsf(file, psf, options))
         {
-            error = whose + " program: " + zerr;
+            error = whose + " program: " + *program_error;
             return false;
         }
-        if (!ApplyGsfProgram(program, error))
+        if (!ApplyGsfProgram(psf.program, error))
         {
             error = whose + " program: " + error;
             return false;
@@ -272,6 +222,7 @@ bool Rom::LoadGsf(const std::string& path, int depth, std::string& error)
         {
             break;
         }
+
         if (!LoadGsf(lib_path(lib), depth + 1, error))
         {
             return false;
@@ -289,8 +240,8 @@ bool Rom::ApplyGsfProgram(const std::vector<uint8_t>& program, std::string& erro
         return false;
     }
 
-    const uint32_t offset = Le32(&program[4]);
-    uint32_t size = Le32(&program[8]);
+    const uint32_t offset = xsflib::LoadLe32(&program[4]);
+    uint32_t size = xsflib::LoadLe32(&program[8]);
     if (size > program.size() - 12)
     {
         size = uint32_t(program.size() - 12);

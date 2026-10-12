@@ -2,7 +2,6 @@
 
 #include "brownie/driver.h"
 
-#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -81,14 +80,6 @@ constexpr ArmPattern kTimerSetting[] = {{0xE59F1000, kAny12}, {0xE5910000, kExac
 constexpr int kEnvelopeCommand = 0x10;
 constexpr int kSampleCommand = 0x01;
 constexpr int kWaveCommand = 0x1C;
-
-std::string Hex(uint32_t v)
-{
-    char b[16];
-    std::snprintf(b, sizeof b, "0x%08X", unsigned(v));
-
-    return b;
-}
 
 // Returns true if `pattern` matches the words at `at`.
 template <size_t N>

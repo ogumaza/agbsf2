@@ -9,6 +9,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <tuple>
 #include <utility>
 
 #include "files.h"
@@ -153,11 +154,22 @@ struct PitchChange
     uint32_t frame;
 };
 
-// Results of running a tune through the model: track actions, channel pitch changes and warnings.
+// A change in whether the mixer leaves out every voice of a key on a channel, at the tick of the frame it happens in.
+struct MuteChange
+{
+    uint64_t tick;
+    int channel;
+    int key;
+    bool muted;
+    uint32_t frame;
+};
+
+// Results of running a tune through the model: track actions, channel pitch changes, mute changes and warnings.
 struct Simulation
 {
     std::vector<Action> actions;
     std::vector<PitchChange> pitches;
+    std::vector<MuteChange> mutes;
     std::vector<uint64_t> frame_starts; // with frame timing, the tick each frame starts at
     std::vector<std::string> warnings;
     std::optional<uint64_t> cut_off;                       // the tick where the model gave up, at the frame limit
@@ -236,8 +248,8 @@ uint64_t PlayingFrame(const std::vector<Action>& actions, uint32_t per_quarter, 
 }
 
 // Runs the model until the plan's end or until the driver has stopped the tune, for an hour at most. With
-// `frame_timing`, each action but a tempo change, and each pitch change, goes at the start of the frame the driver
-// plays it in, and the note ons at or after the end are left out.
+// `frame_timing`, each action but a tempo change, and each pitch and mute change, goes at the start of the frame the
+// driver plays it in. Frame timing also leaves out the note ons at or after the end.
 Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, const TuneHeader& header, const Plan& plan,
                     bool frame_timing)
 {
@@ -245,6 +257,12 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, const Tune
     Sequencer seq(rom, info, song);
     TickClock clock(header.ticks_per_quarter);
     std::array<int64_t, kChannels> last = {};
+
+    // For each key on each channel (channel * 128 + key): whether it's muted, and in the current frame, -1 without
+    // voices, 0 if the mixer leaves out every voice that plays it and 1 if it takes any of them.
+    std::vector<bool> muted(kChannels * 128, false);
+    std::vector<int8_t> heard(kChannels * 128, -1);
+    std::vector<int> keys; // the keys that the frame's voices play, in slot order
     uint32_t frames = 0;
     bool finished = false; // the tune reached the plan's end, or the driver stopped it
     for (uint32_t f = 0; f < kMaxFrames; f++)
@@ -282,6 +300,36 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, const Tune
             sim.pitches.push_back({!vibrato && at >= 0 ? uint64_t(at) : frame_tick, ch, offset, f});
         }
 
+        // A key is muted from a frame in which the mixer leaves out every voice that plays it, at the voice limit or
+        // at a level of 0, and plays again from one in which the mixer takes any of them. A frame without voices of
+        // the key changes nothing.
+        for (int i = 0; i < seq.SlotCount(); i++)
+        {
+            const Slot& s = seq.GetSlot(i);
+            if (s.mix == MixResult::kIdle)
+            {
+                continue;
+            }
+
+            const int key = s.channel * 128 + (s.key & 0x7F);
+            if (heard[size_t(key)] < 0)
+            {
+                keys.push_back(key);
+            }
+            heard[size_t(key)] = std::max<int8_t>(heard[size_t(key)], s.mix == MixResult::kMixed ? 1 : 0);
+        }
+        for (int key : keys)
+        {
+            const bool mute = heard[size_t(key)] == 0;
+            if (mute != muted[size_t(key)])
+            {
+                muted[size_t(key)] = mute;
+                sim.mutes.push_back({frame_tick, key / 128, key % 128, mute, f});
+            }
+            heard[size_t(key)] = -1;
+        }
+        keys.clear();
+
         // Stop once every track has read up to the end, and the frames have reached it. A track counts the ticks of a
         // delay as it starts it, so its count reaches the end before the frames do.
         frames = f + 1;
@@ -303,6 +351,7 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, const Tune
         sim.cut_off = clock.FrameTick(frames);
     }
     sim.warnings.insert(sim.warnings.end(), seq.Warnings().begin(), seq.Warnings().end());
+
     for (int ch = 0; ch < kChannels; ch++)
     {
         sim.end_envelopes[size_t(ch)] = seq.Channel(ch).envelope;
@@ -342,6 +391,10 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, const Tune
         for (PitchChange& p : sim.pitches)
         {
             p.tick = sim.frame_starts[std::min(p.frame, frames)];
+        }
+        for (MuteChange& m : sim.mutes)
+        {
+            m.tick = sim.frame_starts[std::min(m.frame, frames)];
         }
     }
 
@@ -543,6 +596,70 @@ std::vector<Note> CollectNotes(const Simulation& sim, const Plan& plan, uint16_t
     return notes;
 }
 
+// Returns the key pressures that mute the notes that the mixer leaves out, on the channels that `notes` play: 127 from
+// the frame in which the mixer leaves out every voice of a key on a channel, and 0 from the frame in which it takes one
+// again. A player that jumps back to the loop's start keeps the pressures that the loop's end left. So a key that has
+// another pressure at the loop's end gets the pressure from the loop's start again there, unless it changes there.
+std::vector<MuteChange> KeyPressures(const Simulation& sim, const Plan& plan, const std::vector<Note>& notes)
+{
+    // The channels that the notes play, and the first note on of each key on each channel in each frame.
+    std::array<bool, kChannels> plays = {};
+    std::map<std::tuple<int, int, uint32_t>, uint64_t> first_on;
+    for (const Note& n : notes)
+    {
+        plays[size_t(n.channel)] = true;
+        const auto [found, added] = first_on.emplace(std::make_tuple(n.channel, n.key, n.frame), n.on);
+        found->second = std::min(found->second, n.on);
+    }
+
+    // A note that a track plays a frame late starts before its frame does. A pressure from the frame in which a note of
+    // its key starts therefore goes no later than the note on. The note then starts with it. Each key's pressures keep
+    // their order.
+    std::vector<MuteChange> pressures;
+    std::vector<uint64_t> last(kChannels * 128, 0);
+    for (MuteChange m : sim.mutes)
+    {
+        const auto found = first_on.find(std::make_tuple(m.channel, m.key, m.frame));
+        uint64_t& previous = last[size_t(m.channel * 128 + m.key)];
+        m.tick = std::max(previous, found != first_on.end() ? std::min(m.tick, found->second) : m.tick);
+        if (m.tick < plan.end && plays[size_t(m.channel)])
+        {
+            previous = m.tick;
+            pressures.push_back(m);
+        }
+    }
+
+    if (!plan.loops)
+    {
+        return pressures;
+    }
+
+    // Each key's pressure at the loop's start, before its end and at its end, and whether it changes at the start.
+    struct LoopPressure
+    {
+        bool start = false, before_end = false, end = false, changes_at_start = false;
+    };
+    std::map<std::pair<int, int>, LoopPressure> keys;
+    for (const MuteChange& m : pressures)
+    {
+        LoopPressure& p = keys[{m.channel, m.key}];
+        p.start = m.tick <= plan.loop_start ? m.muted : p.start;
+        p.before_end = m.tick < plan.loop_end ? m.muted : p.before_end;
+        p.end = m.tick <= plan.loop_end ? m.muted : p.end;
+        p.changes_at_start = p.changes_at_start || m.tick == plan.loop_start;
+    }
+
+    for (const auto& [key, p] : keys)
+    {
+        if (!p.changes_at_start && (p.before_end != p.start || p.end != p.start))
+        {
+            pressures.push_back({plan.loop_start, key.first, key.second, p.start, 0});
+        }
+    }
+
+    return pressures;
+}
+
 // Returns the pitch bend range of each channel, in semitones: wide enough for its largest pitch offset, and its
 // instruments' bend range, so that a bend without vibrato keeps its value.
 std::array<int, kChannels> BendRanges(const Rom& rom, const Simulation& sim)
@@ -652,13 +769,7 @@ void WriteChannelSetup(MidiTrack& mt, int ch, int range, int bank, bool volume_a
     mt.Control(0, ch, cc::kChorus, 0);
     if (range > 0)
     {
-        // RPN 0 sets the bend range; the null RPN then keeps later data entry from changing it.
-        mt.Control(0, ch, cc::kRpnMsb, 0);
-        mt.Control(0, ch, cc::kRpnLsb, 0);
-        mt.Control(0, ch, cc::kDataEntry, range);
-        mt.Control(0, ch, cc::kDataEntryLsb, 0);
-        mt.Control(0, ch, cc::kRpnMsb, 127);
-        mt.Control(0, ch, cc::kRpnLsb, 127);
+        mt.BendRange(0, ch, range);
         mt.PitchBend(0, ch, 8192);
     }
 }
@@ -666,11 +777,11 @@ void WriteChannelSetup(MidiTrack& mt, int ch, int range, int bank, bool volume_a
 // Returns the instrument of the preset at `bank` and `program` in `file`, or -1 if there's none.
 int PresetInstrument(const Sf2File& file, int bank, int program)
 {
-    for (const Sf2Preset& p : file.presets)
+    for (const sf2::Preset& p : file.presets)
     {
         if (p.bank == bank && p.program == program)
         {
-            return p.instrument;
+            return supergbamidi::PresetInstrument(p);
         }
     }
 
@@ -789,7 +900,8 @@ void MatchPrograms(std::vector<Note>& notes, std::vector<ProgramChange>& program
 // Writes the MIDI file: a conductor track, then a track for each of the tune's tracks that plays notes.
 bool WriteMidi(const std::string& path, const std::string& title, const std::string& about, const TuneHeader& header,
                const Simulation& sim, const Plan& plan, const std::vector<Note>& notes,
-               const std::array<int, kChannels>& range, int bank, std::string& error)
+               const std::vector<MuteChange>& pressures, const std::array<int, kChannels>& range, int bank,
+               std::string& error)
 {
     MidiFile midi(uint16_t(header.ticks_per_quarter));
     MidiTrack& conductor = midi.AddTrack();
@@ -936,6 +1048,12 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
         }
     }
 
+    // The key pressures go in the channel's track, before the note ons at their ticks.
+    for (const MuteChange& m : pressures)
+    {
+        home[size_t(m.channel)]->KeyPressure(uint32_t(m.tick), m.channel, m.key, m.muted ? 127 : 0);
+    }
+
     for (const Note& n : ordered)
     {
         MidiTrack& mt = *track[size_t(n.track)];
@@ -943,7 +1061,7 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
         mt.NoteOff(uint32_t(n.off), n.channel, n.key);
     }
 
-    return midi.Write(path, error);
+    return WriteFile(path, midi.Encode(), error);
 }
 
 // Converts a tune, writing its files if `write` is set.
@@ -966,6 +1084,7 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
     {
         plan.end = std::min(plan.end, *sim.cut_off);
     }
+
     Summarize(sim, plan, header.ticks_per_quarter, sum);
 
     // With frame timing, the loop's start and end go at the start of the frames that play them, as their events do, so
@@ -1016,6 +1135,14 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
     {
         n.bank = sf.BankFor(opt.bank, n.envelope);
     }
+
+    // The SoundFont mutes a note while its key's pressure is high, in a tune that the mixer leaves voices out of.
+    const std::vector<MuteChange> pressures = KeyPressures(sim, plan, notes);
+    if (std::any_of(pressures.begin(), pressures.end(), [](const MuteChange& m) { return m.muted; }))
+    {
+        sf.AddMutes();
+    }
+
     std::set<int> clashes;
     for (int program : AddPresets(sf, notes, clashes))
     {
@@ -1033,9 +1160,11 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
                   rom.GameCode().c_str(), song, unsigned(header.address), kProgramName);
     const std::string stem =
         Utf8(PathFromUtf8(opt.out_dir) / PathFromUtf8(SafeFileName(opt.base_name) + "_" + TwoDigits(song)));
+
     std::string error;
     sum.midi_path = stem + ".mid";
-    if (!WriteMidi(sum.midi_path, title, about, header, sim, plan, notes, BendRanges(rom, sim), opt.bank, error))
+    if (!WriteMidi(sum.midi_path, title, about, header, sim, plan, notes, pressures, BendRanges(rom, sim), opt.bank,
+                   error))
     {
         sum.warnings.push_back(error);
         return sum;
@@ -1117,6 +1246,7 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
                 std::snprintf(b, sizeof b, "%02X ", rom.U8(address + i));
                 bytes += b;
             }
+
             // The driver ignores a loop's end before its start.
             const bool control = e.command == kCmdControl;
             const bool loop_end = control && e.a == kCtrlLoopEnd && loop_started;

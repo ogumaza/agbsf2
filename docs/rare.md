@@ -57,6 +57,7 @@ at `0x080AF61C`. Its RAM holds:
 | `0x030012A0` | the tune playing, or -1 |
 | `0x030023C0` | the marker to start the next tune at, or -1 |
 | `0x030023F0` | each channel's settings from controllers 20 to 23: 16 words of 4 bytes |
+| `0x030023C4` | the music volume, out of 128: a word |
 | `0x03001400` | each channel's level: 16 bytes |
 | `0x03001380` | each channel's volume (controller 7): 16 bytes |
 | `0x030014C0` | the note slots: 6 for each of the 16 channels |
@@ -455,6 +456,11 @@ The mixer gives each voice a level from 0 to 128:
 Each step is truncated, so the level is linear in the volume, the velocity and
 the envelope, and a note at full volume and velocity has a level of 128.
 
+The init sets the music volume to 128. *Donkey Kong Country 3*'s code sets it
+again after it requests a tune, through a routine at `0x080AF270`. Most tunes
+play at a music volume of 69. `supergbamidi` models every tune of that game at
+69.
+
 ### Voices
 
 The mixer takes the sound effects that are on, then those that are released,
@@ -465,8 +471,13 @@ frame. Note slots are in channel order, so when more than 8 voices play, the
 mixer leaves out released notes before notes that are on, and notes on higher
 channels before those on lower ones. In *Donkey Kong Country 3*'s revision, a
 note whose level is 0 before its velocity and envelope count isn't mixed and
-doesn't count towards the limit, which takes the game turning the music or the
-channel all the way down.
+doesn't count towards the limit. At a music volume of 69, that's every note of
+a channel at volume 0.
+
+`supergbamidi`'s model makes the same choices, frame by frame. Where the mixer
+leaves out every note of a key on a channel, the MIDI file mutes the key with
+polyphonic key pressure until the mixer takes one of its notes again. The
+README describes the mutes.
 
 For each output sample, the mixer interpolates the voice's sample linearly
 between the byte at its position and the next, by the position's fraction,
@@ -544,7 +555,7 @@ bic  r0, r0, #0xF0         ; E3C000F0
 ldr  r0, [ip, r0, lsl #2]  ; E79C0100
 ```
 
-Two more patterns tell *Donkey Kong Country 3*'s revision. Its controller
+Three more patterns tell *Donkey Kong Country 3*'s revision. Its controller
 handler compares the controller with 20 to 23 in turn:
 
 ```
@@ -570,6 +581,16 @@ strb r3, [r0]              ; E5C03000
 ```
 
 The older revisions store mode 1's through `r8` (`strb r3, [r8]`, `E5C83000`).
+
+Its mixer scales a note's level by the channel's level, and leaves the note out
+where that gives 0:
+
+```
+mul  r4, r3, r4            ; E0040493
+lsr  r4, r4, #7            ; E1A043A4
+cmp  r4, #0                ; E3540000
+beq  ...                   ; 0Axxxxxx
+```
 
 It finds the driver's tables from the instruction that loads each one's
 address (`ldr rX, [pc, #imm]`) and the instruction after it:
