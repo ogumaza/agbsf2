@@ -7,7 +7,7 @@ Advance games. It is based on the driver code in the Japanese release of
 
 Addresses given as examples are from `BY6J`. The US release, `BY6E`, has the
 same driver and data 0x90 bytes lower in ROM; its RAM addresses are the same.
-Other games place the driver and its data elsewhere; `supergbamidi` finds them
+Other games place the driver and its data elsewhere; `agbsf2` finds them
 from the code (see [Locating the driver](#locating-the-driver)).
 
 *Yu-Gi-Oh! World Championship Tournament 2004* has an older revision of the
@@ -121,7 +121,7 @@ sample at its own rate. On the square and wave tracks, pitch `n × 32` is note
 |---|---|---|
 | `00`-`7F` | duty/wave | sets the track's *duty byte* to `op - 4` |
 | `80`-`8F` | duty/wave | sets the duty byte to `(op & 0x3F) << 6` (low byte) |
-| `90`-`9F` | - | handled by code that supergbamidi doesn't model |
+| `90`-`9F` | - | handled by code that agbsf2 doesn't model |
 | `A0`-`A7 ss` | note | sample note, volume `op & 7`, sample `ss` |
 | `A8`-`AF vv ss` | note | sample note, volume `vv`, sample `ss` |
 | `B0`-`B7 ss tt` | note | as `A0`, plus signed semitone offset `tt` |
@@ -136,7 +136,7 @@ sample at its own rate. On the square and wave tracks, pitch `n × 32` is note
 | `F2 bb` | pitch bend | bend = `bb - 0x40` in 1/32 semitones (±2 semitones), for `bb` up to `7F` |
 | `F2 xh ll` | pitch bend | a first byte above `7F` takes the next one too: bend = `0xhll - 0x400` (-32 to +96 semitones); `x` is ignored |
 | `F3` | loop point | sample tracks (4-15) skip the next 2 bytes |
-| `F4`-`F6`, `FA`-`FC` | - | handled by code that supergbamidi doesn't model |
+| `F4`-`F6`, `FA`-`FC` | - | handled by code that agbsf2 doesn't model |
 | `F7 ff` | echo feedback | echo bus 0 feedback = `ff`/256 |
 | `F8 dd` | echo delay | echo bus 0 delay = `dd × 32` mixer samples |
 | `F9 vb` | echo routing | DirectSound voice `v` (0-11) to echo bus `b - 1` (0-2); `b` = 0 takes it off buses 0 and 1 |
@@ -145,7 +145,7 @@ sample at its own rate. On the square and wave tracks, pitch `n × 32` is note
 | `FF 00` | stop song | everything is silenced on the next frame |
 | `FF nn` | loop song | `nn` ≠ 0: all tracks jump back to their loop points |
 
-A sample number above `EF` selects code that supergbamidi doesn't model.
+A sample number above `EF` selects code that agbsf2 doesn't model.
 
 #### Notes on sample tracks (`A0`-`BF`)
 
@@ -239,7 +239,7 @@ note. Each sample is a 12-byte header followed by signed 8-bit PCM:
 | 12 | s8[] | PCM data |
 
 A looped sample plays `[0, length)` and then repeats `[loop start, length)`. A
-negative length selects a mode that supergbamidi doesn't model.
+negative length selects a mode that agbsf2 doesn't model.
 
 The step is relative to the mixer's output rate, so the playback rate is
 `mixer rate × step / 4096`.
@@ -285,8 +285,8 @@ The sequencer starts, changes and stops voices through the 12 voice records at
 ### Volume table
 
 `level = table[volume × 64 + pan level]`, where the pan level is 0-63 for each
-side. The level is close to `volume × pan / 63`, but not exactly (it isn't a
-simple rounding of that product), so `supergbamidi` reads the table itself. The
+side. The level is close to `volume × pan / 63` but isn't a simple rounding of
+that product. `agbsf2` therefore reads the table itself. The
 full-level column (`pan = 63`) equals the volume. In `BY6J` the table is at
 `0x084BF1B8`.
 
@@ -336,7 +336,7 @@ than higher frequencies, and note `FF`, which a song can play as if it were
 note -1, reads the word 16 KB past the table's start. Whatever data lies there
 sets the frequency. On a square channel, the channel only restarts if the
 word's bit 15 is set: otherwise a note that's playing goes on at the new
-frequency, and a silent channel stays silent. `supergbamidi` does the same.
+frequency, and a silent channel stays silent. `agbsf2` does the same.
 
 **Noise.** Each note writes `SOUND4CNT_L = volume << 12` and
 `SOUND4CNT_H = noise table[note]`. The table holds the `NR43` value with the
@@ -406,11 +406,11 @@ number of frames.
 | `F3` | loop point | as in the Ultimate Masters revision |
 | `F4 rr` | attack rate | see [Attack and decay](#attack-and-decay) |
 | `F5 rr` | decay rate | see [Attack and decay](#attack-and-decay) |
-| `F6 ii` | instrument | picks the notes' samples from a table that the game can give the driver; `supergbamidi` ignores it |
+| `F6 ii` | instrument | picks the notes' samples from a table that the game can give the driver; `agbsf2` ignores it |
 | `F7 ff` | echo feedback | echo bus 0 feedback = `(ff & 7F)`/256 |
 | `F8 dd` | echo delay | echo bus `dd >> 7` delay = `(dd & 7F) × 32` mixer samples |
 | `F9 vb` | echo routing | as in the Ultimate Masters revision |
-| `FA xx` | volume scale | scales the track's volumes by a setting that the game can give the driver; `supergbamidi` ignores it |
+| `FA xx` | volume scale | scales the track's volumes by a setting that the game can give the driver; `agbsf2` ignores it |
 | `FB`, `FC` | - | nothing |
 | `FD` | end track | the track stops until the song loops |
 | `FE` | loop song | all tracks go back to their loop points |
@@ -566,7 +566,8 @@ for its own channel on both sides (`0x11 << track`), and a loop sets them back.
 next track's output record, with the retrigger byte set, since that track has
 had its turn in the frame already. The next voice then plays at volume `x`
 until its own track sets its volume again. On the last track, the next record
-would be the driver's variables, and `supergbamidi` ignores it with a warning.
+would be the driver's variables. There `agbsf2` ignores the command and gives
+a warning.
 
 In `AY5E` the routines are:
 
@@ -666,14 +667,14 @@ track jumps back to that position.
 `Ax`, `F1` and `F9` change the next track's state. That track has already run
 this frame, so `Ax` and `F1` also write to its output record. After the last
 track, these writes would reach the first sound effect track's state and the
-driver's variables. `supergbamidi` ignores those commands and issues a warning.
+driver's variables. `agbsf2` ignores those commands and issues a warning.
 
 A fade reduces the starting volume to 3/4, 1/2 and 1/4 over three frames. On
 the fourth frame it outputs duty byte 0 and volume 0. Only this last output
 reaches a PSG channel. Ended tracks still run their per-frame updates, so fades
 and volume output continue after a track ends. `FB` also gives square channels
-an envelope that lowers the volume by one step every 1/64 second. `supergbamidi`
-omits this envelope, which lasts three frames.
+an envelope that lowers the volume by one step every 1/64 second. `agbsf2`
+omits this three-frame envelope.
 
 Vibrato outputs a pitch every 4th frame, alternating between the note's entry
 in the frequency table's vibrato section and the entry `x` places below it.
@@ -752,14 +753,14 @@ voices are silent, the routine stops their FIFO until the next note starts.
 
 A FIFO plays at its timer's rate, so both of its voices play at the rate of the
 last note started on either, or of the last bend. Starting a note on voice 0
-(or 2) also stops voice 1 (or 3), unless that voice plays at its sample's
-rate, and a note on voice 1 (or 3) at any other rate doesn't start while voice 0
-(or 2) plays at its own. `supergbamidi` gives each voice the rate of its own notes
-and bends, and leaves these rules out.
+(or 2) also stops voice 1 (or 3) unless that voice plays at its sample's rate.
+A note on voice 1 (or 3) at any other rate doesn't start while voice 0 (or 2)
+plays at its sample's rate. `agbsf2` leaves these rules out. Each voice plays
+at the rate of its notes and bends.
 
 ## Locating the driver
 
-`supergbamidi` first finds the driver's command reader, which loads a command's
+`agbsf2` first finds the driver's command reader. The reader loads a command's
 opcode and compares it with `FC`: `ldrb rX,[rY]` / `cmp rX,#0xFC` / `ble`.
 The next opcode comparisons identify the revision: `FF`, `FD`, `EF` and `FB`
 for Ultimate Masters; `FF`, `FE`, `EF` and `FA` for WCT 2004; `FF`, `FE`, `EF`

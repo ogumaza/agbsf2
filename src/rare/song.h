@@ -11,7 +11,7 @@
 
 #include "rom.h"
 
-namespace supergbamidi::rare
+namespace agbsf2::rare
 {
 
 // The two ways a track names a command's MIDI channel. The driver revisions of Donkey Kong Country, Sabre Wulf and It's
@@ -180,4 +180,4 @@ bool SampleValid(const Rom& rom, const Instrument& instrument);
 // instrument for the key. The driver plays every type of instrument that isn't a sample or a key split as a drum kit.
 uint32_t SplitInstrument(const Rom& rom, const Instrument& split, int key);
 
-} // namespace supergbamidi::rare
+} // namespace agbsf2::rare

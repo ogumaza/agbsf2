@@ -12,7 +12,7 @@
 #include "rd2/soundfont.h"
 #include "rom.h"
 
-namespace supergbamidi::rd2
+namespace agbsf2::rd2
 {
 
 // Conversion settings and output paths.
@@ -47,4 +47,4 @@ SongSummary InspectSong(const Rom& rom, const DriverInfo& info, int song, const 
 SongSummary ConvertSong(const Rom& rom, const DriverInfo& info, int song, const ConvertOptions& opt,
                         SoundfontBuilder* shared);
 
-} // namespace supergbamidi::rd2
+} // namespace agbsf2::rd2

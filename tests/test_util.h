@@ -15,7 +15,7 @@
 #include "seqlib/testing/check.h"
 #include "xsflib/bytes.h"
 
-namespace supergbamidi::test
+namespace agbsf2::test
 {
 
 // Output folder for this test run.
@@ -56,62 +56,62 @@ bool RepeatsTempoAtLoopStart(const MidiEvents& midi);
 // says why.
 Sf2Records ReadSf2(const std::string& path);
 
-} // namespace supergbamidi::test
+} // namespace agbsf2::test
 
 // Each driver's tests, in konami_test.cpp, rare_test.cpp, quintet_test.cpp, mp2k_test.cpp, rd2_test.cpp,
 // brownie_test.cpp, krawall_test.cpp and ubimilan_test.cpp.
-namespace supergbamidi::konami
+namespace agbsf2::konami
 {
 
 void RunTests();
 
-} // namespace supergbamidi::konami
+} // namespace agbsf2::konami
 
-namespace supergbamidi::rare
+namespace agbsf2::rare
 {
 
 void RunTests();
 
-} // namespace supergbamidi::rare
+} // namespace agbsf2::rare
 
-namespace supergbamidi::quintet
+namespace agbsf2::quintet
 {
 
 void RunTests();
 
-} // namespace supergbamidi::quintet
+} // namespace agbsf2::quintet
 
-namespace supergbamidi::mp2k
+namespace agbsf2::mp2k
 {
 
 void RunTests();
 
-} // namespace supergbamidi::mp2k
+} // namespace agbsf2::mp2k
 
-namespace supergbamidi::rd2
+namespace agbsf2::rd2
 {
 
 void RunTests();
 
-} // namespace supergbamidi::rd2
+} // namespace agbsf2::rd2
 
-namespace supergbamidi::brownie
+namespace agbsf2::brownie
 {
 
 void RunTests();
 
-} // namespace supergbamidi::brownie
+} // namespace agbsf2::brownie
 
-namespace supergbamidi::krawall
+namespace agbsf2::krawall
 {
 
 void RunTests();
 
-} // namespace supergbamidi::krawall
+} // namespace agbsf2::krawall
 
-namespace supergbamidi::ubimilan
+namespace agbsf2::ubimilan
 {
 
 void RunTests();
 
-} // namespace supergbamidi::ubimilan
+} // namespace agbsf2::ubimilan

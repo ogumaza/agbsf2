@@ -9,11 +9,11 @@
 #include <string>
 #include <vector>
 
-namespace supergbamidi
+namespace agbsf2
 {
 
 // Decompresses a zlib stream (2-byte header, DEFLATE data, Adler-32 trailer). Returns false and sets `error` on
 // malformed input.
 bool ZlibDecompress(const uint8_t* data, size_t size, std::vector<uint8_t>& out, std::string& error);
 
-} // namespace supergbamidi
+} // namespace agbsf2

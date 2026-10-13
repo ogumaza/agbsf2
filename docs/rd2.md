@@ -6,7 +6,7 @@ on the Game Boy Advance. The cartridge, *The Legend of Zelda: A Link to the
 Past & Four Swords*, plays the rest of its music with Nintendo's MP2K. The
 document is based on the driver's code in the US release (game code `AZLE`),
 and the addresses given as examples come from there. Other games put the
-driver and its data elsewhere, and `supergbamidi` finds them from the code
+driver and its data elsewhere. `agbsf2` finds them from the code
 (see [Locating the driver](#locating-the-driver)). *Super Mario Advance 2:
 Super Mario World* has an older revision of the driver, whose differences
 [The Super Mario Advance 2 revision](#the-super-mario-advance-2-revision)
@@ -107,7 +107,7 @@ The game passes init the address of 8 words:
 | `0x1C` | a word the driver doesn't read |
 
 Each table of offsets holds a word for each entry, counted from the table's
-start. The tables don't give their length, and `supergbamidi` takes a table to
+start. The tables don't give their length. `agbsf2` takes a table to
 end where its first entry's data starts. A sample set's table of samples is in
 the same form: an offset from its start for each sample.
 
@@ -131,7 +131,7 @@ Neither the notes nor the mixer use that list. To give voices back, the
 handler moves them from that list to the free voices.
 
 A sound effect is one track of one of the sound effects' sequences, which a
-player plays with a priority of 12 and an echo send of `7F`. `supergbamidi`
+player plays with a priority of 12 and an echo send of `7F`. `agbsf2`
 doesn't convert sound effects.
 
 ## Sequences
@@ -490,7 +490,7 @@ Link to the Past* and uses an older revision of the driver. Apart from the
 differences below, its code is *A Link to the Past*'s, though its compiler
 chose different prologues, registers and literal pools. The cartridge also
 has a second copy of the driver in the multiboot image sent to other GBAs for
-*Mario Bros.* That copy stores its settings in EWRAM; `supergbamidi` reads the
+*Mario Bros.* That copy stores its settings in EWRAM. `agbsf2` reads the
 first copy.
 
 In `AA2E` the routines are:
@@ -594,7 +594,7 @@ split a region, with an offset of 0. A note on it reads the bank's table of
 offsets as its region. In *Super Mario Advance 2*, that region's envelope has
 a first point of no frames, which holds the level at 0 for 65535 frames, so the
 note never sounds, and its sample is past the end of its sample set's table,
-which can give an address outside the GBA's memory. `supergbamidi` leaves out
+which can give an address outside the GBA's memory. `agbsf2` leaves out
 every note that its instrument has no region for, with a warning.
 
 ## The Super Mario Advance 3 revision
@@ -647,20 +647,20 @@ this order: the sample voices, the sequence, then the second volume. The play
 request sets the player's volumes back to `0x80`. A second volume therefore
 lasts until the game plays other music.
 
-`supergbamidi` converts each sequence with the settings of the first music
+`agbsf2` converts each sequence with the settings of the first music
 number that plays it. The second volume scales the level of every voice,
 sample or PSG, by volume / `0x80`, and the MIDI file's CC11 follows it.
 
 ## Locating the driver
 
-`supergbamidi` finds the driver's init routine by the start of its code:
+`agbsf2` finds the driver's init routine by the start of its code:
 
     B530 49xx 6008 49xx 2000 7008 2080 7008 3904 4Axx 1C10 8008 3102 200D 7008
 
 A cartridge can hold a second copy of the driver in the multiboot image that
 the game sends to other GBAs. The two copies can be different revisions. In
 *Super Mario Advance 3*, the image of *Mario Bros.* has the Super Mario
-Advance 2 revision, and the game has a later one. `supergbamidi` reads the
+Advance 2 revision, and the game has a later one. `agbsf2` reads the
 first copy. Detection searches for the code below only from that copy's init
 up to the next copy's.
 
@@ -711,5 +711,5 @@ it, and a `bl` to the same routine. Both ways go on with `adds r1, r5, #0`,
 `movs r0, #player` and a `bl` to the request for the sequence. A run of
 `cmp r4, #music`, `bne`, `movs r0, #player`, `movs r1, #volume` and a `bl` to
 the request for the second volume follows. The table doesn't give its length.
-`supergbamidi` reads it up to the first entry whose sequence the game doesn't
+`agbsf2` reads it up to the first entry whose sequence the game doesn't
 have.

@@ -3,7 +3,7 @@
 
 """Run Ubisoft Milan's GBA sound driver under the Unicorn ARM emulator.
 
-This is the reference for checking supergbamidi's model of the driver. It runs the game's routines (no BIOS, no video):
+This is the reference for checking agbsf2's model of the driver. It runs the game's routines (no BIOS, no video):
 the driver's init with the sound bank, the routine that starts a piece of music, then for each frame the sequencer's
 step, which the game's VBlank runs, and the sound update of the game's main loop, then the mixer, copied to IWRAM, once
 for each 16 points of output before the next frame, at the rate Timer 0 sets. It captures what the driver does:
@@ -11,15 +11,15 @@ for each 16 points of output before the next frame, at the rate Timer 0 sets. It
     trace       after each frame, the frame's writes to the PSG's registers (w), the track (t: its countdown, next
                 command, next sequence, whether it plays and whether an end command was read) and each voice that the
                 mixer plays (v0-v3: its next point, its loop's start, its end, its loop's end, its volume and whether
-                it loops), as supergbamidi --trace prints them
+                it loops), in the format of agbsf2 --trace
     render      the mixer's output, which the game plays on both sides
 
     driver_emu.py ROM trace SONG FRAMES
     driver_emu.py ROM render SONG FRAMES OUT.wav
 
-SONG numbers the pieces of music in the order of the sound bank's resources, as supergbamidi does. The routine and RAM
-addresses are chosen by the ROM's game code. Tomb Raider: The Prophecy's (AL9P) are built in. For another game, add its
-values to GAMES; see docs/ubimilan.md.
+SONG numbers the pieces of music in the order of the sound bank's resources. agbsf2 numbers them the same way. The
+routine and RAM addresses are chosen by the ROM's game code. Tomb Raider: The Prophecy's (AL9P) are built in. For
+another game, add its values to GAMES; see docs/ubimilan.md.
 """
 import argparse
 import struct

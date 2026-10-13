@@ -4,9 +4,9 @@
 
 #pragma once
 
-namespace supergbamidi
+namespace agbsf2
 {
 
-constexpr const char* kProgramName = "supergbamidi";
+constexpr const char* kProgramName = "agbsf2";
 
-} // namespace supergbamidi
+} // namespace agbsf2

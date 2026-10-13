@@ -13,7 +13,7 @@
 
 #include "files.h"
 
-namespace supergbamidi::test
+namespace agbsf2::test
 {
 
 std::filesystem::path TempPath(const std::string& name)
@@ -108,4 +108,4 @@ Sf2Records ReadSf2(const std::string& path)
     }
 }
 
-} // namespace supergbamidi::test
+} // namespace agbsf2::test

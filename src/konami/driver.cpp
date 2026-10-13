@@ -11,7 +11,7 @@
 
 #include "konami/seqformat.h"
 
-namespace supergbamidi::konami
+namespace agbsf2::konami
 {
 namespace
 {
@@ -194,7 +194,7 @@ SongCount CountSongs(const Rom& rom, uint32_t table, Revision revision)
         }
 
         // A header that points into the ROM, before any song's data, is most likely a song whose tracks use commands
-        // supergbamidi doesn't know.
+        // that agbsf2 doesn't support.
         const int score = ScoreSong(rom, h, revision);
         if (score < h.tracks / 2)
         {
@@ -390,7 +390,7 @@ bool PlausibleDungeonDiceSample(const Rom& rom, uint32_t entry)
     return length > 0 && period >= 0x100 && period <= 0x4000 && rom.Contains(rom.U32(entry), length);
 }
 
-// Returns true if entry `index` of a sample table of revision `revision` at `table` is a sample supergbamidi can read.
+// Returns true if entry `index` of a sample table of revision `revision` at `table` is a sample agbsf2 can read.
 bool ReadableSample(const Rom& rom, uint32_t table, int index, Revision revision)
 {
     if (revision == Revision::kDungeonDiceMonsters)
@@ -630,7 +630,7 @@ uint32_t FindSongTable(const Rom& rom, Revision revision, std::vector<std::strin
     if (exact && loaded)
     {
         error = "found the play-song code, but the song table it loads, at " + Hex(loaded) +
-                ", holds no songs supergbamidi can read (--song-table and --song-count override detection)";
+                ", holds no songs agbsf2 can read (--song-table and --song-count override detection)";
         return 0;
     }
 
@@ -793,7 +793,7 @@ uint32_t FindSampleTable(const Rom& rom, const std::vector<int>& used, const Tab
         return 0;
     }
 
-    // Of the tables the code loads, take the one with the fewest samples supergbamidi can't read.
+    // Of the tables the code loads, take the one with the fewest samples agbsf2 can't read.
     const uint32_t ldr_offset = 2 * uint32_t(note_start.ldr);
     const std::vector<uint32_t> hits = FindThumb(rom, note_start.code);
     uint32_t best = 0;
@@ -822,14 +822,14 @@ uint32_t FindSampleTable(const Rom& rom, const std::vector<int>& used, const Tab
     }
 
     // The code gives the table's address, so a table found in the data instead would be the wrong one. The table only
-    // has to have a header supergbamidi can read for at least half of the samples. The others may be in a mode
-    // supergbamidi doesn't know, such as one with a negative length.
+    // has to have a header agbsf2 can read for at least half of the samples. The others may be in a mode that agbsf2
+    // doesn't support. A negative length is one such mode.
     if (best)
     {
         if (unreadable.size() * 2 > used.size())
         {
             error =
-                "found the note-start code, but supergbamidi can't read most of the songs' samples in the sample "
+                "found the note-start code, but agbsf2 can't read most of the songs' samples in the sample "
                 "table it loads, at " +
                 Hex(best) + " (--sample-table overrides detection)";
             return 0;
@@ -844,7 +844,7 @@ uint32_t FindSampleTable(const Rom& rom, const std::vector<int>& used, const Tab
             {
                 list += (list.empty() ? "" : ", ") + std::to_string(idx);
             }
-            warnings.push_back("samples supergbamidi can't read, whose notes are skipped: " + list);
+            warnings.push_back("agbsf2 can't read these samples and skips their notes: " + list);
         }
 
         return best;
@@ -855,7 +855,7 @@ uint32_t FindSampleTable(const Rom& rom, const std::vector<int>& used, const Tab
     if (revision == Revision::kDungeonDiceMonsters)
     {
         error = std::string(why) +
-                ", and supergbamidi can't look for this revision's sample table in the data (--sample-table overrides "
+                ", and agbsf2 can't look for this revision's sample table in the data (--sample-table overrides "
                 "detection)";
         return 0;
     }
@@ -889,7 +889,7 @@ double TimerRate(const Rom& rom, uint32_t timer_table)
 // ldrb rX,[rY] / cmp rX,#0xFC / ble, then FF, and FD in the Ultimate Masters revision or FE in older ones. Of those,
 // the WCT 2004 revision goes on with EF and FA, the Rave Master revision with EF and F5, the Eternal Duelist revision
 // with EF and F3, and the Dungeon Dice Monsters revision with EF and FC. Sets `reader` to the address of the reader, or
-// to 0 if there's none. Returns false and sets `error` for another older revision, which supergbamidi can't read. A ROM
+// to 0 if there's none. Returns false and sets `error` for another older revision that agbsf2 can't read. A ROM
 // without a command reader that this recognises is taken to have the Ultimate Masters revision.
 bool FindRevision(const Rom& rom, Revision& revision, uint32_t& reader, std::vector<std::string>& log,
                   std::string& error)
@@ -938,7 +938,7 @@ bool FindRevision(const Rom& rom, Revision& revision, uint32_t& reader, std::vec
                                                           opcodes[4] != 0xF3 && opcodes[4] != 0xFC)))
         {
             error =
-                "this game has an older revision of Konami's driver, whose commands supergbamidi can't read (its "
+                "this game has an older revision of Konami's driver with commands that agbsf2 can't read (its "
                 "command reader is at " +
                 Hex(reader) + ")";
             return false;
@@ -1172,7 +1172,7 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
     if (info.song_count <= 0)
     {
         error = "the song table at " + Hex(info.song_table) +
-                " holds no songs supergbamidi can read (--song-count overrides this)";
+                " holds no songs agbsf2 can read (--song-count overrides this)";
         return false;
     }
 
@@ -1344,4 +1344,4 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
     return true;
 }
 
-} // namespace supergbamidi::konami
+} // namespace agbsf2::konami

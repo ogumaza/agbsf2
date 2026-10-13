@@ -10,7 +10,7 @@
 
 #include "files.h"
 
-namespace supergbamidi::quintet
+namespace agbsf2::quintet
 {
 namespace
 {
@@ -433,4 +433,4 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
     return WriteFile(path, data, error);
 }
 
-} // namespace supergbamidi::quintet
+} // namespace agbsf2::quintet

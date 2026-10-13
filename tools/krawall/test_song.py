@@ -5,8 +5,8 @@
 
     test_song.py ROM OUT.gba
 
-The copy has three modules after the game's data, which the module scan of `supergbamidi --info` finds and lists
-after the game's modules:
+The copy has three modules after the game's data. The module scan of `agbsf2 --info` finds them and lists them after
+the game's modules:
 
     S3M          Amiga periods and samples, and every effect of the effect column: speed and tempo, jumps, breaks and
                  the pattern loop, the volume, channel and global volume slides with their fine forms, the S3M

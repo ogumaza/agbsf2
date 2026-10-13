@@ -15,7 +15,7 @@
 #include "brownie/driver.h"
 #include "rom.h"
 
-namespace supergbamidi::brownie
+namespace agbsf2::brownie
 {
 
 // The driver's sound channels: 0-3 play the music on the PSG's square 1, square 2, wave and noise channels, 4-7 play
@@ -390,4 +390,4 @@ private:
     std::vector<std::string> warnings_;
 };
 
-} // namespace supergbamidi::brownie
+} // namespace agbsf2::brownie

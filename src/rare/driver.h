@@ -12,7 +12,7 @@
 #include "rare/song.h"
 #include "rom.h"
 
-namespace supergbamidi::rare
+namespace agbsf2::rare
 {
 
 // The frame rate of the GBA's display, which the driver's per-frame routine follows: 280896 CPU cycles a frame.
@@ -65,4 +65,4 @@ int FadeFrames(const DriverInfo& info, uint32_t index);
 // one.
 int FadeEntryFrames(uint32_t entry);
 
-} // namespace supergbamidi::rare
+} // namespace agbsf2::rare

@@ -1,6 +1,6 @@
-# supergbamidi
+# agbsf2
 
-`supergbamidi` converts the music of Game Boy Advance games that use Konami's,
+`agbsf2` converts the music of Game Boy Advance games that use Konami's,
 Rare's, Quintet's, Nintendo R&D2's, Brownie Brown's or Ubisoft Milan's sound
 driver, Nintendo's MP2K, or Krawall, to MIDI files and SoundFonts.
 
@@ -9,7 +9,7 @@ Konami's, Rare's and Quintet's games, *The Legend of Zelda: A Link to the Past*,
 *Super Mario Advance 2*, *Sword of Mana*, *Magical Vacation* and *Tomb Raider:
 The Prophecy* use drivers of their own, and others play tracker modules with
 Krawall, a player of XM and S3M modules, none of which the usual MP2K tools such
-as Sappy, gba-mus-ripper and agbplay can read. `supergbamidi` finds the game's
+as Sappy, gba-mus-ripper and agbplay can read. `agbsf2` finds the game's
 driver in a ROM, plays each song through a model of that driver, and converts it
 to a Standard MIDI File with a matching SoundFont built from the game's samples
 and instruments. For Konami's, Quintet's, Nintendo R&D2's, Brownie Brown's and
@@ -105,10 +105,10 @@ name the driver and supply table addresses with the override options.
 
 ## Building
 
-For 64-bit Windows, download the zip containing `supergbamidi.exe` from
+For 64-bit Windows, download the zip containing `agbsf2.exe` from
 GitHub Releases.
 
-supergbamidi supports macOS on Apple Silicon and Windows x64 built with
+agbsf2 supports macOS on Apple Silicon and Windows x64 built with
 clang-cl. Other platforms and compilers aren't supported.
 
 You need Git, a C++20 compiler and CMake 3.20 or later. The MIDI and
@@ -135,19 +135,19 @@ cmake --build build --config Release
 ctest --test-dir build -C Release
 ```
 
-The binary is `build/supergbamidi` (`supergbamidi.exe` on Windows). Visual
+The binary is `build/agbsf2` (`agbsf2.exe` on Windows). Visual
 Studio and Xcode builds put it in `build/Release/` instead. On macOS the build
-also makes `build/Supergbamidi.app`, which you can drop files on.
+also makes `build/Agbsf2.app`. You can drop files on the app.
 
-`ctest` runs the unit tests, and on macOS it also checks the report that
-`Supergbamidi.app` puts together from the program's output. CI builds
-supergbamidi and runs the tests on macOS on Apple Silicon and on Windows x64
+`ctest` runs the unit tests. On macOS, `ctest` also checks the report that
+`Agbsf2.app` puts together from the program's output. CI builds
+agbsf2 and runs the tests on macOS on Apple Silicon and on Windows x64
 with clang-cl.
 
 ## Usage
 
 ```sh
-supergbamidi game.gba
+agbsf2 game.gba
 ```
 
 This writes one `.mid` and one `.sf2` per song to a folder beside the input
@@ -162,7 +162,7 @@ Input can be a raw `.gba` ROM or a GSF rip (`.gsflib`, `.minigsf` or `.gsf`).
 A `.minigsf` selects a song from the library named in its `_lib` tag. The
 library is loaded from the same folder and supplies the output name. If you
 pass several `.minigsf` files from one set, the library is converted or listed
-once. If the library has no music that supergbamidi reads, the reason is given
+once. If the library has no music that agbsf2 reads, the reason is given
 once.
 Conversion includes all songs in the ROM, regardless of the GSF's selected song.
 
@@ -173,9 +173,9 @@ sample short, the unused part is silent in the SoundFont.
 ### Drag and drop
 
 * **Windows:** drop `.gba`, `.gsflib` or `.minigsf` files on
-  `supergbamidi.exe`. A console window shows what was converted and stays open
+  `agbsf2.exe`. A console window shows what was converted and stays open
   until you press Enter.
-* **macOS:** drop them on `Supergbamidi.app`, or open it and choose them. It
+* **macOS:** drop them on `Agbsf2.app`, or open it and choose them. It
   then shows what was converted and offers to open the output folders.
 
 Each file's results go in a folder next to it, as above.
@@ -278,7 +278,7 @@ start of a frame, so its events are on the module's ticks either way.
 Konami's, Brownie Brown's and Ubisoft Milan's drivers store note lengths in
 whole frames, rounded by the composers' tools. A 16th note that should last 6.5
 frames therefore lasts 6 or 7, and the original beat isn't stored.
-`supergbamidi` estimates the beat from the note lengths, finding steady passages
+`agbsf2` estimates the beat from the note lengths and finds steady passages
 and tempo changes. For ritardandos and rubatos, it sets a tempo for each note.
 Notes within a frame and a half of the nearest beat are moved onto it, using
 divisions from a quarter note down to a 32nd note or a 16th-note triplet. Echo
@@ -299,7 +299,7 @@ The older Rave Master, Eternal Duelist and Dungeon Dice Monsters revisions have
 channels.
 
 The game counts time in frames and doesn't store a tempo. The MIDI file has
-480 ticks per quarter note, and the tempos of the beat that `supergbamidi`
+480 ticks per quarter note, and the tempos of the beat that `agbsf2`
 works out from the notes (see [Output](#output)).
 
 The game's controls map to MIDI like this:
@@ -663,7 +663,7 @@ the tempo and loop markers, and a track for each channel that plays notes:
 
 The driver counts time in frames, and has no tempo: a song picks a set of note
 lengths, each for a tempo. The MIDI file has 480 ticks per quarter note, and
-the tempos of the beat that `supergbamidi` works out from the notes (see
+the tempos of the beat that `agbsf2` works out from the notes (see
 [Output](#output)). It starts on the song's first beat, in the second frame,
 when the driver first reads the song's data.
 
@@ -775,7 +775,7 @@ notes on MIDI channel 10 as drums. Some ignore a drum's note-off or its
 sample's loop, and the kit's notes require both.
 
 The driver counts time in frames, and has no tempo. The MIDI file has 480
-ticks per quarter note, and the tempos of the beat that `supergbamidi` works
+ticks per quarter note, and the tempos of the beat that `agbsf2` works
 out from the notes (see [Output](#output)). It starts with the piece, whatever
 silence comes before its first note.
 
@@ -839,10 +839,10 @@ SoundFonts.
 
 ### Konami's driver
 
-* **Timing.** The MIDI file puts each note on the beat that `supergbamidi`
-  works out, up to a frame and a half from where the game plays it, unless
-  `--frame-timing` keeps it on its frame. Where a song has no steady beat, its
-  notes keep their frames.
+* **Timing.** The MIDI file puts each note on the beat that `agbsf2` works out.
+  A note can be up to a frame and a half from where the game plays it.
+  `--frame-timing` keeps each note on its frame instead. Where a song has no
+  steady beat, its notes keep their frames.
 * **PSG tuning.** The Game Boy's 11-bit frequency registers can't hit every
   pitch, so the game plays its high PSG notes slightly out of tune. The
   driver's frequency table is within about 3 cents of equal temperament below
@@ -939,7 +939,7 @@ SoundFonts.
   a jingle. The MIDI file has every track.
 * **Voices and volumes the game sets.** A game can also give the driver fewer
   sample voices, or lower the music's volume, when it plays a sequence.
-  `supergbamidi` reads the settings that *Super Mario Advance 3*'s play-music
+  `agbsf2` reads the settings that *Super Mario Advance 3*'s play-music
   routine makes. For another game, the MIDI file plays every sequence with all
   7 sample voices, at the driver's default volume.
 * **Sound effects** aren't converted. Only the game's code starts them.
@@ -995,10 +995,10 @@ SoundFonts.
 
 ### Brownie Brown's driver
 
-* **Timing.** The MIDI file puts each note on the beat that `supergbamidi`
-  works out, up to a frame and a half from where the game plays it, unless
-  `--frame-timing` keeps it on its frame. Where a song has no steady beat, as
-  in most sound effects, its notes keep their frames.
+* **Timing.** The MIDI file puts each note on the beat that `agbsf2` works out.
+  A note can be up to a frame and a half from where the game plays it.
+  `--frame-timing` keeps each note on its frame instead. Where a song has no
+  steady beat, as in most sound effects, its notes keep their frames.
 * **The hardware's envelope.** A PSG channel's envelope steps on the sound
   hardware's 64 Hz clock, which isn't tied to the frames. CC11 follows a model
   of it a frame at a time, so a step can come up to a frame later than in the
@@ -1030,9 +1030,9 @@ SoundFonts.
 
 ### Ubisoft Milan's driver
 
-* **Timing.** The MIDI file puts each note on the beat that `supergbamidi`
-  works out, up to a frame and a half from where the game plays it, unless
-  `--frame-timing` keeps it on its frame.
+* **Timing.** The MIDI file puts each note on the beat that `agbsf2` works out.
+  A note can be up to a frame and a half from where the game plays it.
+  `--frame-timing` keeps each note on its frame instead.
 * **Mixer character.** The mixer moves through each sample at 16352 Hz, makes
   twice as many points by putting one halfway between each pair, averages each
   point with the one before, and writes 8-bit output. A SoundFont player plays
@@ -1064,7 +1064,7 @@ under an ARM emulator, and comparison scripts. See `tools/README.md`.
 
 ## License
 
-`supergbamidi` is released under the MIT License; see `LICENSE`. The DEFLATE
+`agbsf2` is released under the MIT License; see `LICENSE`. The DEFLATE
 decoder in `src/inflate.cpp` is adapted from Mark Adler's puff under the zlib
 license. Its notice is in that file and in `THIRD_PARTY_NOTICES`. The MIDI
 and SoundFont code comes from seqlib, under the MIT License. Its notice is in

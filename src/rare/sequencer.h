@@ -13,7 +13,7 @@
 #include "rare/song.h"
 #include "rom.h"
 
-namespace supergbamidi::rare
+namespace agbsf2::rare
 {
 
 // The number of MIDI channels that the tracks play on.
@@ -213,4 +213,4 @@ private:
     std::vector<std::string> warnings_;
 };
 
-} // namespace supergbamidi::rare
+} // namespace agbsf2::rare

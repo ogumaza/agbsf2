@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
-"""Find a driver's files in a folder of supergbamidi's output, and compare a conversion on the song's beat with one on
-the driver's frames.
+"""Find a driver's files in a folder of agbsf2's output. Compare a conversion on the song's beat with one on the
+driver's frames.
 
 A conversion names each song's MIDI file and SoundFont after the game and the song's number, such as game_05.mid and
 game_05.sf2. In a game with more than one driver, it converts each one's songs, and the files of every driver but the

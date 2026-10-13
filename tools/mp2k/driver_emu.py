@@ -3,7 +3,7 @@
 
 """Run a game's MusicPlayer2000 (MP2K) sound engine under the Unicorn ARM emulator.
 
-This is the reference for checking supergbamidi's model of the engine. It calls the engine's init, song start and
+This is the reference for checking agbsf2's model of the engine. It calls the engine's init, song start and
 per-frame routines directly (no video, and of the BIOS only the CpuSet, CpuFastSet and Div calls that the engine
 makes), and captures what the engine produces:
 

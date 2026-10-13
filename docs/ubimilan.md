@@ -4,10 +4,10 @@ Ubisoft Milan wrote a sound engine of its own for *Tomb Raider: The Prophecy*.
 Its music is a set of short sequences in a MIDI-like format, whose notes mostly
 play samples through a kit with a sample for each key. A software mixer plays
 the samples on four voices, and the sequences can also play the Game Boy's PSG.
-This document describes the engine as `supergbamidi` models it, using the
-European release of the game (game code `AL9P`) for example addresses. The
+This document describes the engine as `agbsf2` models it. The example
+addresses come from the European release of the game (game code `AL9P`). The
 game's sound effects are samples that it plays straight from the same sound
-bank; they aren't part of the music, and `supergbamidi` doesn't convert them.
+bank. They aren't part of the music. `agbsf2` doesn't convert them.
 
 ## Architecture
 
@@ -172,14 +172,14 @@ sides, at a master volume of 3 of 7.
 ## Quirks
 
 * A note on a key outside the kit plays bytes from elsewhere in the
-  cartridge (see [The kit](#the-kit)). `supergbamidi` leaves the note out,
+  cartridge (see [The kit](#the-kit)). `agbsf2` leaves the note out,
   with a warning.
 * A note-off on channel 9 stops the voice of its last note, whatever its key.
 * A countdown of n waits n + 1 frames, but the first sequence's first one n.
 
 ## Locating the driver
 
-`supergbamidi` looks for the engine's code:
+`agbsf2` looks for the engine's code:
 
 * The track's step:
   `B530 1C04 68E0 2800 D0xx 8820 1C25 3514 2800 D1xx 6920 2800 D0xx 2000 6120
@@ -188,7 +188,7 @@ sides, at a master volume of 3 of 7.
   `4Axx 6110 8801 8011 8841 8051 6841 1841 6051 6881 1841 6091 68C1 1840 60D0
   4770`. The game calls it from a routine that starts with `push {lr}`, which
   the game's start calls after `movs r0, #N` and a call of the archive's
-  lookup. `supergbamidi` runs the lookup with N to find the bank.
+  lookup. `agbsf2` runs the lookup with N to find the bank.
 * The PSG's instrument lookup, whose three literals give the channels' tables:
   `B500 0600 0E00 2901 D0xx 2901 DCxx 2900 D0xx Exxx 2902 D0xx Exxx 0100 49xx
   1840`.

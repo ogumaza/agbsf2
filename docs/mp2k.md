@@ -6,7 +6,7 @@ the "Sappy" engine, after a fan-made tool for it. This document covers the
 song format, sequencer, sound channels and mixer. It's based on the driver's
 code in *Pokémon Emerald* (game code `BPEE`), and the addresses given as
 examples come from that game. Other games put the driver and its data
-elsewhere, and `supergbamidi` finds them from the code (see [Locating the
+elsewhere. `agbsf2` finds them from the code (see [Locating the
 driver](#locating-the-driver)).
 
 The SDK calls the driver's library m4a. The routine names below are its known
@@ -14,7 +14,7 @@ function names.
 
 ## Versions
 
-The driver changed little over the SDK's life. `supergbamidi` handles these
+The driver changed little over the SDK's life. `agbsf2` handles these
 differences:
 
 * **The mixer.** Later versions can play a sample backwards, or decode a
@@ -37,9 +37,9 @@ differences:
   Camelot's with straight-line releases, synth voices and an echo (see
   [Camelot's version](#camelots-version)).
 
-Some games change the driver's code itself. `supergbamidi` models the SDK's
-driver and Camelot's version; supporting another modified driver requires
-studying its code to determine how its behaviour differs.
+Some games change the driver's code itself. `agbsf2` models the SDK's
+driver and Camelot's version. Another modified driver requires a study of the
+driver's code to find how the driver behaves differently.
 
 ## Architecture
 
@@ -109,8 +109,8 @@ at `0x03006380`:
 
 The song table is an array of 8-byte entries: the address of the song's
 header, and two halfwords, each the number of the music player that plays it.
-`m4aSongNumStart` uses the first. The driver doesn't know how many songs there
-are, so `supergbamidi` counts the entries up to the first whose header isn't in
+`m4aSongNumStart` uses the first. Nothing in the driver gives the number of
+songs. `agbsf2` counts the entries up to the first whose header isn't in
 the ROM or isn't a valid header, or whose player isn't in the player table. An
 entry that's all zero doesn't end the table, since a GSF rip can zero the
 entries of the songs it doesn't hold. It's listed as empty, and all-zero entries
@@ -125,7 +125,7 @@ The music player table has a 12-byte entry for each player: the address of its
 state, the address of its tracks' records, the number of tracks it has, and a
 halfword. With the halfword set, a song can't take the player over from a song
 of higher priority that's still playing.
-The init opens each player, up to a count in its code. `supergbamidi` reads
+The init opens each player, up to a count in its code. `agbsf2` reads
 the players up to the first entry whose state or tracks aren't in RAM, or that
 has no tracks.
 
@@ -616,11 +616,11 @@ The channel's count keeps the filter's *y*, and the mixer plays it at half
 the level. A triangle wave is (phase / 2^23) − 128 for the first half of the
 cycle and 384 − (phase / 2^23) for the second.
 
-`supergbamidi` makes a sample of each pulse and saw voice for each key a song
-plays it at, at the mixer's rate, over one cycle of the duty, or about 2048
-points of the saw after its filter settles, and loops it at the nearest whole
-cycle of the wave. A triangle wave gets one cycle of 64 points, which plays at
-the rate a sample's header gives.
+`agbsf2` makes a sample of each pulse and saw voice for each key that a song
+plays it at. The sample is at the mixer's rate and lasts one cycle of the duty,
+or about 2048 points of the saw after its filter settles. The sample loops at
+the nearest whole cycle of the wave. A triangle wave gets one cycle of 64
+points. The cycle plays at the rate a sample's header gives.
 
 ### Echo
 
@@ -629,13 +629,13 @@ right side gets back a quarter of its output from a frame before (528 points),
 53/128 of it from four frames before (2112 points), and −8/128 of the left
 side's from four frames before. The left side gets a quarter of the right
 side's output from 704 points before, 52/128 of its own from four frames
-before, and −8/128 of the right side's. The game doesn't change it, and the
-songs' reverb settings don't reach it, so `supergbamidi` gives every song a
-reverb send of 53, the driver's reverb whose feedback comes closest.
+before, and −8/128 of the right side's. The game doesn't change the echo, and
+the songs' reverb settings don't reach it. `agbsf2` therefore gives every song a
+reverb send of 53. Of the driver's reverb settings, 53 has the closest feedback.
 
 ## Locating the driver
 
-`supergbamidi` finds the driver in a ROM from its code, without fixed
+`agbsf2` finds the driver in a ROM from its code, without fixed
 addresses. `m4aSongNumStart` is the same in every version, apart from the
 registers some games' compiler chose:
 
@@ -672,7 +672,7 @@ ldr  r0, =mode               ; 48xx
 bl   m4aSoundMode
 ```
 
-`supergbamidi` takes a mode with a mix rate setting from 1 to 12, an output
+`agbsf2` takes a mode with a mix rate setting from 1 to 12, an output
 resolution, and nothing in its top byte:
 
 | Bits | Contents |
@@ -684,16 +684,16 @@ resolution, and nothing in its top byte:
 | 20-23 | the output's resolution: 8 for 9 bits, 9 for 8 bits, 10 for 7 bits, 11 for 6 bits |
 
 Each field that isn't 0 replaces the driver's default. A later mixer has a test
-for reversed and compressed samples in its ARM code, which `supergbamidi` looks
-for:
+for reversed and compressed samples in its ARM code. `agbsf2` looks for this
+code:
 
 ```
 ldrb r0, [r4, #1]            ; E5D40001
 tst  r0, #0x30               ; E3100030
 ```
 
-The mono mixer works out each channel's volume in Thumb code, which
-`supergbamidi` looks for too, and `--info` reports:
+The mono mixer works out each channel's volume in Thumb code. `agbsf2` looks
+for this code too. When it finds the code, `--info` reports the mixer as mono:
 
 ```
 ldrb r0, [r4, #2]            ; 78A0: the right volume
@@ -704,10 +704,10 @@ lsrs r0, r0, #9              ; 0A40
 strb r0, [r4, #10]           ; 72A0
 ```
 
-Camelot's note start looks through the DirectSound channels with Thumb code
-that `supergbamidi` looks for to find Camelot's changes to the sequencer, and
-Camelot's mixer moves a pulse wave's duty on with ARM code that it looks for
-to find the mixer:
+Camelot's note start looks through the DirectSound channels with Thumb code.
+`agbsf2` looks for that code to find Camelot's changes to the sequencer.
+Camelot's mixer moves a pulse wave's duty on with ARM code. `agbsf2` finds the
+mixer by that code:
 
 ```
 movs r3, #10                 ; 230A: the channels to look through

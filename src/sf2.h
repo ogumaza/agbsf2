@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-// supergbamidi's SoundFonts, on seqlib's SoundFont model.
+// agbsf2's SoundFonts, on seqlib's SoundFont model.
 
 #pragma once
 
@@ -9,7 +9,7 @@
 
 #include "seqlib/sf2/soundfont.h"
 
-namespace supergbamidi
+namespace agbsf2
 {
 
 namespace sf2 = seqlib::sf2;
@@ -26,8 +26,8 @@ sf2::Preset MakePreset(const std::string& name, uint16_t bank, uint16_t program,
 // Returns the instrument that a preset from MakePreset() names.
 int PresetInstrument(const sf2::Preset& preset);
 
-// A SoundFont as supergbamidi writes it. Its INFO list holds the name, the program and then the comment. A sample
-// without a loop gets the whole sample as its loop, and the presets are listed by bank and program.
+// A SoundFont as agbsf2 writes it. Its INFO list holds the name, the program and then the comment. A sample without a
+// loop gets the whole sample as its loop, and the presets are listed by bank and program.
 struct Sf2File : sf2::SoundFont
 {
     // Writes the file. Returns false and sets `error` if it's too big for the format or can't be written.
@@ -37,4 +37,4 @@ struct Sf2File : sf2::SoundFont
     std::string comment;
 };
 
-} // namespace supergbamidi
+} // namespace agbsf2

@@ -10,7 +10,7 @@
 
 #include "files.h"
 
-namespace supergbamidi::brownie
+namespace agbsf2::brownie
 {
 namespace
 {
@@ -332,4 +332,4 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
     return WriteFile(path, data, error);
 }
 
-} // namespace supergbamidi::brownie
+} // namespace agbsf2::brownie

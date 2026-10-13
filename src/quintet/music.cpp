@@ -18,7 +18,7 @@
 #include "quintet/soundfont.h"
 #include "sf2.h"
 
-namespace supergbamidi::quintet
+namespace agbsf2::quintet
 {
 namespace
 {
@@ -196,4 +196,4 @@ std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std
     return std::make_unique<QuintetMusic>(rom, std::move(info));
 }
 
-} // namespace supergbamidi::quintet
+} // namespace agbsf2::quintet

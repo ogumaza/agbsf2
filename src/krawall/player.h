@@ -15,7 +15,7 @@
 #include "krawall/driver.h"
 #include "rom.h"
 
-namespace supergbamidi::krawall
+namespace agbsf2::krawall
 {
 
 // The mixer's channels, and the most channels a module can have.
@@ -368,4 +368,4 @@ private:
     uint64_t elapsed_ = 0;
 };
 
-} // namespace supergbamidi::krawall
+} // namespace agbsf2::krawall

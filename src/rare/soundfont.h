@@ -14,7 +14,7 @@
 #include "rom.h"
 #include "sf2.h"
 
-namespace supergbamidi::rare
+namespace agbsf2::rare
 {
 
 // The bank in which General MIDI players look for the drum channel's programs.
@@ -83,4 +83,4 @@ private:
     bool mutes_ = false;
 };
 
-} // namespace supergbamidi::rare
+} // namespace agbsf2::rare

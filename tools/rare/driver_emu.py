@@ -3,7 +3,7 @@
 
 """Run a Rare GBA sound driver's code under the Unicorn ARM emulator.
 
-This is the reference for checking supergbamidi's model of Rare's driver. It calls the driver's init, request-tune and
+This is the reference for checking agbsf2's model of Rare's driver. It calls the driver's init, request-tune and
 per-frame routines directly (no BIOS, no video), and captures what the driver produces:
 
     trace       every voice's state after each frame, one line per active voice
@@ -35,7 +35,7 @@ DMA_CONTROL = (0x040000B8, 0x040000C4, 0x040000D0, 0x040000DC)  # each DMA chann
 SLOT_SIZE = 0x28
 
 # The music volume, out of 128, at which Donkey Kong Country 3 plays most of its tunes. The driver's init sets 128. The
-# game sets the volume for each tune after it requests the tune. supergbamidi's model plays every tune at this volume.
+# game sets the volume for each tune after it requests the tune. agbsf2's model plays every tune at this volume.
 GAME_MUSIC_VOLUME = 69
 
 

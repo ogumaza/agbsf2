@@ -11,7 +11,7 @@
 
 #include "rom.h"
 
-namespace supergbamidi::ubimilan
+namespace agbsf2::ubimilan
 {
 
 // The CPU cycles in a frame, and a second's.
@@ -104,4 +104,4 @@ struct GameSample
 // Reads the sample resource at `address`. Returns false if it isn't a sample in the ROM.
 bool ReadSample(const Rom& rom, uint32_t address, GameSample& sample);
 
-} // namespace supergbamidi::ubimilan
+} // namespace agbsf2::ubimilan

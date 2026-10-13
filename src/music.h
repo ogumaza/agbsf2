@@ -13,10 +13,10 @@
 
 #include "rom.h"
 
-namespace supergbamidi
+namespace agbsf2
 {
 
-// The sound drivers that supergbamidi reads.
+// The sound drivers that agbsf2 reads.
 enum class Driver
 {
     kAny, // whichever the game has
@@ -233,4 +233,4 @@ namespace ubimilan
 std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std::string& error);
 
 } // namespace ubimilan
-} // namespace supergbamidi
+} // namespace agbsf2

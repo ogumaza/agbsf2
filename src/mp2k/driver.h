@@ -10,7 +10,7 @@
 
 #include "rom.h"
 
-namespace supergbamidi::mp2k
+namespace agbsf2::mp2k
 {
 
 // The frame rate of the GBA's display, which the driver's per-frame routine follows: 280896 CPU cycles a frame.
@@ -68,4 +68,4 @@ uint32_t SongAddress(const Rom& rom, const DriverInfo& info, int song);
 // tracks.
 Player SongPlayer(const Rom& rom, const DriverInfo& info, int song);
 
-} // namespace supergbamidi::mp2k
+} // namespace agbsf2::mp2k

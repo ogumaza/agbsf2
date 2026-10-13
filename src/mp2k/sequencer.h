@@ -14,7 +14,7 @@
 #include "mp2k/song.h"
 #include "rom.h"
 
-namespace supergbamidi::mp2k
+namespace agbsf2::mp2k
 {
 
 // The bits of a channel's status.
@@ -319,4 +319,4 @@ uint32_t SampleFrequency(const DriverInfo& info, uint32_t frequency, int key, in
 // driver's MidiKeyToCgbFreq works it out: the 11-bit register value for channels 1-3, or a noise setting for 4.
 uint32_t KeyToPsgFrequency(int channel, int key, int fine);
 
-} // namespace supergbamidi::mp2k
+} // namespace agbsf2::mp2k

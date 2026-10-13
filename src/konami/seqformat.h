@@ -19,7 +19,7 @@
 
 #include "rom.h"
 
-namespace supergbamidi::konami
+namespace agbsf2::konami
 {
 
 constexpr int kTracks = 16;   // maximum tracks per song
@@ -30,8 +30,7 @@ inline bool IsPsgTrack(int t)
     return t < kPsgTracks;
 }
 
-// The revisions of the driver that supergbamidi reads. They differ in their commands and delays, and in how they play
-// them.
+// The revisions of the driver that agbsf2 reads. They differ in their commands and delays, and in how they play them.
 enum class Revision
 {
     kUltimateMasters,     // Yu-Gi-Oh! Ultimate Masters Edition, and the games whose driver reads its commands
@@ -169,4 +168,4 @@ bool WalkTrack(const Rom& rom, const SongHeader& song, int track, Revision revis
 // Returns a human-readable form of a command on the given track of a song of revision `revision`.
 std::string Describe(const Command& c, int track, Revision revision);
 
-} // namespace supergbamidi::konami
+} // namespace agbsf2::konami

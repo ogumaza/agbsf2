@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cstdio>
 
-namespace supergbamidi::konami
+namespace agbsf2::konami
 {
 namespace
 {
@@ -789,7 +789,7 @@ Wct2004Sequencer::Next Wct2004Sequencer::RunCommand(int track, const Command& c,
             return Next::kRestart;
         }
 
-        // The driver silences every track on the next frame, and supergbamidi ends the song here.
+        // The driver silences every track on the next frame, and agbsf2 ends the song here.
         stopped_ = true;
         silence();
         return Next::kStop;
@@ -891,8 +891,7 @@ Wct2004Sequencer::Next Wct2004Sequencer::RunCommand(int track, const Command& c,
     case Op::kInstrument:
     case Op::kVolumeScale:
     case Op::kNop:
-        // F6 and FA take effect only with tables and settings that the game gives the driver, which supergbamidi leaves
-        // out.
+        // F6 and FA take effect only with tables and settings that the game gives the driver. agbsf2 leaves them out.
         break;
 
     case Op::kRest:
@@ -944,7 +943,7 @@ Wct2004Sequencer::Next Wct2004Sequencer::RunCommand(int track, const Command& c,
 
     case Op::kDuty:
     case Op::kWave:
-        // A wave also goes into the wave channel's RAM at once, at the track's volume, which supergbamidi leaves out.
+        // A wave also goes into the wave channel's RAM at once, at the track's volume. agbsf2 leaves that out.
         t.b2 = uint8_t(c.value);
         o.b2 = t.b2;
         break;
@@ -1220,7 +1219,7 @@ DungeonDiceSequencer::Next DungeonDiceSequencer::RunCommand(int track, const Com
             return Next::kRestart;
         }
 
-        // The driver silences every track on the next frame, and supergbamidi ends the song here. The track ends first.
+        // The driver silences every track on the next frame, and agbsf2 ends the song here. The track ends first.
         stopped_ = true;
         [[fallthrough]];
 
@@ -1501,4 +1500,4 @@ void DungeonDiceSequencer::PerFrame(int track)
     o.vol = t.vol;
 }
 
-} // namespace supergbamidi::konami
+} // namespace agbsf2::konami

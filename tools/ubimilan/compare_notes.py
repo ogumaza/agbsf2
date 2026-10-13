@@ -3,9 +3,9 @@
 
 """Check a conversion's MIDI files and SoundFonts against Ubisoft Milan's driver, note by note.
 
-    compare_notes.py ROM SUPERGBAMIDI FOLDER [--songs 0-13] [--frames 12000]
+    compare_notes.py ROM AGBSF2 FOLDER [--songs 0-13] [--frames 12000]
 
-FOLDER holds supergbamidi's conversion of ROM: NAME_NN.mid and NAME_NN.sf2 for each piece of music, or
+FOLDER holds agbsf2's conversion of ROM: NAME_NN.mid and NAME_NN.sf2 for each piece of music, or
 NAME_ubimilan_NN.mid and NAME_ubimilan_NN.sf2 if another driver was detected first. Events in these MIDI files follow
 the song's beat and may be up to a frame and a half from the driver's timing. The script converts ROM again with
 --frame-timing to keep events on the driver's frames. Both conversions must have identical SoundFonts and the same
@@ -273,8 +273,8 @@ def parse_range(text):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('rom', metavar='ROM', help='the game (.gba)')
-    p.add_argument('supergbamidi', metavar='SUPERGBAMIDI', help='the supergbamidi program')
-    p.add_argument('folder', metavar='FOLDER', help="the folder containing supergbamidi's output")
+    p.add_argument('agbsf2', metavar='AGBSF2', help='the agbsf2 program')
+    p.add_argument('folder', metavar='FOLDER', help="the folder containing agbsf2's output")
     p.add_argument('--songs', help='pieces to check, such as 0-13 (default: every piece with a MIDI file)')
     p.add_argument('--frames', type=int, default=12000, help='maximum frames to check per piece (default: 12000)')
     p.add_argument('-v', '--verbose', action='store_true', help='list every difference, not just the first ten')
@@ -284,10 +284,10 @@ def main():
     if not midis:
         raise SystemExit('found no MIDI files to check in %s' % a.folder)
     songs = sorted(set(parse_range(a.songs))) if a.songs else sorted(midis)
-    listed = set(listed_songs(a.supergbamidi, a.rom))
+    listed = set(listed_songs(a.agbsf2, a.rom))
     failed = total = 0
     with tempfile.TemporaryDirectory() as folder:
-        on_frames = conversion.frame_timed(a.supergbamidi, a.rom, 'ubimilan', folder, a.songs)
+        on_frames = conversion.frame_timed(a.agbsf2, a.rom, 'ubimilan', folder, a.songs)
         for song in songs:
             midi = midis.get(song)
             if midi is None:

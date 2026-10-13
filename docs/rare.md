@@ -4,7 +4,7 @@ This document covers the tune format, sequencer and mixer in Rare's Game Boy
 Advance sound driver. It's based on the driver's code in the US release of
 *Donkey Kong Country* (game code `A5NE`), and the addresses given as
 examples come from that game. Other games put the driver and its data
-elsewhere, and `supergbamidi` finds them from the code (see [Locating the
+elsewhere. `agbsf2` finds them from the code (see [Locating the
 driver](#locating-the-driver)).
 
 The tune data is close to a Standard MIDI File: tracks of MIDI-like commands
@@ -142,7 +142,7 @@ Its RAM holds:
 | `0x030015C0` | the pitch scale for the mix rate |
 
 Sound effects have a separate table, playback routines and records.
-`supergbamidi` doesn't convert them. This document covers only their role in the
+`agbsf2` doesn't convert them. This document covers only their role in the
 mixer.
 
 ## Tunes
@@ -150,8 +150,8 @@ mixer.
 ### Tune table
 
 The init stores the address of the tune table, an array of words, each the
-address of a tune's header. The driver doesn't know how many tunes there are, so
-`supergbamidi` counts the entries up to the first that isn't a valid header.
+address of a tune's header. Nothing in the driver gives the number of tunes.
+`agbsf2` counts the entries up to the first that isn't a valid header.
 
 ### Tune header
 
@@ -185,7 +185,7 @@ it a marker, every track but track 0 then skips ahead to its first controller
 passes, and the marker goes back to -1. A track that reaches its end first
 ends the search, and it and the tracks after it start from their beginnings.
 The tracks' counters aren't changed, so the tracks start from the markers
-together. `supergbamidi` plays every tune from its start.
+together. `agbsf2` plays every tune from its start.
 
 ## Tracks
 
@@ -217,7 +217,7 @@ code.
 
 The sequencer reads the command byte (`ldrb r0, [fp], #1`) and jumps through its
 table of 13 commands without checking the number. A number above 12 jumps to
-whatever follows the table. `supergbamidi` stops a track at such a command, with
+whatever follows the table. `agbsf2` stops a track at such a command, with
 a warning.
 
 ### Timing
@@ -267,7 +267,7 @@ that were still playing, until the game starts another tune.
 The driver ignores the others. The loop position belongs to the track, and a
 tune loops forever by ending each looping track with controller 103. A loop end
 without a loop start goes back to whatever loop position the track had from an
-earlier tune. `supergbamidi` ignores such a loop end, with a warning.
+earlier tune. `agbsf2` ignores such a loop end, with a warning.
 
 Controllers 20 to 23 keep their values until a program change on the channel,
 which sets all four back to 0xFF. A value of 0x80 or more leaves the
@@ -401,7 +401,7 @@ entry. Each phase reads the channel's settings as it starts, so a note that
 was playing when they changed takes the new ones in its later phases. Where a
 channel has a sustain level from controller 22 but no decay from controller
 21, the driver reads the decay through a register that holds whatever the code
-before left in it, so `supergbamidi` takes the instrument's decay there. Sound
+before left in it. `agbsf2` takes the instrument's decay there instead. Sound
 effects keep their instruments' envelopes.
 
 The fade table is 100 bytes, at `0x08032C94` in `A5NE`. Entry *i* gives a
@@ -458,7 +458,7 @@ the envelope, and a note at full volume and velocity has a level of 128.
 
 The init sets the music volume to 128. *Donkey Kong Country 3*'s code sets it
 again after it requests a tune, through a routine at `0x080AF270`. Most tunes
-play at a music volume of 69. `supergbamidi` models every tune of that game at
+play at a music volume of 69. `agbsf2` models every tune of that game at
 69.
 
 ### Voices
@@ -474,7 +474,7 @@ note whose level is 0 before its velocity and envelope count isn't mixed and
 doesn't count towards the limit. At a music volume of 69, that's every note of
 a channel at volume 0.
 
-`supergbamidi`'s model makes the same choices, frame by frame. Where the mixer
+`agbsf2`'s model makes the same choices, frame by frame. Where the mixer
 leaves out every note of a key on a channel, the MIDI file mutes the key with
 polyphonic key pressure until the mixer takes one of its notes again. The
 README describes the mutes.
@@ -506,7 +506,7 @@ and frees it. *Donkey Kong Country 3*'s revision frees it, as in mode 3.
 
 ## Locating the driver
 
-`supergbamidi` finds the driver in a ROM from the init's code, without fixed
+`agbsf2` finds the driver in a ROM from the init's code, without fixed
 addresses. Every revision's init copies the ARM code with the same Thumb
 sequence:
 
@@ -519,7 +519,7 @@ ldr r4, =size limit
 cmp r3, r4                 ; 42A3
 ```
 
-`supergbamidi` takes the first match whose size word is between 0x100 and 0x8000
+`agbsf2` takes the first match whose size word is between 0x100 and 0x8000
 and whose code is inside the ROM. The init starts with `push {r4-r7, lr}`
 (`B5F0`) a little before it. Within 0x60 bytes after the copy, the init sets up
 the tables and the mixer:
@@ -538,7 +538,7 @@ bl  set the voice limit
 ```
 
 This gives the tune table, the mix rate and the voice limit. In the ARM code,
-`supergbamidi` looks for the command reader to tell the formats apart. In the
+`agbsf2` looks for the command reader to tell the formats apart. In the
 channel-byte format it's
 
 ```
@@ -603,17 +603,17 @@ address (`ldr rX, [pc, #imm]`) and the instruction after it:
 | fade table | `ldr r2, =...` | `ldrb r1, [r2, r1]` (`E7D21001`) |
 
 The size of a channel's slots gives the number of slots per channel. Without the
-slot size, `supergbamidi` assumes 6 slots, and without the fade table, it uses
-an approximation of it. Without the pitch and sine tables, it works the pitch
+slot size, `agbsf2` assumes 6 slots. Without the fade table, `agbsf2`
+approximates the table. Without the pitch and sine tables, it works the pitch
 out in floating point, which is within a fraction of a cent.
 
 The rate routine knows four mix rates, with their samples per frame and pitch
 scales: 10512 Hz (176 samples), 13379 Hz (224), 18157 Hz (304) and 21024 Hz
 (352). It returns -1 and changes nothing for a rate above its limit, which is
 13379 Hz in every game except *It's Mr. Pants*, where it's 21024 Hz.
-`supergbamidi` reads the rate from the init and assumes 13379 Hz for any other.
+`agbsf2` reads the rate from the init and assumes 13379 Hz for any other.
 
-If the command reader can't be found, `supergbamidi` tries every track of
+If the command reader can't be found, `agbsf2` tries every track of
 every tune in both formats and chooses the format in which every track ends.
 This can happen when `--driver rare` and `--song-table` supply a tune table
 but detection can't find the init routine. If both formats work, it chooses

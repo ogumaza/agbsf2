@@ -15,7 +15,7 @@
 #include "sf2.h"
 #include "ubimilan/driver.h"
 
-namespace supergbamidi::ubimilan
+namespace agbsf2::ubimilan
 {
 
 // The MIDI bank of channel 9's kits. Their programs are the kit's offsets. Like the PSG channels' instruments, the kits
@@ -51,4 +51,4 @@ private:
 // mixer gives a full-scale sample at velocity 64 the whole scale.
 constexpr double kPsgLevel = 60.0 / 512;
 
-} // namespace supergbamidi::ubimilan
+} // namespace agbsf2::ubimilan

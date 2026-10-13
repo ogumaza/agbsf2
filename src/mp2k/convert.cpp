@@ -18,7 +18,7 @@
 #include "music.h"
 #include "program.h"
 
-namespace supergbamidi::mp2k
+namespace agbsf2::mp2k
 {
 namespace
 {
@@ -1660,4 +1660,4 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
     return WriteFile(path, data, error);
 }
 
-} // namespace supergbamidi::mp2k
+} // namespace agbsf2::mp2k

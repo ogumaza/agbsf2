@@ -5,12 +5,12 @@
 
     test_song.py ROM OUT.gba
 
-compare_trace.py and compare_notes.py then check supergbamidi against the driver on the copy:
+compare_trace.py and compare_notes.py then check agbsf2 against the driver on the copy:
 
     python tools/konami/test_song.py rom.gba test.gba
-    python tools/konami/compare_trace.py test.gba build/supergbamidi --songs 0 --frames 2000
-    build/supergbamidi -q -s 0 -o test test.gba
-    python tools/konami/compare_notes.py test.gba build/supergbamidi test --songs 0
+    python tools/konami/compare_trace.py test.gba build/agbsf2 --songs 0 --frames 2000
+    build/agbsf2 -q -s 0 -o test test.gba
+    python tools/konami/compare_notes.py test.gba build/agbsf2 test --songs 0
 
 Test songs for the WCT 2004 revision (BYWP), the Rave Master revision (BRME), the Eternal Duelist revision (AY5E and
 AYWE) and the Dungeon Dice Monsters revision (AYDE) are built in.

@@ -20,7 +20,7 @@
 #include "sf2.h"
 #include "test_util.h"
 
-namespace supergbamidi::krawall
+namespace agbsf2::krawall
 {
 namespace
 {
@@ -430,7 +430,7 @@ void TestDetection()
     SEQLIB_CHECK(info.modules == std::vector<uint32_t>({first, second, unlisted}));
     SEQLIB_CHECK(counted && counted_info.modules == std::vector<uint32_t>({first}));
     SEQLIB_CHECK(!found_other && other_error ==
-                                     "found Krawall, but not a build that supergbamidi knows ($Id: Krawall $Id: "
+                                     "found Krawall, but not a build that agbsf2 supports ($Id: Krawall $Id: "
                                      "version.h 8 2005-04-21 12:24:45Z seb $): it reads the build of 2003/09/01");
     SEQLIB_CHECK(!found_blank && blank_error.empty());
 }
@@ -776,7 +776,7 @@ void TestMusic()
     cart.Module(2, 5, LoopingCells());
     const Rom rom = cart.ToRom();
     std::string error;
-    const std::unique_ptr<Music> music = supergbamidi::OpenMusic(rom, Overrides(), error);
+    const std::unique_ptr<Music> music = agbsf2::OpenMusic(rom, Overrides(), error);
     const std::string dump = (test::g_temp / "krawall_dump.txt").string();
     const std::string trace = (test::g_temp / "krawall_trace.txt").string();
 
@@ -819,4 +819,4 @@ void RunTests()
     TestMusic();
 }
 
-} // namespace supergbamidi::krawall
+} // namespace agbsf2::krawall

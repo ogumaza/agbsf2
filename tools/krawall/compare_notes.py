@@ -3,10 +3,10 @@
 
 """Check a conversion's MIDI files and SoundFonts against the game's build of Krawall, tick by tick.
 
-    compare_notes.py ROM SUPERGBAMIDI FOLDER [--songs 0-20]
+    compare_notes.py ROM AGBSF2 FOLDER [--songs 0-20]
 
-FOLDER holds supergbamidi's conversion of ROM: NAME_NN.mid and NAME_NN.sf2 for each module, or NAME_krawall_NN.mid and
-NAME_krawall_NN.sf2 if another driver was detected first. For each module listed by `SUPERGBAMIDI --info`, the script
+FOLDER holds agbsf2's conversion of ROM: NAME_NN.mid and NAME_NN.sf2 for each module, or NAME_krawall_NN.mid and
+NAME_krawall_NN.sf2 if another driver was detected first. For each module listed by `AGBSF2 --info`, the script
 runs the game's code under driver_emu.py for the reported duration. After every player tick, it reads each module
 channel's mixer channel, provided it still belongs to that channel's last note and is playing. It records the sample,
 position, step and levels on both sides, along with position changes made by kramSetPos() for retriggers or offsets. A
@@ -185,8 +185,8 @@ def expected_notes(ticks, c, end):
 
 
 def levels_to_controllers(left, right):
-    """Returns CC10 and CC11 for levels on each side (full scale 128), as supergbamidi's LevelsToControllers() works
-    them out, with CC10 None when both are 0."""
+    """Returns the CC10 and CC11 that agbsf2's LevelsToControllers() works out for levels on each side (full scale
+    128). CC10 is None when both levels are 0."""
     gl, gr = left / 128, right / 128
     amp = math.sqrt(gl * gl + gr * gr)
     if amp <= 0:
@@ -323,7 +323,7 @@ def read_info(tool, rom_path):
         modules[int(n)] = int(address, 16)
         seconds[int(n)] = int(minutes) * 60 + float(secs)
     if not modules:
-        raise SystemExit('found no modules in the list of supergbamidi --info')
+        raise SystemExit('found no modules in the list of agbsf2 --info')
     master = int(re.search(r'master volume 0x([0-9A-F]+)', text).group(1), 16)
     shift = master >> 16 or 5
     return {'modules': modules, 'seconds': seconds, 'scale': (master & 0xFF) / (1 << (3 + shift))}
@@ -332,13 +332,13 @@ def read_info(tool, rom_path):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('rom', metavar='ROM', help='the game (.gba)')
-    p.add_argument('supergbamidi', metavar='SUPERGBAMIDI', help='the supergbamidi program, for --info')
-    p.add_argument('folder', metavar='FOLDER', help="supergbamidi's conversion of ROM")
+    p.add_argument('agbsf2', metavar='AGBSF2', help='the agbsf2 program, for --info')
+    p.add_argument('folder', metavar='FOLDER', help="agbsf2's conversion of ROM")
     p.add_argument('--songs', help='modules to check, such as 0-20 (default: all)')
     a = p.parse_args()
 
     rom = load_rom(a.rom)
-    info = read_info(a.supergbamidi, a.rom)
+    info = read_info(a.agbsf2, a.rom)
     info['plays'] = driver_emu.song_plays(rom, info['modules'])
     files = dict(conversion.midi_files(a.folder, 'krawall'))
     if not files:

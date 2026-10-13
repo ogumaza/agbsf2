@@ -12,7 +12,7 @@
 #include "rare/soundfont.h"
 #include "rom.h"
 
-namespace supergbamidi::rare
+namespace agbsf2::rare
 {
 
 // Conversion settings and output paths.
@@ -50,4 +50,4 @@ SongSummary ConvertSong(const Rom& rom, const DriverInfo& info, int song, const 
 // Writes a text listing of every command of every track of a tune. Returns false and sets `error` on failure.
 bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::string& path, std::string& error);
 
-} // namespace supergbamidi::rare
+} // namespace agbsf2::rare

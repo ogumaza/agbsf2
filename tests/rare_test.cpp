@@ -26,7 +26,7 @@
 #include "sf2.h"
 #include "test_util.h"
 
-namespace supergbamidi::rare
+namespace agbsf2::rare
 {
 namespace
 {
@@ -2110,10 +2110,10 @@ void TestMusic()
     as_konami.driver = Driver::kKonami;
     std::string error, bare_error, forced_error, konami_error;
 
-    const std::unique_ptr<Music> music = supergbamidi::OpenMusic(rom, Overrides(), error);
+    const std::unique_ptr<Music> music = agbsf2::OpenMusic(rom, Overrides(), error);
     const std::unique_ptr<Music> bare_music = rare::OpenMusic(bare_rom, table, bare_error);
     const std::unique_ptr<Music> bare_forced = rare::OpenMusic(bare_rom, forced, forced_error);
-    const std::unique_ptr<Music> konami = supergbamidi::OpenMusic(rom, as_konami, konami_error);
+    const std::unique_ptr<Music> konami = agbsf2::OpenMusic(rom, as_konami, konami_error);
 
     SEQLIB_CHECK(music && music->Log().front() == "Rare's sound driver");
     SEQLIB_CHECK(music && music->SongCount() == 1 && music->HasSong(0));
@@ -2162,4 +2162,4 @@ void RunTests()
     TestMusic();
 }
 
-} // namespace supergbamidi::rare
+} // namespace agbsf2::rare

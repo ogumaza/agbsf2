@@ -18,7 +18,7 @@
 #include "program.h"
 #include "sf2.h"
 
-namespace supergbamidi::brownie
+namespace agbsf2::brownie
 {
 namespace
 {
@@ -244,4 +244,4 @@ std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std
     return std::make_unique<BrownieMusic>(rom, std::move(info));
 }
 
-} // namespace supergbamidi::brownie
+} // namespace agbsf2::brownie

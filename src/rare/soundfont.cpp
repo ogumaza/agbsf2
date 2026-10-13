@@ -10,7 +10,7 @@
 
 #include "seqlib/sf2/units.h"
 
-namespace supergbamidi::rare
+namespace agbsf2::rare
 {
 namespace
 {
@@ -368,4 +368,4 @@ sf2::Zone SoundfontBuilder::ZoneFor(const Instrument& voice, const EnvelopeSetti
     return z;
 }
 
-} // namespace supergbamidi::rare
+} // namespace agbsf2::rare

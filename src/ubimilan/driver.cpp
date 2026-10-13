@@ -13,7 +13,7 @@
 
 #include "thumb.h"
 
-namespace supergbamidi::ubimilan
+namespace agbsf2::ubimilan
 {
 namespace
 {
@@ -336,4 +336,4 @@ bool ReadSample(const Rom& rom, uint32_t address, GameSample& sample)
     return rom.Contains(sample.data, sample.length);
 }
 
-} // namespace supergbamidi::ubimilan
+} // namespace agbsf2::ubimilan

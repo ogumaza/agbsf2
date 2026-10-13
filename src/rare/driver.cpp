@@ -6,7 +6,7 @@
 
 #include "thumb.h"
 
-namespace supergbamidi::rare
+namespace agbsf2::rare
 {
 namespace
 {
@@ -475,4 +475,4 @@ int FadeEntryFrames(uint32_t entry)
     return entry ? int(entry) + 1 : 0;
 }
 
-} // namespace supergbamidi::rare
+} // namespace agbsf2::rare

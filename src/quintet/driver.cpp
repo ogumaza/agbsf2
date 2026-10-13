@@ -9,7 +9,7 @@
 #include "quintet/song.h"
 #include "thumb.h"
 
-namespace supergbamidi::quintet
+namespace agbsf2::quintet
 {
 namespace
 {
@@ -340,4 +340,4 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
     return true;
 }
 
-} // namespace supergbamidi::quintet
+} // namespace agbsf2::quintet

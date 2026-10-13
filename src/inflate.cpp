@@ -31,7 +31,7 @@
 
 #include <algorithm>
 
-namespace supergbamidi
+namespace agbsf2
 {
 namespace
 {
@@ -509,4 +509,4 @@ bool ZlibDecompress(const uint8_t* data, size_t size, std::vector<uint8_t>& out,
     return true;
 }
 
-} // namespace supergbamidi
+} // namespace agbsf2

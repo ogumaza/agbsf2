@@ -9,7 +9,7 @@
 #include <optional>
 #include <vector>
 
-namespace supergbamidi
+namespace agbsf2
 {
 
 // A preset's bank and program.
@@ -52,4 +52,4 @@ private:
     std::bitset<kBanks> given_; // the songs' banks that have been given out
 };
 
-} // namespace supergbamidi
+} // namespace agbsf2

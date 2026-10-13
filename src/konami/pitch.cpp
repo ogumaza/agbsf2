@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace supergbamidi::konami
+namespace agbsf2::konami
 {
 namespace
 {
@@ -160,4 +160,4 @@ int NearestKey(double hz)
     return std::clamp(int(std::lround(69.0 + 12.0 * std::log2(hz / 440.0))), 0, 127);
 }
 
-} // namespace supergbamidi::konami
+} // namespace agbsf2::konami

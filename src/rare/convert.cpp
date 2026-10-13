@@ -19,7 +19,7 @@
 #include "rare/sequencer.h"
 #include "rare/song.h"
 
-namespace supergbamidi::rare
+namespace agbsf2::rare
 {
 namespace
 {
@@ -781,7 +781,7 @@ int PresetInstrument(const Sf2File& file, int bank, int program)
     {
         if (p.bank == bank && p.program == program)
         {
-            return supergbamidi::PresetInstrument(p);
+            return agbsf2::PresetInstrument(p);
         }
     }
 
@@ -1273,4 +1273,4 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
     return WriteFile(path, data, error);
 }
 
-} // namespace supergbamidi::rare
+} // namespace agbsf2::rare

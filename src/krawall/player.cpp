@@ -6,7 +6,7 @@
 #include <string>
 #include <utility>
 
-namespace supergbamidi::krawall
+namespace agbsf2::krawall
 {
 namespace
 {
@@ -2219,4 +2219,4 @@ void Player::PatternLoop(Channel& c)
     }
 }
 
-} // namespace supergbamidi::krawall
+} // namespace agbsf2::krawall

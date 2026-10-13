@@ -13,7 +13,7 @@
 #include "rom.h"
 #include "ubimilan/driver.h"
 
-namespace supergbamidi::ubimilan
+namespace agbsf2::ubimilan
 {
 
 // A write to one of the sound registers.
@@ -170,4 +170,4 @@ private:
     std::vector<std::string> warnings_;
 };
 
-} // namespace supergbamidi::ubimilan
+} // namespace agbsf2::ubimilan

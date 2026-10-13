@@ -17,7 +17,7 @@
 #include "ubimilan/sequencer.h"
 #include "ubimilan/soundfont.h"
 
-namespace supergbamidi::ubimilan
+namespace agbsf2::ubimilan
 {
 namespace
 {
@@ -209,4 +209,4 @@ std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std
     return std::make_unique<UbiMilanMusic>(rom, std::move(info));
 }
 
-} // namespace supergbamidi::ubimilan
+} // namespace agbsf2::ubimilan

@@ -15,7 +15,7 @@
 #include "brownie/soundfont.h"
 #include "rom.h"
 
-namespace supergbamidi::brownie
+namespace agbsf2::brownie
 {
 
 // Conversion settings and output paths.
@@ -120,4 +120,4 @@ SongSummary ConvertSong(const Rom& rom, const DriverInfo& info, int song, const 
 // the MIDI key that the driver's key 0 stands for: the median over the keys of the PSG's lowest four octaves.
 int PsgTuning(const Rom& rom, const DriverInfo& info, int& base);
 
-} // namespace supergbamidi::brownie
+} // namespace agbsf2::brownie

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 
-"""Compare supergbamidi's model of Ubisoft Milan's driver with the game's driver, frame by frame.
+"""Compare agbsf2's model of Ubisoft Milan's driver with the game's driver, frame by frame.
 
-    compare_trace.py ROM SUPERGBAMIDI [--songs 0-13] [--frames 12000] [-j JOBS]
+    compare_trace.py ROM AGBSF2 [--songs 0-13] [--frames 12000] [-j JOBS]
 
-For every piece of music, it runs `SUPERGBAMIDI --trace` and the driver under driver_emu.py, and compares every write
-to the PSG's registers, in order, the track, and each voice that the mixer plays, frame by frame. It reports the first
-difference in each piece that has one.
+For every piece of music, the script runs `AGBSF2 --trace` and the driver under driver_emu.py. Frame by frame, the
+comparison covers every write to the PSG's registers, in order, the track, and each voice that the mixer plays. It
+reports the first difference in each piece that has one.
 
 A key of channel 9 outside its kit makes the driver read a sample from past the end of the sound bank's resource table,
 which lands in a mirror of the ROM, at 0x0A000000 or above. The model leaves such a note out, so the driver's voices
@@ -57,11 +57,10 @@ def compare(job):
     model = model_lines(tool, rom_path, song, frames)
     for i, (a, b) in enumerate(zip(driver, model)):
         if a != b:
-            before = '\n'.join('    both         %s' % line for line in driver[max(0, i - 3):i])
-            return 'frame %s differs:\n%s\n    driver       %s\n    supergbamidi %s' % (a.split()[0], before, a,
-                                                                                         b), skipped
+            before = '\n'.join('    both   %s' % line for line in driver[max(0, i - 3):i])
+            return 'frame %s differs:\n%s\n    driver %s\n    agbsf2 %s' % (a.split()[0], before, a, b), skipped
     if len(driver) != len(model):
-        longer, name = (driver, 'the driver') if len(driver) > len(model) else (model, 'supergbamidi')
+        longer, name = (driver, 'the driver') if len(driver) > len(model) else (model, 'agbsf2')
         return 'only %s goes on, at frame %s: %s' % (name, longer[min(len(driver), len(model))].split()[0],
                                                      longer[min(len(driver), len(model))]), skipped
     return None, skipped
@@ -73,7 +72,7 @@ def listed_songs(tool, rom_path):
                           check=True).stdout
     songs = [int(n) for n in re.findall(r'^\s+(\d+)\s+0x[0-9A-F]{8}', text, re.MULTILINE)]
     if not songs:
-        raise SystemExit('found no songs in the song list of supergbamidi --info')
+        raise SystemExit('found no songs in the song list of agbsf2 --info')
     return songs
 
 
@@ -88,14 +87,14 @@ def parse_range(text):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('rom', metavar='ROM', help='the game (.gba)')
-    p.add_argument('supergbamidi', metavar='SUPERGBAMIDI', help='the supergbamidi program to check')
+    p.add_argument('agbsf2', metavar='AGBSF2', help='the agbsf2 program to check')
     p.add_argument('--songs', help='pieces to compare, such as 0-13 (default: all)')
     p.add_argument('--frames', type=int, default=12000, help='frames to compare in each piece (default: 12000)')
     p.add_argument('-j', '--jobs', type=int, default=1, help='pieces to compare at once (default: 1)')
     a = p.parse_args()
 
-    songs = parse_range(a.songs) if a.songs else listed_songs(a.supergbamidi, a.rom)
-    jobs = [(a.supergbamidi, a.rom, s, a.frames) for s in songs]
+    songs = parse_range(a.songs) if a.songs else listed_songs(a.agbsf2, a.rom)
+    jobs = [(a.agbsf2, a.rom, s, a.frames) for s in songs]
     if a.jobs > 1:
         with multiprocessing.Pool(a.jobs) as pool:
             results = pool.map(compare, jobs)
@@ -108,7 +107,7 @@ def main():
             failed += 1
             print('music %d: %s' % (song, result))
         if skipped:
-            print('music %d: a voice plays from a mirror of the ROM for %d frames, which supergbamidi leaves out' %
+            print('music %d: agbsf2 leaves out a voice that plays from a mirror of the ROM for %d frames' %
                   (song, skipped))
     print('%d of %d pieces match the driver for %d frames' % (len(songs) - failed, len(songs), a.frames))
     raise SystemExit(1 if failed else 0)

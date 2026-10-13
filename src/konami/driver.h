@@ -11,7 +11,7 @@
 #include "konami/seqformat.h"
 #include "rom.h"
 
-namespace supergbamidi::konami
+namespace agbsf2::konami
 {
 
 // CPU clock frequency in Hz; also the timer clock.
@@ -103,4 +103,4 @@ struct DriverOverrides
 // although its command reader is there, or returns false with `error` empty if the game shows no sign of the driver.
 bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info, std::string& error);
 
-} // namespace supergbamidi::konami
+} // namespace agbsf2::konami

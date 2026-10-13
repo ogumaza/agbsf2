@@ -11,7 +11,7 @@
 
 #include "rom.h"
 
-namespace supergbamidi::quintet
+namespace agbsf2::quintet
 {
 
 // User-supplied overrides for driver detection.
@@ -21,7 +21,7 @@ struct DriverOverrides
     int song_count = 0;
 };
 
-// The revisions of the driver that supergbamidi reads.
+// The revisions of the driver that agbsf2 reads.
 enum class Revision : uint8_t
 {
     kA, // Super Robot Taisen A's, which D and R have too
@@ -56,4 +56,4 @@ struct DriverInfo
 // `error` empty if the game shows no sign of the driver.
 bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info, std::string& error);
 
-} // namespace supergbamidi::quintet
+} // namespace agbsf2::quintet

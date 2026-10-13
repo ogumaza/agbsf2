@@ -3,11 +3,11 @@
 
 """Run a Konami GBA sound driver's code under the Unicorn ARM emulator.
 
-This is the reference for checking supergbamidi. It calls the driver's
+This is the reference for checking agbsf2. It calls the driver's
 init, song-start and per-frame routines directly (no BIOS, no video), and
 captures what the driver produces:
 
-    trace       the per-frame track output records, in `supergbamidi --trace` format
+    trace       the per-frame track output records, in `agbsf2 --trace` format
     render-ds   the DirectSound output (FIFO A = right and FIFO B = left, or both on both sides in the games whose
                 drivers say so)
     render-psg  the PSG, rendered by psg_model.py from the driver's register writes

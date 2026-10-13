@@ -2,7 +2,7 @@
 
 #include "song_banks.h"
 
-namespace supergbamidi
+namespace agbsf2
 {
 
 void SongBanks::Begin(int song)
@@ -72,4 +72,4 @@ std::vector<BankProgram> SongBanks::Place(int song, int count)
     return slots;
 }
 
-} // namespace supergbamidi
+} // namespace agbsf2

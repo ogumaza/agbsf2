@@ -10,7 +10,7 @@
 
 #include "files.h"
 
-namespace supergbamidi::krawall
+namespace agbsf2::krawall
 {
 namespace
 {
@@ -195,4 +195,4 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
     return WriteFile(path, std::vector<uint8_t>(out.begin(), out.end()), error);
 }
 
-} // namespace supergbamidi::krawall
+} // namespace agbsf2::krawall

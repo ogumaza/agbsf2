@@ -18,7 +18,7 @@
 #include "program.h"
 #include "sf2.h"
 
-namespace supergbamidi::mp2k
+namespace agbsf2::mp2k
 {
 namespace
 {
@@ -213,4 +213,4 @@ std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std
     return std::make_unique<Mp2kMusic>(rom, std::move(info));
 }
 
-} // namespace supergbamidi::mp2k
+} // namespace agbsf2::mp2k

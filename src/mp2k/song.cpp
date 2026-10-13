@@ -9,7 +9,7 @@
 #include <set>
 #include <tuple>
 
-namespace supergbamidi::mp2k
+namespace agbsf2::mp2k
 {
 namespace
 {
@@ -483,4 +483,4 @@ TrackLayout ScanTrack(const Rom& rom, uint32_t address)
     return layout;
 }
 
-} // namespace supergbamidi::mp2k
+} // namespace agbsf2::mp2k

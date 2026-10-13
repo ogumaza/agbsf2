@@ -6,7 +6,7 @@ based on the driver's code in the US release of *Sword of Mana* (game code
 `AVSE`), and the addresses given as examples come from that game. *Magical
 Vacation* (`AMVJ`) uses an older revision without the mixer; [The Magical
 Vacation revision](#the-magical-vacation-revision) lists the differences.
-`supergbamidi` finds the driver and its tables from the code (see [Locating
+`agbsf2` finds the driver and its tables from the code (see [Locating
 the driver](#locating-the-driver)).
 
 The driver plays 13 channels. Channels 0-3 play the music on the Game Boy's
@@ -447,7 +447,7 @@ to 11, and writes `r5` to an address outside the I/O registers.
 
 ## Locating the driver
 
-`supergbamidi` finds the driver from its code, without fixed addresses. The
+`agbsf2` finds the driver from its code, without fixed addresses. The
 per-frame routine starts by counting down the channels' waits:
 
 ```
@@ -484,12 +484,11 @@ sets or samples, and the waves: `E4D20001 E59F3xxx`, then `E0833100`,
 `E7930100` or `E7934100`, within 0x20 bytes of the routine's start. In the
 *Sword of Mana* revision, the init sets Timer 0 from `ldr r1, =reload; ldr r0,
 [r1]; strh r0, [r3, #0xA0]` (`E59F1xxx E5910000 E1C30AB0`) within 0x1000 bytes
-before the per-frame routine, which gives the mixer's rate; without it,
-`supergbamidi` assumes 16384 Hz.
+before the per-frame routine. That setting gives the mixer's rate. Without it,
+`agbsf2` assumes 16384 Hz.
 
-The song table has no count, so `supergbamidi` counts its entries up to the
+The song table has no count. `agbsf2` counts its entries up to the
 first whose list of channels isn't in the ROM, names a channel that the
 revision doesn't have, or doesn't end within its channels. `--song-table` and `--song-count` override the
-song table and the number of sounds. Without the driver's code, `supergbamidi`
-can't find the driver's other tables, so it can't read a game whose driver it
-doesn't recognise.
+song table and the number of sounds. Without the driver's code, `agbsf2`
+can't find the driver's other tables or read the game.

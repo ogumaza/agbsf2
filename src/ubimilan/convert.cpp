@@ -20,7 +20,7 @@
 #include "sf2.h"
 #include "ubimilan/sequencer.h"
 
-namespace supergbamidi::ubimilan
+namespace agbsf2::ubimilan
 {
 namespace
 {
@@ -500,4 +500,4 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
     return WriteFile(path, std::vector<uint8_t>(out.begin(), out.end()), error);
 }
 
-} // namespace supergbamidi::ubimilan
+} // namespace agbsf2::ubimilan

@@ -10,7 +10,7 @@
 #include "program.h"
 #include "thumb.h"
 
-namespace supergbamidi::krawall
+namespace agbsf2::krawall
 {
 namespace
 {
@@ -339,7 +339,7 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
     {
         if (info.version)
         {
-            error = "found Krawall, but not a build that " + std::string(kProgramName) + " knows (" +
+            error = "found Krawall, but not a build that " + std::string(kProgramName) + " supports (" +
                     VersionText(rom, info.version) + "): it reads the build of 2003/09/01";
         }
         return false;
@@ -546,4 +546,4 @@ int SongCount(const ModuleInfo& module)
     return markers ? std::min(songs, int(module.song_starts.size())) : 0;
 }
 
-} // namespace supergbamidi::krawall
+} // namespace agbsf2::krawall

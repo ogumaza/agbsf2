@@ -7,8 +7,8 @@
 -- The command-line tool is inside the app, in Contents/Resources.
 
 -- The command-line tool's file name, and the app's name for its dialogs.
-property toolName : "supergbamidi"
-property appTitle : "Supergbamidi"
+property toolName : "agbsf2"
+property appTitle : "Agbsf2"
 
 on run
 	set theFiles to choose file with prompt "Choose GBA ROMs or GSF rips to convert:" with multiple selections allowed

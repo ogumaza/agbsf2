@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 
 # A vX.Y.Z tag publishes a Windows x64 release. X.Y.Z must match CMakeLists.txt, with notes in
-# docs/release-notes/X.Y.Z.md. The supergbamidi-X.Y.Z-win-x64.zip package contains supergbamidi.exe, README.md, LICENSE
-# and THIRD_PARTY_NOTICES.
+# docs/release-notes/X.Y.Z.md. The agbsf2-X.Y.Z-win-x64.zip package contains agbsf2.exe, README.md, LICENSE and
+# THIRD_PARTY_NOTICES.
 #
 # A manual run (Actions > Release > Run workflow) builds the same zip and uploads it as a workflow artifact, without
 # publishing anything.
@@ -26,12 +26,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
-          token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
 
       - id: version
         uses: ./externals/xsflib/ci/release-version
         with:
-          project: supergbamidi
+          project: agbsf2
 
   windows:
     needs: version
@@ -41,15 +40,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
-          token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
 
       - uses: ./externals/xsflib/ci/release-windows
         with:
           version: ${{ needs.version.outputs.version }}
-          cmake: -A x64 -T ClangCL -DSUPERGBAMIDI_BUILD_TESTS=OFF
-          targets: supergbamidi
-          programs: supergbamidi
-          files: build/Release/supergbamidi.exe
+          cmake: -A x64 -T ClangCL -DAGBSF2_BUILD_TESTS=OFF
+          targets: agbsf2
+          programs: agbsf2
+          files: build/Release/agbsf2.exe
           artifact: win-x64
 
   package:
@@ -61,16 +59,15 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
-          token: ${{ secrets.SUBMODULES_TOKEN || github.token }}
 
       - uses: ./externals/xsflib/ci/package-converter
         with:
-          program: supergbamidi
+          program: agbsf2
           version: ${{ needs.version.outputs.version }}
           documents: README.md LICENSE THIRD_PARTY_NOTICES
 
       - uses: ./externals/xsflib/ci/release-publish
         with:
-          title: supergbamidi
+          title: agbsf2
           version: ${{ needs.version.outputs.version }}
-          artifact: supergbamidi-${{ needs.version.outputs.version }}
+          artifact: agbsf2-${{ needs.version.outputs.version }}

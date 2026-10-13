@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace supergbamidi::ubimilan
+namespace agbsf2::ubimilan
 {
 namespace
 {
@@ -350,4 +350,4 @@ std::vector<std::string> InstrumentSet::Build(const Rom& rom, const DriverInfo& 
     return warnings;
 }
 
-} // namespace supergbamidi::ubimilan
+} // namespace agbsf2::ubimilan

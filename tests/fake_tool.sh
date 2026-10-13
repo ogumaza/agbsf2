@@ -42,7 +42,7 @@ for path in "$@"; do
         ;;
     *)
         echo "$name: no Konami, Rare, Quintet, Nintendo R&D2, Brownie Brown, Ubisoft Milan, Krawall or MP2K sound driver found: this game's music uses" \
-             "another engine, or a driver version supergbamidi doesn't know" >&2
+             "another engine, or a driver version that agbsf2 doesn't support" >&2
         status=1
         ;;
     esac

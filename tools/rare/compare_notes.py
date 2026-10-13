@@ -5,7 +5,7 @@
 
     compare_notes.py ROM FOLDER [--songs 0-22] [--frames 12000]
 
-FOLDER holds supergbamidi's conversion of ROM: NAME_NN.mid and NAME_NN.sf2 for each song, or NAME_rare_NN.mid and
+FOLDER holds agbsf2's conversion of ROM: NAME_NN.mid and NAME_NN.sf2 for each song, or NAME_rare_NN.mid and
 NAME_rare_NN.sf2 if detection finds another of the game's drivers first. For every song, the driver runs under
 driver_emu.py for as long as the MIDI file lasts, and each note it plays is matched with a MIDI note on the same channel
 and key that starts within a frame and a half of it. For each pair, the script checks:
@@ -13,7 +13,7 @@ and key that starts within a frame and a half of it. For each pair, the script c
   - the velocity, and the channel's volume when the note starts;
   - the sample: the SoundFont zone that the note's bank, program and key choose has to play the driver's sample;
   - the envelope: the zone's attack, decay, sustain and release, for each phase that the driver's note reached, have to
-    be those that supergbamidi works out from the instrument and the settings from controllers 20-23 that the phase
+    be those that agbsf2 works out from the instrument and the settings from controllers 20-23 that the phase
     took;
   - the pitch on every frame of the note, from the zone's root key, tuning and sample rate and the channel's pitch bend,
     against the step the driver moves the sample on by;
@@ -285,12 +285,12 @@ def timecents(seconds):
 
 
 def fade_seconds(frames):
-    """The length that supergbamidi gives a SoundFont fade for a decay or release of `frames` frames to silence."""
+    """The length that agbsf2 gives a SoundFont fade for a decay or release of `frames` frames to silence."""
     return min(6.0, max(3.0, 3.0 + 3.0 * (frames - 5) / 11.0)) * frames / FRAME_RATE
 
 
 def expected_envelope(rom, instrument, envelope, fade):
-    """Returns the generators that supergbamidi gives the volume envelope of the instrument at `instrument` (attack,
+    """Returns the generators that agbsf2 gives the volume envelope of the instrument at `instrument` (attack,
     decay, sustain and release, each None where the zone leaves the default), for the settings that `envelope` gives
     each phase. A setting of 0x80 or more, or one missing, leaves the instrument's."""
     at = instrument - 0x08000000
@@ -462,7 +462,7 @@ def check_song(rom, song, midi_path, sf2_path, frames_limit, report):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('rom', metavar='ROM', help='the game (.gba)')
-    p.add_argument('folder', metavar='FOLDER', help="the folder containing supergbamidi's output")
+    p.add_argument('folder', metavar='FOLDER', help="the folder containing agbsf2's output")
     p.add_argument('--songs', help='songs to check, such as 0-22 (default: every song with a MIDI file)')
     p.add_argument('--frames', type=int, default=12000, help='maximum frames to check per song (default: 12000)')
     p.add_argument('-v', '--verbose', action='store_true', help='list every difference, not just the first ten')
@@ -486,7 +486,7 @@ def main():
         total += 1
         if not check_song(rom, song, midi, midi.with_suffix('.sf2'), a.frames, report):
             failed += 1
-    # supergbamidi writes no files for a song that plays no notes.
+    # agbsf2 writes no files for a song that plays no notes.
     for song in sorted((wanted or set()) - {s for s, _ in files}):
         print('song %d: no MIDI file to check' % song)
     if not total:

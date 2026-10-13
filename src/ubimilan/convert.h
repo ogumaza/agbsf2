@@ -12,7 +12,7 @@
 #include "ubimilan/driver.h"
 #include "ubimilan/soundfont.h"
 
-namespace supergbamidi::ubimilan
+namespace agbsf2::ubimilan
 {
 
 // Conversion settings and output paths.
@@ -49,4 +49,4 @@ SongSummary ConvertSong(const Rom& rom, const DriverInfo& info, int song, const 
 // Writes a text listing of each sequence of a song. Returns false and sets `error` if it can't.
 bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::string& path, std::string& error);
 
-} // namespace supergbamidi::ubimilan
+} // namespace agbsf2::ubimilan

@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.20)
-project(supergbamidi VERSION 1.6.0 LANGUAGES CXX)
+project(agbsf2 VERSION 1.6.0 LANGUAGES CXX)
 
 # The name of the macOS droplet app.
-set(SUPERGBAMIDI_APP_NAME Supergbamidi)
+set(AGBSF2_APP_NAME Agbsf2)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,7 +17,7 @@ endif()
 # Link MSVC's runtime statically, so the released .exe runs without the runtime DLLs installed.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-option(SUPERGBAMIDI_BUILD_TESTS "Build and register the tests" ON)
+option(AGBSF2_BUILD_TESTS "Build and register the tests" ON)
 
 # seqlib, the library that writes the MIDI files and SoundFonts, is a submodule.
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/externals/seqlib/CMakeLists.txt")
@@ -25,15 +25,15 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/externals/seqlib/CMakeLists.txt")
 endif()
 add_subdirectory(externals/seqlib EXCLUDE_FROM_ALL)
 
-# xsflib, a library for players and rippers of the PSF formats, is a submodule too. supergbamidi takes xsflib's PSF
-# container, console code and common files. The container needs no zlib: supergbamidi decompresses the programs itself
+# xsflib, a library for players and rippers of the PSF formats, is a submodule too. agbsf2 takes xsflib's PSF container,
+# console code and common files. The container doesn't require zlib: agbsf2 decompresses the programs itself
 # (src/inflate.cpp).
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/externals/xsflib/CMakeLists.txt")
     message(FATAL_ERROR "externals/xsflib is missing. Run: git submodule update --init")
 endif()
 add_subdirectory(externals/xsflib EXCLUDE_FROM_ALL)
 
-add_library(supergbamidi_core STATIC
+add_library(agbsf2_core STATIC
     src/beat_grid.cpp
     src/inflate.cpp
     src/music.cpp
@@ -89,52 +89,52 @@ add_library(supergbamidi_core STATIC
     src/ubimilan/soundfont.cpp
     src/thumb.cpp
 )
-target_include_directories(supergbamidi_core PUBLIC src)
-target_link_libraries(supergbamidi_core PUBLIC seqlib::seqlib xsflib::psf_container)
+target_include_directories(agbsf2_core PUBLIC src)
+target_link_libraries(agbsf2_core PUBLIC seqlib::seqlib xsflib::psf_container)
 
 # Disable fused multiply-add so output stays byte-identical across platforms. GCC and Clang can fuse a * b + c on
 # CPUs such as ARM64, changing the rounding. MSVC's default /fp:precise disables this in Visual Studio 2022 and later;
 # clang-cl needs an explicit option.
 if(MSVC)
-    target_compile_options(supergbamidi_core PUBLIC /W4 /utf-8)
+    target_compile_options(agbsf2_core PUBLIC /W4 /utf-8)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        target_compile_options(supergbamidi_core PUBLIC /clang:-ffp-contract=off)
+        target_compile_options(agbsf2_core PUBLIC /clang:-ffp-contract=off)
     endif()
 else()
-    target_compile_options(supergbamidi_core PUBLIC -Wall -Wextra -Wpedantic -ffp-contract=off)
+    target_compile_options(agbsf2_core PUBLIC -Wall -Wextra -Wpedantic -ffp-contract=off)
 endif()
 
-add_executable(supergbamidi src/main.cpp)
-target_link_libraries(supergbamidi PRIVATE supergbamidi_core xsflib::console)
+add_executable(agbsf2 src/main.cpp)
+target_link_libraries(agbsf2 PRIVATE agbsf2_core xsflib::console)
 # The version, and on Windows the version and description that Explorer shows in the file's properties.
-xsflib_add_version(supergbamidi VERSION ${PROJECT_VERSION} DEFINE SUPERGBAMIDI_VERSION
-                   DESCRIPTION "MIDI and SoundFont converter for GBA game music" PRODUCT supergbamidi
-                   COPYRIGHT "Copyright (c) 2026 the supergbamidi authors. MIT License.")
+xsflib_add_version(agbsf2 VERSION ${PROJECT_VERSION} DEFINE AGBSF2_VERSION
+                   DESCRIPTION "MIDI and SoundFont converter for GBA game music" PRODUCT agbsf2
+                   COPYRIGHT "Copyright (c) 2026 the agbsf2 authors. MIT License.")
 include(GNUInstallDirs)
-install(TARGETS supergbamidi RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
-install(FILES LICENSE THIRD_PARTY_NOTICES DESTINATION "${CMAKE_INSTALL_DATADIR}/supergbamidi")
+install(TARGETS agbsf2 RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+install(FILES LICENSE THIRD_PARTY_NOTICES DESTINATION "${CMAKE_INSTALL_DATADIR}/agbsf2")
 
-# macOS: a droplet app, so files can be dropped on supergbamidi in the Finder. The app holds the licences beside the
+# macOS: a droplet app that converts the files dropped on it in the Finder. The app holds the licences beside the
 # program.
-set(SUPERGBAMIDI_APP "${CMAKE_BINARY_DIR}/${SUPERGBAMIDI_APP_NAME}.app")
-xsflib_add_droplet(supergbamidi VERSION ${PROJECT_VERSION} APP_NAME ${SUPERGBAMIDI_APP_NAME}
-                   SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/platform/macos/${SUPERGBAMIDI_APP_NAME}.applescript"
+set(AGBSF2_APP "${CMAKE_BINARY_DIR}/${AGBSF2_APP_NAME}.app")
+xsflib_add_droplet(agbsf2 VERSION ${PROJECT_VERSION} APP_NAME ${AGBSF2_APP_NAME}
+                   SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/platform/macos/${AGBSF2_APP_NAME}.applescript"
                    RESOURCES LICENSE THIRD_PARTY_NOTICES)
 
-if(SUPERGBAMIDI_BUILD_TESTS)
+if(AGBSF2_BUILD_TESTS)
     enable_testing()
-    add_executable(supergbamidi_tests tests/test_main.cpp tests/test_util.cpp tests/konami_test.cpp tests/rare_test.cpp
-                                      tests/quintet_test.cpp tests/mp2k_test.cpp tests/rd2_test.cpp
-                                      tests/brownie_test.cpp tests/krawall_test.cpp tests/ubimilan_test.cpp)
-    target_link_libraries(supergbamidi_tests PRIVATE supergbamidi_core seqlib::testing)
-    add_test(NAME supergbamidi_tests COMMAND supergbamidi_tests)
+    add_executable(agbsf2_tests tests/test_main.cpp tests/test_util.cpp tests/konami_test.cpp tests/rare_test.cpp
+                                tests/quintet_test.cpp tests/mp2k_test.cpp tests/rd2_test.cpp
+                                tests/brownie_test.cpp tests/krawall_test.cpp tests/ubimilan_test.cpp)
+    target_link_libraries(agbsf2_tests PRIVATE agbsf2_core seqlib::testing)
+    add_test(NAME agbsf2_tests COMMAND agbsf2_tests)
 
     # Test the droplet app's conversion report using a stand-in for the program.
     find_program(OSASCRIPT osascript)
-    if(TARGET supergbamidi_app AND OSASCRIPT)
+    if(TARGET agbsf2_app AND OSASCRIPT)
         add_test(NAME droplet
                  COMMAND "${OSASCRIPT}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/droplet_test.applescript"
-                         "${SUPERGBAMIDI_APP}/Contents/Resources/Scripts/main.scpt"
+                         "${AGBSF2_APP}/Contents/Resources/Scripts/main.scpt"
                          "${CMAKE_CURRENT_SOURCE_DIR}/tests/fake_tool.sh")
     endif()
 

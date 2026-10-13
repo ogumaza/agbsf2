@@ -8,7 +8,7 @@
 #include "mp2k/song.h"
 #include "thumb.h"
 
-namespace supergbamidi::mp2k
+namespace agbsf2::mp2k
 {
 namespace
 {
@@ -356,4 +356,4 @@ Player SongPlayer(const Rom& rom, const DriverInfo& info, int song)
     return player;
 }
 
-} // namespace supergbamidi::mp2k
+} // namespace agbsf2::mp2k

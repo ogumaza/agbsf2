@@ -10,7 +10,7 @@
 
 #include "rom.h"
 
-namespace supergbamidi::mp2k
+namespace agbsf2::mp2k
 {
 
 // The track commands. Bytes 0x80 to 0xB0 are waits, and 0xD0 to 0xFF notes with a length.
@@ -180,4 +180,4 @@ struct TrackLayout
 // every byte 0.
 TrackLayout ScanTrack(const Rom& rom, uint32_t address);
 
-} // namespace supergbamidi::mp2k
+} // namespace agbsf2::mp2k

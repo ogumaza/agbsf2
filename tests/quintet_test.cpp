@@ -26,7 +26,7 @@
 #include "sf2.h"
 #include "test_util.h"
 
-namespace supergbamidi::quintet
+namespace agbsf2::quintet
 {
 namespace
 {
@@ -1221,7 +1221,7 @@ void TestMusic()
     forced.driver = Driver::kQuintet;
     std::string error, table_error, forced_error;
 
-    const std::unique_ptr<Music> music = supergbamidi::OpenMusic(rom, Overrides(), error);
+    const std::unique_ptr<Music> music = agbsf2::OpenMusic(rom, Overrides(), error);
     const std::unique_ptr<Music> bare_music = quintet::OpenMusic(bare_rom, table, table_error);
     const std::unique_ptr<Music> bare_forced = quintet::OpenMusic(bare_rom, forced, forced_error);
 
@@ -1259,4 +1259,4 @@ void RunTests()
     TestMusic();
 }
 
-} // namespace supergbamidi::quintet
+} // namespace agbsf2::quintet

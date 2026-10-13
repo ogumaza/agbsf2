@@ -13,7 +13,7 @@
 #include "quintet/driver.h"
 #include "rom.h"
 
-namespace supergbamidi::quintet
+namespace agbsf2::quintet
 {
 
 // The number of channels in a song.
@@ -285,4 +285,4 @@ private:
     std::vector<std::string> warnings_;
 };
 
-} // namespace supergbamidi::quintet
+} // namespace agbsf2::quintet

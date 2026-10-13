@@ -16,7 +16,7 @@
 #include "rom.h"
 #include "sf2.h"
 
-namespace supergbamidi::mp2k
+namespace agbsf2::mp2k
 {
 
 // A SoundFont volume envelope: times in timecents and the sustain level in centibels of attenuation.
@@ -116,4 +116,4 @@ private:
     std::map<std::pair<int, int>, PresetSlot> slots_;       // SharedPreset()'s presets, by program and instrument
 };
 
-} // namespace supergbamidi::mp2k
+} // namespace agbsf2::mp2k

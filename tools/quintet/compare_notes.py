@@ -3,9 +3,9 @@
 
 """Check a conversion's MIDI files and SoundFonts against the game's driver, frame by frame.
 
-    compare_notes.py ROM SUPERGBAMIDI FOLDER [--songs 0-22] [--frames 12000]
+    compare_notes.py ROM AGBSF2 FOLDER [--songs 0-22] [--frames 12000]
 
-FOLDER holds supergbamidi's conversion of ROM: NAME_NN.mid and NAME_NN.sf2 for each song, or NAME_quintet_NN.mid and
+FOLDER holds agbsf2's conversion of ROM: NAME_NN.mid and NAME_NN.sf2 for each song, or NAME_quintet_NN.mid and
 NAME_quintet_NN.sf2 if detection finds another of the game's drivers first. For every song, the driver runs under
 driver_emu.py for as long as the MIDI file lasts, or until all of its channels have ended, and the script works out from
 its register writes what each of the 6 channels plays in each frame. The MIDI file and the SoundFont have to play the
@@ -30,7 +30,7 @@ frame's changes come as far into the frame as the note's start. So each frame of
 stretch of the MIDI file, or failing that, with the MIDI file anywhere from half a frame before the frame to half a
 frame after the next. The MIDI file is timed as a player plays it, at tempos of whole microseconds a quarter note,
 which can put a note a little ahead of the driver's frames or behind them, so a note that starts that close to a
-frame's start may belong to the end of the frame before. SUPERGBAMIDI is used for its --info report, which names the
+frame's start may belong to the end of the frame before. AGBSF2 is used for its --info report. The report names the
 driver's tables.
 """
 import argparse
@@ -205,8 +205,8 @@ def read_midi(path):
         elif kind == 'program':
             program[ch] = a
         elif kind == 'cc' and a == 0:
-            # supergbamidi gives the SoundFont's bank number in CC0 alone, as FluidSynth reads it by default, and sets
-            # CC32 to 0.
+            # agbsf2 gives the SoundFont's bank number in CC0 alone and sets CC32 to 0. FluidSynth reads the bank from
+            # CC0 by default.
             bank[ch] = b
         elif kind == 'cc' and a in (10, 11):
             times, values = changes.setdefault((ch, a), ([], []))
@@ -234,7 +234,7 @@ def value_at(changes, key, t, default):
 
 
 def driver_tables(tool, rom_path):
-    """Returns the frequency and PCM pitch tables' addresses from supergbamidi's --info report."""
+    """Returns the frequency and PCM pitch tables' addresses from agbsf2's --info report."""
     text = subprocess.run([tool, '--driver', 'quintet', '--info', rom_path], capture_output=True, encoding='utf-8',
                           check=True).stdout
     frequency = int(re.search(r'frequency table 0x([0-9A-F]+)', text).group(1), 16)
@@ -412,8 +412,7 @@ def driver_frames(rom, song, frames):
 
 
 def midi_levels(cc10, cc11):
-    """Returns the levels on each side that CC10 and CC11 stand for, as supergbamidi's LevelsToControllers() sets
-    them."""
+    """Returns the levels on each side that CC10 and CC11 stand for in agbsf2's LevelsToControllers()."""
     amp = (cc11 / 127) ** 2 * math.sqrt(2) * 127 / 128
     angle = 0.5 if cc10 == 64 else cc10 / 127
     return amp * math.cos(angle * math.pi / 2) * 128, amp * math.sin(angle * math.pi / 2) * 128
@@ -647,8 +646,8 @@ def describe_midi(have):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('rom', metavar='ROM', help='the game (.gba)')
-    p.add_argument('supergbamidi', metavar='SUPERGBAMIDI', help='the supergbamidi program, for its --info report')
-    p.add_argument('folder', metavar='FOLDER', help="the folder containing supergbamidi's output")
+    p.add_argument('agbsf2', metavar='AGBSF2', help='the agbsf2 program, for its --info report')
+    p.add_argument('folder', metavar='FOLDER', help="the folder containing agbsf2's output")
     p.add_argument('--songs', help='songs to check, such as 0-22 (default: every song with a MIDI file)')
     p.add_argument('--frames', type=int, default=12000, help='maximum frames to check per song (default: 12000)')
     p.add_argument('-v', '--verbose', action='store_true', help='list every difference, not just the first ten')
@@ -657,7 +656,7 @@ def main():
     files = conversion.midi_files(a.folder, 'quintet')
     if not files:
         raise SystemExit('found no MIDI files to check in %s' % a.folder)
-    frequency_table, pcm_table = driver_tables(a.supergbamidi, a.rom)
+    frequency_table, pcm_table = driver_tables(a.agbsf2, a.rom)
     def table(address, count, form):
         return list(struct.unpack('<%d%s' % (count, form), rom[address - ROM_BASE:address - ROM_BASE + 2 * count]))
 
@@ -677,7 +676,7 @@ def main():
         total += 1
         if not check_song(rom, info, song, midi, midi.with_suffix('.sf2'), a.frames, report):
             failed += 1
-    # supergbamidi writes no files for a song that plays no notes.
+    # agbsf2 writes no files for a song that plays no notes.
     for song in sorted((wanted or set()) - {s for s, _ in files}):
         print('song %d: no MIDI file to check' % song)
     if not total:

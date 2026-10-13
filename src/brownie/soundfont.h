@@ -16,7 +16,7 @@
 #include "rom.h"
 #include "sf2.h"
 
-namespace supergbamidi::brownie
+namespace agbsf2::brownie
 {
 
 // The level of a PSG channel at volume v (0-15), as a full-scale waveform, relative to a full-scale FIFO sample: 2v of
@@ -110,4 +110,4 @@ private:
     std::map<GameSample, int> samples_;
 };
 
-} // namespace supergbamidi::brownie
+} // namespace agbsf2::brownie

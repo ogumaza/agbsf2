@@ -24,7 +24,7 @@
 #include "rom.h"
 #include "test_util.h"
 
-namespace supergbamidi::rd2
+namespace agbsf2::rd2
 {
 namespace
 {
@@ -1170,7 +1170,7 @@ void TestMusic()
     const Rom rom = cart.ToRom();
     std::string error;
 
-    const std::unique_ptr<Music> music = supergbamidi::OpenMusic(rom, Overrides(), error);
+    const std::unique_ptr<Music> music = agbsf2::OpenMusic(rom, Overrides(), error);
 
     SEQLIB_CHECK(music != nullptr);
     if (!music)
@@ -1210,4 +1210,4 @@ void RunTests()
     TestMusic();
 }
 
-} // namespace supergbamidi::rd2
+} // namespace agbsf2::rd2

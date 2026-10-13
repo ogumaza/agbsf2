@@ -5,7 +5,7 @@
 
     compare_notes.py ROM FOLDER [--songs 0-22] [--frames 12000] [-j JOBS]
 
-FOLDER holds supergbamidi's conversion of ROM: NAME_NN.mid and NAME_NN.sf2 for each song, or NAME_mp2k_NN.mid and
+FOLDER holds agbsf2's conversion of ROM: NAME_NN.mid and NAME_NN.sf2 for each song, or NAME_mp2k_NN.mid and
 NAME_mp2k_NN.sf2 if detection finds another of the game's drivers first. For every song, the driver runs under
 driver_emu.py for as long as the MIDI file lasts and two frames more, and each note it starts is matched with a MIDI
 note on the MIDI channel of its track, with the same key, that starts within a frame and a half of it. For each pair,
@@ -488,8 +488,8 @@ def check_song(rom, song, midi_path, sf2_path, frames_limit, report):
 
 
 def has_tracks(rom, song):
-    """Returns true if the song table's entry for `song` has a header with tracks and a music player, as the songs that
-    supergbamidi's --info lists with an address do."""
+    """Returns true if the song table's entry for `song` has a header with tracks and a music player. The songs that
+    agbsf2's --info lists with an address have both."""
     def u32(address):
         o = address - ROM_BASE
         return struct.unpack('<I', rom[o:o + 4])[0] if 0 <= o <= len(rom) - 4 else 0
@@ -506,7 +506,7 @@ def has_tracks(rom, song):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('rom', metavar='ROM', help='the game (.gba)')
-    p.add_argument('folder', metavar='FOLDER', help="the folder containing supergbamidi's output")
+    p.add_argument('folder', metavar='FOLDER', help="the folder containing agbsf2's output")
     p.add_argument('--songs', help='songs to check, such as 0-22 (default: every song with a MIDI file)')
     p.add_argument('--frames', type=int, default=12000, help='maximum frames to check per song (default: 12000)')
     p.add_argument('-v', '--verbose', action='store_true', help='list every difference, not just the first ten')

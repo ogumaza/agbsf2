@@ -23,7 +23,7 @@
 #include "sf2.h"
 #include "song_banks.h"
 
-namespace supergbamidi::quintet
+namespace agbsf2::quintet
 {
 namespace
 {
@@ -1490,4 +1490,4 @@ SongSummary ConvertSong(const Rom& rom, const DriverInfo& info, int song, const 
     return Run(rom, info, song, opt, shared, true);
 }
 
-} // namespace supergbamidi::quintet
+} // namespace agbsf2::quintet

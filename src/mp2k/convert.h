@@ -12,7 +12,7 @@
 #include "mp2k/soundfont.h"
 #include "rom.h"
 
-namespace supergbamidi::mp2k
+namespace agbsf2::mp2k
 {
 
 // Conversion settings and output paths.
@@ -50,4 +50,4 @@ SongSummary ConvertSong(const Rom& rom, const DriverInfo& info, int song, const 
 // Writes a text listing of every command of every track of a song. Returns false and sets `error` on failure.
 bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::string& path, std::string& error);
 
-} // namespace supergbamidi::mp2k
+} // namespace agbsf2::mp2k

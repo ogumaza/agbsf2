@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace supergbamidi::rd2
+namespace agbsf2::rd2
 {
 namespace
 {
@@ -1728,4 +1728,4 @@ bool Sequencer::MixVoice(Voice& v, uint32_t step)
     return false;
 }
 
-} // namespace supergbamidi::rd2
+} // namespace agbsf2::rd2

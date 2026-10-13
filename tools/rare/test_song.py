@@ -12,7 +12,7 @@ bytes. It also uses controllers 20-23, which set the attack, decay, sustain and 
 revision of Donkey Kong Country 3 and do nothing in the others: an attack of several frames, settings that change
 while a note plays, a sustain of 0, and a program change, which takes them away. Check it against the driver with
 
-    python tools/rare/compare_trace.py OUT.gba SUPERGBAMIDI --songs 0
+    python tools/rare/compare_trace.py OUT.gba AGBSF2 --songs 0
 """
 import struct
 import sys
@@ -28,8 +28,8 @@ def thumb_literal(rom, at):
 
 
 def find_driver(rom):
-    """Returns the tune table and whether commands give their channel in their high nibble, as supergbamidi's detection
-    finds them: from the init's copy of the driver's code and the table setup after it."""
+    """Returns the tune table and whether commands give their channel in their high nibble. Both come from where
+    agbsf2's detection finds them: the init's copy of the driver's code and the table setup after it."""
     for o in range(0, len(rom) - 12, 2):
         h = struct.unpack_from('<6H', rom, o)
         if (h[0] >> 8, h[1] >> 8, h[2] >> 8, h[3], h[4] >> 8, h[5]) != (0x49, 0x4A, 0x4B, 0x681B, 0x4C, 0x42A3):

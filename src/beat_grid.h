@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-namespace supergbamidi
+namespace agbsf2
 {
 
 // Estimates the beat for drivers that store note lengths in whole frames. The composer's tools rounded those lengths: a
@@ -161,4 +161,4 @@ private:
     std::vector<std::pair<double, double>> beats_;
 };
 
-} // namespace supergbamidi
+} // namespace agbsf2

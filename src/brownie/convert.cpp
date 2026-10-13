@@ -21,7 +21,7 @@
 #include "program.h"
 #include "sf2.h"
 
-namespace supergbamidi::brownie
+namespace agbsf2::brownie
 {
 namespace
 {
@@ -1400,4 +1400,4 @@ int PsgTuning(const Rom& rom, const DriverInfo& info, int& base)
     return median - 100 * base;
 }
 
-} // namespace supergbamidi::brownie
+} // namespace agbsf2::brownie

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
 
-"""Compare supergbamidi's MIDI files and SoundFonts with the game's driver, note by note.
+"""Compare agbsf2's MIDI files and SoundFonts with the game's driver, note by note.
 
-    compare_notes.py ROM SUPERGBAMIDI FOLDER [--songs 0-22]
+    compare_notes.py ROM AGBSF2 FOLDER [--songs 0-22]
 
-FOLDER holds SUPERGBAMIDI's conversion of ROM: NAME_NN.mid and NAME_NN.sf2
+FOLDER holds AGBSF2's conversion of ROM: NAME_NN.mid and NAME_NN.sf2
 for song NN, or NAME_konami_NN.mid and NAME_konami_NN.sf2 if another driver
 was detected first. Events in these MIDI files follow the song's beat and
 may be up to a frame and a half from the driver's timing. The script
@@ -35,8 +35,8 @@ that MIDI file plays through its SoundFont:
 * CC10 and CC11 give the driver's level on each side to within 1.5 dB, and
   CC91 follows the driver's echo routing, which PSG channels aren't part of.
 
-supergbamidi writes no MIDI file for a song with no notes. If
-`SUPERGBAMIDI --info` lists a song missing from FOLDER, the driver must be
+agbsf2 writes no MIDI file for a song with no notes. If
+`AGBSF2 --info` lists a song missing from FOLDER, the driver must be
 silent for its reported duration.
 
 It prints the first 10 differences in each song and the largest pitch and level
@@ -67,8 +67,8 @@ DUTY_NAMES = ['12.5%', '25%', '50%', '75%']
 FRAME_SECONDS = 280896 / 16777216
 MAX_SHIFT = 1.65  # frames that an event on the beat can be from the driver's frame, with a margin for the MIDI's ticks
 
-# The level supergbamidi plays every wave note at (kWaveRowLevel): the wave RAM image holds the note's volume, so this
-# is the level at the 100% volume code.
+# The level agbsf2 plays every wave note at (kWaveRowLevel): the level at the 100% volume code. The wave RAM image holds
+# the note's volume.
 WAVE_LEVEL = 60
 
 # The share of the PSG in the mix for each setting of SOUNDCNT_H bits 0-1 (the last is prohibited).
@@ -234,7 +234,7 @@ def midi_frames(events, frames):
 
 
 def midi_levels(cc10, cc11):
-    """Returns the per-side levels (full scale 128) that CC10 and CC11 stand for, the inverse of supergbamidi's
+    """Returns the per-side levels (full scale 128) that CC10 and CC11 stand for. The function inverts agbsf2's
     LevelsToControllers."""
     amplitude = (cc11 / 127) ** 2 * math.sqrt(2) * 127 / 128
     angle = cc10 / 127 * math.pi / 2
@@ -279,8 +279,8 @@ class Psg:
         return 0.75 if nr32 & 0x8000 else [0, 1, 0.5, 0.25][(nr32 >> 13) & 3]
 
     def side_scales(self):
-        """Returns the scale of a PSG channel's level on the left and on the right, against the master volume 7 and
-        the 100% PSG share that supergbamidi's levels assume."""
+        """Returns the scale of a PSG channel's level on the left and on the right. The scale is relative to the
+        master volume 7 and the 100% PSG share that agbsf2 bases its levels on."""
         nr50 = self.reg.get(0x04000080, 0)
         ratio = PSG_RATIOS[self.reg.get(0x04000082, 0) & 3]
         return ((nr50 >> 4 & 7) + 1) / 8 * ratio, ((nr50 & 7) + 1) / 8 * ratio
@@ -341,8 +341,8 @@ def run_driver(rom, song, frames):
 
 @functools.lru_cache(maxsize=None)
 def noise_samples(nr43):
-    """Returns the noise sample supergbamidi writes for an NR43 value, from an integer model of the LFSR at 32768 Hz,
-    and its loop."""
+    """Returns the noise sample that agbsf2 writes for an NR43 value, and the sample's loop. The sample comes from an
+    integer model of the LFSR at 32768 Hz."""
     shift, ratio, narrow = nr43 >> 4, nr43 & 7, nr43 & 8
     if shift >= 14:
         points = [0] * 64
@@ -457,8 +457,8 @@ def check_sample_track(rom, sample_table, soundfont, voice, midi, driver, rate, 
             if looped != z['looped'] or looped != flagged or (looped and z['loop'] != (loop, length)):
                 report.differ(where, '%s loops differently from the driver' % z['name'])
 
-        # Mixer pitch uses integer steps; allow an error of two steps. A FIFO plays at its timer rate, which
-        # supergbamidi rounds to the nearest 1/32 semitone.
+        # Mixer pitch uses integer steps; allow an error of two steps. A FIFO plays at its timer rate. agbsf2 rounds
+        # that rate to the nearest 1/32 semitone.
         if state['periods'] is not None:
             period = state['periods'][voice >> 1] or 0x10000
             driver_rate, tolerance, unit = 16777216 / period, 2.0, 'period %d' % period
@@ -581,14 +581,13 @@ def check_silent(name, driver, addr, report):
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('rom', metavar='ROM', help='the game (.gba) or a GSF rip of it')
-    p.add_argument('supergbamidi', metavar='SUPERGBAMIDI',
-                   help='supergbamidi, which gives the sample table\'s address')
+    p.add_argument('agbsf2', metavar='AGBSF2', help="the agbsf2 program, for the sample table's address")
     p.add_argument('folder', metavar='FOLDER', help='the conversion to check')
     p.add_argument('--songs', help='the songs to check, such as 0-22 or 1,4,9 (default: every song that --info '
                                    'lists or FOLDER has a MIDI file for)')
     a = p.parse_args()
     rom = load_rom(a.rom)
-    info = subprocess.run([a.supergbamidi, '--driver', 'konami', '--info', a.rom], capture_output=True,
+    info = subprocess.run([a.agbsf2, '--driver', 'konami', '--info', a.rom], capture_output=True,
                           encoding='utf-8', check=True).stdout
     sample_table = int(re.search(r'sample table 0x([0-9A-F]{8})', info).group(1), 16)
     midi_files = dict(conversion.midi_files(a.folder, 'konami'))
@@ -599,12 +598,12 @@ def main():
     lengths = {int(m.group(1)): round((int(m.group(2)) * 60 + float(m.group(3))) / FRAME_SECONDS)
                for m in re.finditer(r'^\s+(\d+)\s+0x[0-9A-F]{8}\s+\d+\s+(\d+):(\d+\.\d+)', info, re.M)}
     if not lengths:
-        raise SystemExit('found no songs in the song list of supergbamidi --info')
+        raise SystemExit('found no songs in the song list of agbsf2 --info')
     songs = parse_range(a.songs) if a.songs else sorted(set(lengths) | set(midi_files))
 
     # The same conversion with each event on the driver's frame.
     temporary = tempfile.TemporaryDirectory()
-    on_frames = conversion.frame_timed(a.supergbamidi, a.rom, 'konami', temporary.name, a.songs)
+    on_frames = conversion.frame_timed(a.agbsf2, a.rom, 'konami', temporary.name, a.songs)
 
     total = Report()
     checked = 0
@@ -652,7 +651,7 @@ def main():
                                                 report, name)
             played = '%5d notes' % notes
         elif song in lengths:
-            # supergbamidi writes no files for a song that plays no notes.
+            # agbsf2 writes no files for a song that plays no notes.
             frames = max(1, lengths[song])
             driver, _, addr = run_driver(rom, song, frames)
             track_names = list(PSG_TRACKS) + ['Voice %d' % v for v in range(addr.voice_count)]

@@ -9,7 +9,7 @@
 #include "rd2/sequencer.h"
 #include "thumb.h"
 
-namespace supergbamidi::rd2
+namespace agbsf2::rd2
 {
 namespace
 {
@@ -430,4 +430,4 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
     return true;
 }
 
-} // namespace supergbamidi::rd2
+} // namespace agbsf2::rd2

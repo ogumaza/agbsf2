@@ -32,7 +32,7 @@ on run argv
 	set expected to "good.gba: converted 2 songs" & return
 	set expected to expected & "partial.gba: converted 1 song, 1 failed" & return
 	set expected to expected & "bad.gba: no Konami, Rare, Quintet, Nintendo R&D2, Brownie Brown, Ubisoft Milan, Krawall or MP2K sound driver found: "
-	set expected to expected & "this game's music uses another engine, or a driver version supergbamidi doesn't know" & return
+	set expected to expected & "this game's music uses another engine, or a driver version that agbsf2 doesn't support" & return
 	set expected to expected & "set-01.minigsf: converted 2 songs" & return
 	set expected to expected & "set-02.minigsf: same music as set.gsflib, already converted"
 	considering case

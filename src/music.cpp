@@ -12,7 +12,7 @@
 
 #include "program.h"
 
-namespace supergbamidi
+namespace agbsf2
 {
 namespace
 {
@@ -39,8 +39,8 @@ const struct
 // Nintendo R&D2's, Brownie Brown's and Ubisoft Milan's drivers and Krawall need their code to find their other tables.
 std::string NotFound(Driver driver)
 {
-    const std::string kUnknown =
-        std::string(": this game's music uses another engine, or a driver version ") + kProgramName + " doesn't know";
+    const std::string kUnknown = std::string(": this game's music uses another engine, or a driver version that ") +
+                                 kProgramName + " doesn't support";
     switch (driver)
     {
     case Driver::kKonami:
@@ -196,4 +196,4 @@ bool PassComparison::Start::operator==(const Start& other) const
     return std::tie(at, channel, key, settings) == std::tie(other.at, other.channel, other.key, other.settings);
 }
 
-} // namespace supergbamidi
+} // namespace agbsf2

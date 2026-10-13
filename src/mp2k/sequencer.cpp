@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-namespace supergbamidi::mp2k
+namespace agbsf2::mp2k
 {
 namespace
 {
@@ -1691,4 +1691,4 @@ void Sequencer::Warn(const std::string& message)
     }
 }
 
-} // namespace supergbamidi::mp2k
+} // namespace agbsf2::mp2k

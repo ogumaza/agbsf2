@@ -17,7 +17,7 @@ instruments cover every kind of region: samples, both squares with and without a
 sweep, the wave voice, noise with and without a table of widths, a drum kit with pans of its own, an instrument with a
 sample for each key, and a key split. Check it against the driver with
 
-    python tools/rd2/compare_trace.py OUT.gba SUPERGBAMIDI --songs 0
+    python tools/rd2/compare_trace.py OUT.gba AGBSF2 --songs 0
 """
 import struct
 import sys

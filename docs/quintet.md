@@ -4,7 +4,7 @@ This document covers the song format, sequencer and sound hardware control
 in Quintet's driver for Banpresto's *Super Robot Taisen* games on the Game
 Boy Advance. It's based on the driver's code in *Super Robot Taisen A* (game
 code `ASRJ`), and the addresses given as examples come from that game. Other
-games put the driver and its data elsewhere, and `supergbamidi` finds them
+games put the driver and its data elsewhere. `agbsf2` finds them
 from the code (see [Locating the driver](#locating-the-driver)).
 
 The driver plays six channels, one for each of the GBA's sound channels: the
@@ -93,8 +93,8 @@ Its tables in ROM and its RAM hold:
 | `0x03000BB0` | the FIFO records: 2 of 0x24 bytes |
 | `0x03000BA8` | the random number generator's seed |
 
-`supergbamidi` doesn't convert sound effects, and with no sound effect playing,
-the output stage writes the music's image.
+`agbsf2` doesn't convert sound effects. With no sound effect playing, the
+output stage writes the music's image.
 
 ## Songs
 
@@ -103,9 +103,9 @@ starts with a header of 7 halfwords: its length in bytes, and then the offset
 of each channel's data from the start of the song. The length's bit 0 is
 ignored, and the next song starts that many bytes on. The game's play-song
 routine finds song *n* by skipping *n* songs this way, and passes its address
-to the driver. The driver doesn't know how many songs there are, so
-`supergbamidi` counts them up to the first whose header doesn't make sense: a
-length of less than 14, or a channel that starts outside the song.
+to the driver. Nothing in the driver gives the number of songs. `agbsf2`
+counts them up to the first whose header is invalid: a length of less than
+14, or a channel that starts outside the song.
 
 The play routine resets the music and sound effect channels and the PSG, sets
 the master volume to 7 on each side, and points each music channel at its data.
@@ -416,7 +416,7 @@ the seed at `0x0807D490`.
 
 ## Locating the driver
 
-`supergbamidi` finds the driver from its code, without fixed addresses. The play
+`agbsf2` finds the driver from its code, without fixed addresses. The play
 routine resets the channels from the table of channel records:
 
 ```
@@ -458,11 +458,11 @@ found by the instructions around them:
 
 The game gives the driver its files through routines that store each file's
 address in the driver's variables, or pass it to the sample loader with its
-bank in `r1`. `supergbamidi` finds the variables from the routines that read
+bank in `r1`. `agbsf2` finds the variables from the routines that read
 them, then the routines that store them (`ldr r1, =variable; str r0, [r1]` or
 `[r1, #4]`; `bx lr`), and then the game's calls to those routines. Before each
 call, the game looks the file up: `movs r0, #archive; movs r1, #file; bl
-lookup`. `supergbamidi` runs the game's lookup routine on a small Thumb
+lookup`. `agbsf2` runs the game's lookup routine on a small Thumb
 interpreter to get the file's address. It finds the music file the same way,
 from the game's calls to the play routine, with the lookup a few instructions
 before.
@@ -477,5 +477,5 @@ before.
 | the loader's callers for banks 0 and 1 | `B500 2100 Fxxx Fxxx BC01 4700` and `B500 2101 ...`, whose `bl` goes to the loader |
 
 `--song-table` and `--song-count` override the music file and the number of
-songs. Without the driver's code, `supergbamidi` can't find the driver's
-tables, so it can't read a game whose driver it doesn't recognise.
+songs. Without the driver's code, `agbsf2` can't find the driver's
+tables or read the game.

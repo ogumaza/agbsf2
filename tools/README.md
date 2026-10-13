@@ -1,7 +1,7 @@
 # Research and validation tools
 
 These Python scripts run a game's sound driver from a ROM you supply. Use
-them to study the drivers or check a change to `supergbamidi` against the
+them to study the drivers or check a change to `agbsf2` against the
 game's code. They aren't needed for conversion.
 
 Setup (Python 3.10 or later):
@@ -22,12 +22,12 @@ These scripts in `tools/` serve more than one driver:
 | `gbarom.py` | loads a `.gba` ROM or a GSF rip; used by the other scripts |
 | `gbadis.py` | recursive-descent Thumb/ARM disassembler that resolves literal pools, marks code a GSF rip has zeroed out, and can read code at the address the game copies it to |
 | `psg_model.py` | Game Boy APU model that renders a driver's PSG register writes to audio |
-| `conversion.py` | finds a driver's MIDI files in a folder of `supergbamidi`'s output, and compares a conversion on the song's beat with one made with `--frame-timing`; used by the `compare_notes.py` scripts |
+| `conversion.py` | finds a driver's MIDI files in a folder of `agbsf2`'s output, and compares a conversion on the song's beat with one made with `--frame-timing`; used by the `compare_notes.py` scripts |
 
 A conversion includes songs from every driver found in the game. Files from
 drivers other than the first include the driver's name. The `compare_trace.py`
 scripts, and the `compare_notes.py` scripts apart from Rare's and MP2K's, run
-`supergbamidi` with `--driver`. Each `compare_notes.py` checks only its
+`agbsf2` with `--driver`. Each `compare_notes.py` checks only its
 driver's files.
 
 Driver-specific scripts are in `tools/konami/`, `tools/rare/`, `tools/quintet/`,
@@ -39,19 +39,19 @@ Driver-specific scripts are in `tools/konami/`, `tools/rare/`, `tools/quintet/`,
 | Script | Description |
 |---|---|
 | `driver_emu.py` | runs the game's sound driver under the Unicorn ARM emulator: per-frame track output records, DirectSound mixer output, PSG register writes |
-| `compare_trace.py` | diffs `supergbamidi --trace` against the emulated driver, frame by frame, for every song |
+| `compare_trace.py` | diffs `agbsf2 --trace` against the emulated driver, frame by frame, for every song |
 | `compare_notes.py` | checks a conversion's MIDI files and SoundFonts against the emulated driver, note by note |
 | `compare_audio.py` | compares two renders: loudness envelopes, spectra and level ratio |
 | `test_song.py` | writes a copy of a ROM with a test song for commands and outputs that the game's songs may not use |
 
-### Checking supergbamidi against Konami's driver
+### Checking agbsf2 against Konami's driver
 
 ```sh
-python tools/konami/compare_trace.py rom.gba build/supergbamidi        # the sequencer: every song, 12000 frames
-build/supergbamidi -q -o rom rom.gba                                   # convert every song into rom/
-python tools/konami/compare_notes.py rom.gba build/supergbamidi rom    # the conversion, note by note
+python tools/konami/compare_trace.py rom.gba build/agbsf2              # the sequencer: every song, 12000 frames
+build/agbsf2 -q -o rom rom.gba                                         # convert every song into rom/
+python tools/konami/compare_notes.py rom.gba build/agbsf2 rom          # the conversion, note by note
 python tools/konami/driver_emu.py rom.gba render-ds 10 3000 ref.wav    # the driver's sample mix, song 10
-build/supergbamidi -q -o out -s 10 -t 4-15 rom.gba                     # the same tracks as MIDI + SF2
+build/agbsf2 -q -o out -s 10 -t 4-15 rom.gba                           # the same tracks as MIDI + SF2
 fluidsynth -ni -R 0 -C 0 -F mine.wav out/rom_10.sf2 out/rom_10.mid
 python tools/konami/compare_audio.py ref.wav mine.wav
 ```
@@ -150,33 +150,33 @@ check it.
 | Script | Description |
 |---|---|
 | `driver_emu.py` | runs the game's sound driver under the Unicorn ARM emulator and records its note slots after each frame or renders the mixer's output |
-| `compare_trace.py` | diffs `supergbamidi --trace` against the emulated driver, frame by frame, for every tune |
+| `compare_trace.py` | diffs `agbsf2 --trace` against the emulated driver, frame by frame, for every tune |
 | `compare_notes.py` | checks a conversion's MIDI files and SoundFonts against the emulated driver, note by note |
 | `compare_audio.py` | compares two renders: loudness envelopes, spectra and level ratio |
 | `test_song.py` | writes a copy of a ROM with a test song for commands and modes that the game's tunes may not use |
 
-### Checking supergbamidi against Rare's driver
+### Checking agbsf2 against Rare's driver
 
 ```sh
-python tools/rare/compare_trace.py rom.gba build/supergbamidi     # the model: every tune, 12000 frames
-build/supergbamidi -q -o rom rom.gba                              # convert every tune into rom/
+python tools/rare/compare_trace.py rom.gba build/agbsf2           # the model: every tune, 12000 frames
+build/agbsf2 -q -o rom rom.gba                                    # convert every tune into rom/
 python tools/rare/compare_notes.py rom.gba rom                    # the conversion, note by note
 python tools/rare/driver_emu.py rom.gba render 10 3000 ref.wav    # the driver's output for tune 10
 fluidsynth -ni -R 0 -C 0 -F mine.wav rom/rom_10.sf2 rom/rom_10.mid
 python tools/rare/compare_audio.py ref.wav mine.wav
 ```
 
-`compare_trace.py` runs `supergbamidi --trace` and the driver side by side, and
-compares every note slot after each frame: its state, channel, keys, velocity,
-envelope phase and level, instrument, and its position in the sample to a
-2^23rd of a byte. It reports the first difference in each tune that has one.
-`-j` compares several tunes at once.
+`compare_trace.py` runs `agbsf2 --trace` and the driver side by side. After
+each frame, the script compares every note slot: its state, channel, keys,
+velocity, envelope phase and level, instrument, and its position in the sample
+to a 2^23rd of a byte. It reports the first difference in each tune that has
+one. `-j` compares several tunes at once.
 
 `compare_notes.py` checks every note in a folder of MIDI files against what the
 driver plays on the same frame: the note's start and release, its velocity, the
 channel's volume, the sample that the SoundFont plays for it, and its pitch on
-every frame, from the SoundFont zone's tuning and the channel's pitch bend. It
-also checks the zone's envelope against the one that supergbamidi works out
+every frame, from the SoundFont zone's tuning and the channel's pitch bend. The
+script also checks the zone's envelope against the one that agbsf2 works out
 from the instrument and the settings from controllers 20-23 (in the revision
 that has them) that the driver's RAM held as each phase started. The MIDI file
 keeps each event on its own tick, where the driver plays it on a frame, so it
@@ -251,27 +251,27 @@ check it.
 | Script | Description |
 |---|---|
 | `driver_emu.py` | runs the game's sound driver under the Unicorn ARM emulator: its writes to the sound, DMA and timer registers, each music channel's position and countdown, and a render of its output |
-| `compare_trace.py` | diffs `supergbamidi --trace` against the emulated driver's register writes, frame by frame, for every song |
+| `compare_trace.py` | diffs `agbsf2 --trace` against the emulated driver's register writes, frame by frame, for every song |
 | `compare_notes.py` | checks a conversion's MIDI files and SoundFonts against what the emulated driver plays, frame by frame |
 
-### Checking supergbamidi against Quintet's driver
+### Checking agbsf2 against Quintet's driver
 
 ```sh
-python tools/quintet/compare_trace.py rom.gba build/supergbamidi      # the model: every song, 12000 frames
-build/supergbamidi -q -o rom rom.gba                                  # convert every song into rom/
-python tools/quintet/compare_notes.py rom.gba build/supergbamidi rom  # the conversion, frame by frame
+python tools/quintet/compare_trace.py rom.gba build/agbsf2            # the model: every song, 12000 frames
+build/agbsf2 -q -o rom rom.gba                                        # convert every song into rom/
+python tools/quintet/compare_notes.py rom.gba build/agbsf2 rom        # the conversion, frame by frame
 python tools/quintet/driver_emu.py rom.gba render 10 3000 ref.wav     # the driver's output for song 10
-build/supergbamidi -q -l 1 -o out -s 10 rom.gba
+build/agbsf2 -q -l 1 -o out -s 10 rom.gba
 fluidsynth -ni -R 0 -C 0 -F mine.wav out/rom_10.sf2 out/rom_10.mid
 python tools/konami/compare_audio.py ref.wav mine.wav
 ```
 
-`compare_trace.py` runs `supergbamidi --trace` and the driver side by side, and
-compares every write the driver makes to the sound registers, DMA 1 and 2 and
-timers 0 and 1, in order, starting with the play routine's. It leaves out the
-bytes a FIFO start writes into the FIFO, which follow from the DMA's source. It
-reports the first difference in each song that has one. `-j` compares several
-songs at once.
+`compare_trace.py` runs `agbsf2 --trace` and the driver side by side. From the
+play routine's writes on, the script compares every write that the driver makes
+to the sound registers, DMA 1 and 2 and timers 0 and 1, in order. It leaves out
+the bytes a FIFO start writes into the FIFO. Those bytes follow from the DMA's
+source. The script reports the first difference in each song that has one.
+`-j` compares several songs at once.
 
 `compare_notes.py` works out, from the driver's register writes, what each of
 the 6 channels plays in each frame: whether it sounds, its level on each side,
@@ -331,25 +331,25 @@ built in. For another game, add an entry to `GAMES` with:
 | Script | Description |
 |---|---|
 | `driver_emu.py` | runs the game's sound driver under the Unicorn ARM emulator: each voice's state and the PSG register writes, frame by frame, the players and tracks in use, and a render of the mixer's output |
-| `compare_trace.py` | diffs `supergbamidi --trace` against the emulated driver's voices and PSG register writes, frame by frame, for every sequence |
+| `compare_trace.py` | diffs `agbsf2 --trace` against the emulated driver's voices and PSG register writes, frame by frame, for every sequence |
 | `compare_notes.py` | checks a conversion's MIDI files and SoundFonts against the notes the emulated driver plays |
 | `test_song.py` | copies a ROM and replaces sequence 0 with a test sequence for the commands and kinds of instrument that a game's sequences may not use |
 
-### Checking supergbamidi against Nintendo R&D2's driver
+### Checking agbsf2 against Nintendo R&D2's driver
 
 ```sh
-python tools/rd2/compare_trace.py rom.gba build/supergbamidi      # the model: every sequence, 12000 frames
-build/supergbamidi -q -o rom rom.gba                              # convert every sequence into rom/
-python tools/rd2/compare_notes.py rom.gba build/supergbamidi rom  # the conversion, note by note
+python tools/rd2/compare_trace.py rom.gba build/agbsf2            # the model: every sequence, 12000 frames
+build/agbsf2 -q -o rom rom.gba                                    # convert every sequence into rom/
+python tools/rd2/compare_notes.py rom.gba build/agbsf2 rom        # the conversion, note by note
 python tools/rd2/test_song.py rom.gba test.gba                    # the test sequence, as sequence 0
-python tools/rd2/compare_trace.py test.gba build/supergbamidi --songs 0
+python tools/rd2/compare_trace.py test.gba build/agbsf2 --songs 0
 python tools/rd2/driver_emu.py rom.gba render 5 3000 ref.wav --tracks 1  # track 1 of sequence 5
-build/supergbamidi -q -l 1 -o out -s 5 -t 1 rom.gba
+build/agbsf2 -q -l 1 -o out -s 5 -t 1 rom.gba
 fluidsynth -ni -r 10512 -F mine.wav out/rom_05.sf2 out/rom_05.mid
 python tools/konami/compare_audio.py ref.wav mine.wav
 ```
 
-`compare_trace.py` runs `supergbamidi --trace` and the driver side by side.
+`compare_trace.py` runs `agbsf2 --trace` and the driver side by side.
 After each frame it compares every field of each voice that plays, the order of
 the mixer's list of sample voices, and every write to the PSG's registers. It
 reports the first difference in each sequence that has one. `-j` compares
@@ -372,8 +372,8 @@ no MIDI file mustn't play any notes.
 
 `driver_emu.py render` writes the mixer's stereo output at 10512 Hz: the 8-bit
 samples the driver sends to the FIFOs, without the PSG. `--tracks` mutes the
-player's other tracks with their mute flags, so that a track's output can be
-compared with a render of `supergbamidi -t` alone.
+player's other tracks with their mute flags. A track's output can then be
+compared with a render of `agbsf2 -t` alone.
 
 ### Working out Nintendo R&D2's driver
 
@@ -432,9 +432,9 @@ with:
   routine, as the first music number that plays it. Otherwise `play_music` is
   `None`.
 
-The emulator reads 0 from memory outside the GBA's, as `supergbamidi` does,
-where a region read from a bank's table of offsets can find the address of its
-sample. `test_song.py` pads a ROM that ends before its free
+A region read from a bank's table of offsets can find its sample's address
+outside the GBA's memory. The emulator reads 0 there, and so does `agbsf2`.
+`test_song.py` pads a ROM that ends before its free
 space with 0xFF, and writes the test sequence in the form of the game's
 revision.
 
@@ -443,21 +443,21 @@ revision.
 | Script | Description |
 |---|---|
 | `driver_emu.py` | runs the game's MP2K driver under the Unicorn ARM emulator and records its sound channels after each frame, or renders the mixer's output |
-| `compare_trace.py` | diffs `supergbamidi --trace` against the emulated driver, frame by frame, for every song |
+| `compare_trace.py` | diffs `agbsf2 --trace` against the emulated driver, frame by frame, for every song |
 | `compare_notes.py` | checks a conversion's MIDI files and SoundFonts against the emulated driver, note by note |
 
-### Checking supergbamidi against MP2K
+### Checking agbsf2 against MP2K
 
 ```sh
-python tools/mp2k/compare_trace.py rom.gba build/supergbamidi     # the model: every song, 12000 frames
-build/supergbamidi -q -o rom rom.gba                              # convert every song into rom/
+python tools/mp2k/compare_trace.py rom.gba build/agbsf2           # the model: every song, 12000 frames
+build/agbsf2 -q -o rom rom.gba                                    # convert every song into rom/
 python tools/mp2k/compare_notes.py rom.gba rom                    # the conversion, note by note
 python tools/mp2k/driver_emu.py rom.gba render 10 3000 ref.wav    # the driver's DirectSound output for song 10
 ```
 
-`compare_trace.py` runs `supergbamidi --trace` and the driver side by side, and
-compares every sound channel that plays after each frame: its status, track,
-keys, velocity, priority, envelope level and volumes, then a DirectSound
+`compare_trace.py` runs `agbsf2 --trace` and the driver side by side. After
+each frame, the script compares every sound channel that plays: its status,
+track, keys, velocity, priority, envelope level and volumes, then a DirectSound
 channel's rate, sample, and position in it to a 2^23rd of a point, or a PSG
 channel's frequency setting, envelope goal and counter, sustain level, outputs
 and wave. It reports the first difference in each song that has one. `-j`
@@ -494,8 +494,8 @@ channel, which then doesn't move on through its sample.
 
 ### Working out MP2K
 
-The driver's routines have the names of the SDK's m4a library, and the
-patterns that `supergbamidi` finds them by are in `docs/mp2k.md`:
+The driver's routines have the names of the SDK's m4a library. The patterns
+that `agbsf2` finds them by are in `docs/mp2k.md`:
 
 1. **Find the entry points.** `m4aSongNumStart` has the same code in every
    version, apart from two registers that some games' compiler swaps, and its
@@ -550,23 +550,23 @@ a 9-bit point, at twice the mix rate; `render` averages them.
 | Script | Description |
 |---|---|
 | `driver_emu.py` | runs the game's sound driver under the Unicorn ARM emulator: its writes to the sound registers, each sound channel's record and each mixer voice's or FIFO's sample, its variables, and a render of its output |
-| `compare_trace.py` | diffs `supergbamidi --trace` against the emulated driver, frame by frame, for every sound |
+| `compare_trace.py` | diffs `agbsf2 --trace` against the emulated driver, frame by frame, for every sound |
 | `compare_notes.py` | checks a conversion's MIDI files and SoundFonts against what the emulated driver plays, frame by frame |
 
-### Checking supergbamidi against Brownie Brown's driver
+### Checking agbsf2 against Brownie Brown's driver
 
 ```sh
-python tools/brownie/compare_trace.py rom.gba build/supergbamidi -j 4  # the model: every sound, 12000 frames
-build/supergbamidi -q -o rom rom.gba                                   # convert every sound into rom/
-python tools/brownie/compare_notes.py rom.gba build/supergbamidi rom   # the conversion, frame by frame
+python tools/brownie/compare_trace.py rom.gba build/agbsf2 -j 4        # the model: every sound, 12000 frames
+build/agbsf2 -q -o rom rom.gba                                         # convert every sound into rom/
+python tools/brownie/compare_notes.py rom.gba build/agbsf2 rom         # the conversion, frame by frame
 python tools/brownie/driver_emu.py rom.gba render 10 3000 ref.wav --channels 8,9,10,11,12
-build/supergbamidi -q -l 1 -o out -s 10 -t 8-12 rom.gba               # the same channels as MIDI + SF2
+build/agbsf2 -q -l 1 -o out -s 10 -t 8-12 rom.gba                     # the same channels as MIDI + SF2
 fluidsynth -ni -R 0 -C 0 -r 32768 -F mine.wav out/rom_010.sf2 out/rom_010.mid
 python tools/konami/compare_audio.py ref.wav mine.wav
 ```
 
-`compare_trace.py` runs `supergbamidi --trace` and the driver side by side, and
-compares, frame by frame, every write the driver makes to the sound registers,
+`compare_trace.py` runs `agbsf2 --trace` and the driver side by side. Frame by
+frame, the script compares every write the driver makes to the sound registers,
 in order, each sound channel's record, each mixer voice's or FIFO's sample, and
 the driver's other variables. It reports the first difference in each sound
 that has one. `-j` compares several sounds at once.
@@ -663,26 +663,26 @@ from `r5` is the same as in the model.
 | Script | Description |
 |---|---|
 | `driver_emu.py` | runs the game's build of Krawall under the Unicorn ARM emulator: the mixer's variables, the player's record, each of the module's channels and each mixer channel, and a render of its output |
-| `compare_trace.py` | diffs `supergbamidi --trace` against the emulated player, frame by frame, for every module |
+| `compare_trace.py` | diffs `agbsf2 --trace` against the emulated player, frame by frame, for every module |
 | `compare_notes.py` | checks a conversion's MIDI files and SoundFonts against what the emulated player plays, tick by tick |
 | `test_song.py` | writes a copy of a game with hand-made modules for the parts of the player that the game's modules may not use |
 
-### Checking supergbamidi against Krawall
+### Checking agbsf2 against Krawall
 
 ```sh
-python tools/krawall/compare_trace.py rom.gba build/supergbamidi -j 4  # the model: every module, 12000 frames
-build/supergbamidi -q -o rom rom.gba                                   # convert every module into rom/
-python tools/krawall/compare_notes.py rom.gba build/supergbamidi rom   # the conversion, tick by tick
+python tools/krawall/compare_trace.py rom.gba build/agbsf2 -j 4        # the model: every module, 12000 frames
+build/agbsf2 -q -o rom rom.gba                                         # convert every module into rom/
+python tools/krawall/compare_notes.py rom.gba build/agbsf2 rom         # the conversion, tick by tick
 python tools/krawall/test_song.py rom.gba test.gba                     # modules with every effect
-python tools/krawall/compare_trace.py test.gba build/supergbamidi --songs N-M  # the last 3 that --info lists
+python tools/krawall/compare_trace.py test.gba build/agbsf2 --songs N-M        # the last 3 that --info lists
 python tools/krawall/driver_emu.py rom.gba render ADDRESS 3000 ref.wav  # a module's address, from --info
 ```
 
-`compare_trace.py` runs `supergbamidi --trace` and the game's code side by side,
-and compares, frame by frame, the mixer's variables (the master volumes, the
-mixer's quality settings, the sound timer's step and count, the music's volume
-and the count of plays), the player's record, each of the module's channels and
-each mixer channel, in hex as Krawall keeps them in RAM, whenever they change.
+`compare_trace.py` runs `agbsf2 --trace` and the game's code side by side.
+Frame by frame, the script compares the changes to the mixer's variables (the
+master volumes, the mixer's quality settings, the sound timer's step and count,
+the music's volume and the count of plays), the player's record, each of the
+module's channels and each mixer channel, in hex as Krawall keeps them in RAM.
 It reports the first difference in each module that has one. `-j` compares
 several modules at once.
 
@@ -709,7 +709,7 @@ play as before.
 `driver_emu.py render` writes the mixer's 8-bit stereo output at the mixer's
 rate. It names a module by the address of its header, which `--info` lists.
 `--song N` plays song N of a module that separates songs with `+++`, in song
-mode. supergbamidi converts each such song that way. The two comparisons play it
+mode. agbsf2 converts each such song that way. The two comparisons play it
 that way too.
 
 ### Working out Krawall
@@ -763,20 +763,20 @@ instruments.
 | Script | Description |
 |---|---|
 | `driver_emu.py` | runs the game's sound engine under the Unicorn ARM emulator: each frame's writes to the PSG's registers, the track and each voice that the mixer plays, and a render of the mixer's output |
-| `compare_trace.py` | diffs `supergbamidi --trace` against the emulated engine, frame by frame, for every piece of music |
+| `compare_trace.py` | diffs `agbsf2 --trace` against the emulated engine, frame by frame, for every piece of music |
 | `compare_notes.py` | checks a conversion's MIDI files and SoundFonts against the samples and PSG notes that the emulated engine plays |
 
-### Checking supergbamidi against Ubisoft Milan's driver
+### Checking agbsf2 against Ubisoft Milan's driver
 
 ```sh
-python tools/ubimilan/compare_trace.py rom.gba build/supergbamidi -j 4  # the model: every piece, 12000 frames
-build/supergbamidi -q -o rom rom.gba                                    # convert every piece into rom/
-python tools/ubimilan/compare_notes.py rom.gba build/supergbamidi rom   # the conversion, note by note
+python tools/ubimilan/compare_trace.py rom.gba build/agbsf2 -j 4        # the model: every piece, 12000 frames
+build/agbsf2 -q -o rom rom.gba                                          # convert every piece into rom/
+python tools/ubimilan/compare_notes.py rom.gba build/agbsf2 rom         # the conversion, note by note
 python tools/ubimilan/driver_emu.py rom.gba render 3 600 ref.wav        # piece 3's first 600 frames
 ```
 
-`compare_trace.py` runs `supergbamidi --trace` and the game's code side by
-side, and compares, frame by frame, every write to the PSG's registers, the
+`compare_trace.py` runs `agbsf2 --trace` and the game's code side by side.
+Frame by frame, the script compares every write to the PSG's registers, the
 track's countdown, next command and next sequence, and each voice that the
 mixer plays. A key outside channel 9's kit makes the engine play bytes from a
 mirror of the ROM. The model leaves those notes out. The script doesn't compare

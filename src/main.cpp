@@ -25,12 +25,12 @@
 #include "program.h"
 #include "rom.h"
 
-#ifndef SUPERGBAMIDI_VERSION
-#define SUPERGBAMIDI_VERSION "dev"
+#ifndef AGBSF2_VERSION
+#define AGBSF2_VERSION "dev"
 #endif
 
 namespace fs = std::filesystem;
-using namespace supergbamidi;
+using namespace agbsf2;
 
 namespace
 {
@@ -115,7 +115,7 @@ void Usage(FILE* f)
                  "  -q, --quiet           only print warnings and errors\n"
                  "  -h, --help            show this help\n"
                  "      --version         show the version\n",
-                 kProgramName, SUPERGBAMIDI_VERSION, kProgramName);
+                 kProgramName, AGBSF2_VERSION, kProgramName);
 }
 
 struct Options
@@ -227,7 +227,7 @@ int ParseArgs(const std::vector<std::string>& args, Options& o)
         }
         else if (a == "--version")
         {
-            std::printf("%s %s\n", kProgramName, SUPERGBAMIDI_VERSION);
+            std::printf("%s %s\n", kProgramName, AGBSF2_VERSION);
             return -1;
         }
         else if (a == "-o" || a == "--output")

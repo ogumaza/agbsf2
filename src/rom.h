@@ -12,7 +12,7 @@
 
 #include "xsflib/text.h"
 
-namespace supergbamidi
+namespace agbsf2
 {
 
 constexpr uint32_t kRomBase = 0x08000000;
@@ -116,4 +116,4 @@ private:
     std::string library_;
 };
 
-} // namespace supergbamidi
+} // namespace agbsf2

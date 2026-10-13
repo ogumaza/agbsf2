@@ -17,7 +17,7 @@
 #include "sf2.h"
 #include "song_banks.h"
 
-namespace supergbamidi::quintet
+namespace agbsf2::quintet
 {
 
 // The CPU cycles in a frame, and a second's.
@@ -129,4 +129,4 @@ private:
     std::map<uint32_t, int> pcm_copies_; // the number of SF2 samples made from each of the game's samples
 };
 
-} // namespace supergbamidi::quintet
+} // namespace agbsf2::quintet

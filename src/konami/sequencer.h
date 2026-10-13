@@ -17,7 +17,7 @@
 #include "konami/seqformat.h"
 #include "rom.h"
 
-namespace supergbamidi::konami
+namespace agbsf2::konami
 {
 
 // One track's requests to its sound channel in one frame. This is the driver's 12-byte per-track output record, plus
@@ -380,4 +380,4 @@ private:
     std::array<Track, kTracks> tracks_{};
 };
 
-} // namespace supergbamidi::konami
+} // namespace agbsf2::konami

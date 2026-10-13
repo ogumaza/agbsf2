@@ -24,7 +24,7 @@
 #include "sf2.h"
 #include "song_banks.h"
 
-namespace supergbamidi::konami
+namespace agbsf2::konami
 {
 namespace
 {
@@ -707,7 +707,7 @@ private:
     // Mirrors the Dungeon Dice Monsters voice update. Every frame sets the voice's level from its track's volume. A
     // flagged record starts a note at the sample's rate or the rate from the sample period table; volume 0 stops the
     // voice. Flag 0x40 instead treats the record's pitch as a timer period and changes the playing note's rate. On
-    // hardware this also changes the other voice sharing the FIFO, which supergbamidi doesn't model.
+    // hardware this also changes the other voice sharing the FIFO. agbsf2 doesn't model that change.
     void SampleDungeonDice(uint32_t f, const TrackOutput& o, std::vector<Event>& out,
                            std::vector<std::string>& warnings)
     {
@@ -1907,4 +1907,4 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
     return WriteFile(path, std::vector<uint8_t>(text.begin(), text.end()), error);
 }
 
-} // namespace supergbamidi::konami
+} // namespace agbsf2::konami

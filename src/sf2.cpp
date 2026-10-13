@@ -11,7 +11,7 @@
 #include "files.h"
 #include "program.h"
 
-namespace supergbamidi
+namespace agbsf2
 {
 
 sf2::Preset MakePreset(const std::string& name, uint16_t bank, uint16_t program, int instrument)
@@ -62,4 +62,4 @@ bool Sf2File::Write(const std::string& path, std::string& error) const
     return WriteFile(path, bytes, error);
 }
 
-} // namespace supergbamidi
+} // namespace agbsf2

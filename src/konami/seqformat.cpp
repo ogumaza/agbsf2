@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <string>
 
-namespace supergbamidi::konami
+namespace agbsf2::konami
 {
 namespace
 {
@@ -796,4 +796,4 @@ std::string Describe(const Command& c, int track, Revision revision)
     return buf;
 }
 
-} // namespace supergbamidi::konami
+} // namespace agbsf2::konami

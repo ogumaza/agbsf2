@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-namespace supergbamidi::quintet
+namespace agbsf2::quintet
 {
 namespace
 {
@@ -384,4 +384,4 @@ void SoundfontBuilder::AddPreset(const std::string& name, int bank, int program,
     file_.presets.push_back(MakePreset(name, uint16_t(bank), uint16_t(program), instrument));
 }
 
-} // namespace supergbamidi::quintet
+} // namespace agbsf2::quintet

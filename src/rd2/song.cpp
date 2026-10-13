@@ -10,7 +10,7 @@
 #include "files.h"
 #include "rd2/sequencer.h"
 
-namespace supergbamidi::rd2
+namespace agbsf2::rd2
 {
 namespace
 {
@@ -370,4 +370,4 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
     return WriteFile(path, data, error);
 }
 
-} // namespace supergbamidi::rd2
+} // namespace agbsf2::rd2

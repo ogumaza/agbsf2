@@ -12,7 +12,7 @@
 #include "quintet/soundfont.h"
 #include "rom.h"
 
-namespace supergbamidi::quintet
+namespace agbsf2::quintet
 {
 
 // Conversion settings and output paths.
@@ -47,4 +47,4 @@ SongSummary InspectSong(const Rom& rom, const DriverInfo& info, int song, const 
 SongSummary ConvertSong(const Rom& rom, const DriverInfo& info, int song, const ConvertOptions& opt,
                         SoundfontBuilder* shared);
 
-} // namespace supergbamidi::quintet
+} // namespace agbsf2::quintet

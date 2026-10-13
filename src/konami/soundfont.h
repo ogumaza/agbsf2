@@ -15,7 +15,7 @@
 #include "sf2.h"
 #include "song_banks.h"
 
-namespace supergbamidi::konami
+namespace agbsf2::konami
 {
 
 // Level of a full-scale bipolar waveform, relative to a full-scale DirectSound sample, produced by a PSG channel at
@@ -121,4 +121,4 @@ private:
     std::map<int, Pitch> pitch_;
 };
 
-} // namespace supergbamidi::konami
+} // namespace agbsf2::konami

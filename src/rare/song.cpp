@@ -4,7 +4,7 @@
 
 #include <cstdio>
 
-namespace supergbamidi::rare
+namespace agbsf2::rare
 {
 namespace
 {
@@ -256,4 +256,4 @@ uint32_t SplitInstrument(const Rom& rom, const Instrument& split, int key)
     return rom.U32(split.key_table + 4u * index);
 }
 
-} // namespace supergbamidi::rare
+} // namespace agbsf2::rare

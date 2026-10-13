@@ -13,7 +13,7 @@
 
 #include "rom.h"
 
-namespace supergbamidi
+namespace agbsf2
 {
 
 // A Thumb instruction to look for: its bits under `mask` have to equal `value`.
@@ -46,4 +46,4 @@ std::vector<uint32_t> FindCalls(const Rom& rom, uint32_t target);
 std::optional<uint32_t> RunThumb(const Rom& rom, uint32_t address, const std::array<uint32_t, 4>& args,
                                  int max_steps = 256);
 
-} // namespace supergbamidi
+} // namespace agbsf2

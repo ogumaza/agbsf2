@@ -8,7 +8,7 @@
 #include <string_view>
 #include <vector>
 
-namespace supergbamidi
+namespace agbsf2
 {
 namespace
 {
@@ -756,4 +756,4 @@ std::optional<uint32_t> RunThumb(const Rom& rom, uint32_t address, const std::ar
     return interpreter.Run(address, max_steps);
 }
 
-} // namespace supergbamidi
+} // namespace agbsf2

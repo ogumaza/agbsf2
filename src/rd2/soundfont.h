@@ -15,7 +15,7 @@
 #include "sf2.h"
 #include "song_banks.h"
 
-namespace supergbamidi::rd2
+namespace agbsf2::rd2
 {
 
 // Returns the level of a PSG voice at its full volume, as a share of a full-scale sample at the driver's default
@@ -95,4 +95,4 @@ private:
     std::map<uint8_t, int> noises_;
 };
 
-} // namespace supergbamidi::rd2
+} // namespace agbsf2::rd2

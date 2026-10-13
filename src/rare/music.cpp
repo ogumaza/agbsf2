@@ -19,7 +19,7 @@
 #include "rare/soundfont.h"
 #include "sf2.h"
 
-namespace supergbamidi::rare
+namespace agbsf2::rare
 {
 namespace
 {
@@ -211,4 +211,4 @@ std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std
     return std::make_unique<RareMusic>(rom, std::move(info));
 }
 
-} // namespace supergbamidi::rare
+} // namespace agbsf2::rare

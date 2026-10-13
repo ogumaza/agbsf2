@@ -23,7 +23,7 @@
 #include "sf2.h"
 #include "test_util.h"
 
-namespace supergbamidi::brownie
+namespace agbsf2::brownie
 {
 namespace
 {
@@ -758,7 +758,7 @@ void TestMusic()
     forced.driver = Driver::kBrownie;
     std::string error, table_error, forced_error;
 
-    const std::unique_ptr<Music> music = supergbamidi::OpenMusic(rom, Overrides(), error);
+    const std::unique_ptr<Music> music = agbsf2::OpenMusic(rom, Overrides(), error);
     const std::unique_ptr<Music> bare_music = brownie::OpenMusic(bare_rom, table, table_error);
     const std::unique_ptr<Music> bare_forced = brownie::OpenMusic(bare_rom, forced, forced_error);
 
@@ -917,4 +917,4 @@ void RunTests()
     TestVacationConversion();
 }
 
-} // namespace supergbamidi::brownie
+} // namespace agbsf2::brownie

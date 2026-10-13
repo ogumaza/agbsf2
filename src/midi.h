@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 
-// supergbamidi's names for seqlib's MIDI file builder.
+// agbsf2's names for seqlib's MIDI file builder.
 
 #pragma once
 
 #include "seqlib/midi/builder.h"
 
-namespace supergbamidi
+namespace agbsf2
 {
 
 namespace cc = seqlib::midi::cc;
@@ -15,4 +15,4 @@ using seqlib::midi::LevelsToControllers;
 using MidiFile = seqlib::midi::FileBuilder;
 using MidiTrack = seqlib::midi::TrackBuilder;
 
-} // namespace supergbamidi
+} // namespace agbsf2

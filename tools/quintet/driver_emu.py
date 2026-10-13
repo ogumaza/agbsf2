@@ -3,7 +3,7 @@
 
 """Run Quintet's GBA sound driver under the Unicorn ARM emulator.
 
-This is the reference for checking supergbamidi's model of the driver. It calls the game's sound init, play-song
+This is the reference for checking agbsf2's model of the driver. It calls the game's sound init, play-song
 and per-frame routines (no BIOS, no video, no interrupts), and captures what the driver does with the hardware:
 
     trace       every write to the sound, DMA 1 and 2 and timer 0 and 1 registers, frame by frame, except the bytes a

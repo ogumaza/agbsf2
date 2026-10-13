@@ -4,12 +4,12 @@ Krawall is Sebastian Kienzl's XM and S3M module player for the Game Boy
 Advance. Its converter translates tracker files into Krawall modules, with
 sample and instrument tables shared by all the game's modules. The library
 plays them through a software mixer. This document describes the data,
-player and mixer in the 2003/09/01 build supported by `supergbamidi`, using
-the US release of *Digimon Racing* (game code `BDGE`) for example addresses.
+player and mixer in the 2003/09/01 build that `agbsf2` supports. The example
+addresses come from the US release of *Digimon Racing* (game code `BDGE`).
 Later builds, dated 2004/09/17, 2004/11/14 and 2005-04-21 in their version
 strings, changed the code and data formats and aren't supported. `--info`
 prints the version string stored in the ROM, which is
-`$Id: Krawall $Date: 2003/09/01 06:51:01 $` for this build. `supergbamidi`
+`$Id: Krawall $Date: 2003/09/01 06:51:01 $` for this build. `agbsf2`
 finds the player and its tables from the code (see [Locating the
 player](#locating-the-player)).
 
@@ -356,12 +356,12 @@ plays louder than 5 down over 16 samples.
 * **A start point before a loop that plays backwards.** An offset or a retrig
   that moves a sample with a loop back and forth to before its loop, while it
   plays backwards, has the mixer work out a negative count of samples, which
-  runs it past its buffer. `supergbamidi` moves the position as the mixer
+  runs it past its buffer. `agbsf2` moves the position as the mixer
   would, but doesn't model what happens to the game's memory.
 
 ## Locating the player
 
-`supergbamidi` looks for this build's code:
+`agbsf2` looks for this build's code:
 
 * `krapPlay()`, from its start:
   `B5F0 4657 464E 4645 B4E0 1C0F 4680 4692 1C38 2204 4010 2800`.

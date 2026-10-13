@@ -12,7 +12,7 @@
 
 #include "rom.h"
 
-namespace supergbamidi::krawall
+namespace agbsf2::krawall
 {
 
 // User-supplied overrides for driver detection.
@@ -102,4 +102,4 @@ bool ReadModule(const Rom& rom, uint32_t address, ModuleInfo& module);
 // orders between markers.
 int SongCount(const ModuleInfo& module);
 
-} // namespace supergbamidi::krawall
+} // namespace agbsf2::krawall

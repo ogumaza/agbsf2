@@ -10,7 +10,7 @@
 
 #include "rom.h"
 
-namespace supergbamidi::rd2
+namespace agbsf2::rd2
 {
 
 // The frame rate of the GBA's display, which the driver's per-frame routine follows: 280896 CPU cycles a frame.
@@ -80,4 +80,4 @@ struct DriverInfo
 // `error` empty if the game shows no sign of the driver.
 bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info, std::string& error);
 
-} // namespace supergbamidi::rd2
+} // namespace agbsf2::rd2

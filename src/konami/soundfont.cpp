@@ -13,7 +13,7 @@
 #include "konami/pitch.h"
 #include "konami/seqformat.h"
 
-namespace supergbamidi::konami
+namespace agbsf2::konami
 {
 namespace
 {
@@ -428,4 +428,4 @@ int SoundfontBuilder::NoiseSample(uint16_t setting)
     return cache_[key] = int(file_.samples.size()) - 1;
 }
 
-} // namespace supergbamidi::konami
+} // namespace agbsf2::konami

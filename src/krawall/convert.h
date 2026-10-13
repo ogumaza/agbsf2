@@ -14,7 +14,7 @@
 #include "rom.h"
 #include "sf2.h"
 
-namespace supergbamidi::krawall
+namespace agbsf2::krawall
 {
 
 // Conversion settings and output paths.
@@ -73,4 +73,4 @@ SongSummary InspectSong(const Rom& rom, const DriverInfo& info, int song, const 
 SongSummary ConvertSong(const Rom& rom, const DriverInfo& info, int song, const ConvertOptions& opt,
                         InstrumentSet* shared);
 
-} // namespace supergbamidi::krawall
+} // namespace agbsf2::krawall

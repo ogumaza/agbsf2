@@ -14,7 +14,7 @@
 
 #include "mp2k/sequencer.h"
 
-namespace supergbamidi::mp2k
+namespace agbsf2::mp2k
 {
 namespace
 {
@@ -969,4 +969,4 @@ bool SoundfontBuilder::AddZone(sf2::Instrument& instrument, const Voice& voice, 
     return true;
 }
 
-} // namespace supergbamidi::mp2k
+} // namespace agbsf2::mp2k

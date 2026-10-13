@@ -8,7 +8,7 @@
 #include <limits>
 #include <map>
 
-namespace supergbamidi
+namespace agbsf2
 {
 namespace
 {
@@ -851,4 +851,4 @@ void BeatGrid::PlaceChannel(int c, const std::vector<Group>& groups)
     }
 }
 
-} // namespace supergbamidi
+} // namespace agbsf2

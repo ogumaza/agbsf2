@@ -29,7 +29,7 @@
 
 namespace fs = std::filesystem;
 
-namespace supergbamidi::test
+namespace agbsf2::test
 {
 namespace
 {
@@ -343,27 +343,27 @@ void TestNoDriver()
     SEQLIB_CHECK(
         any ==
         "no Konami, Rare, Quintet, Nintendo R&D2, Brownie Brown, Ubisoft Milan, Krawall or MP2K sound driver found: "
-        "this game's music uses another engine, or a driver version supergbamidi doesn't know");
+        "this game's music uses another engine, or a driver version that agbsf2 doesn't support");
     SEQLIB_CHECK(konami ==
                  "no Konami sound driver found: this game's music uses another engine, or a driver version "
-                 "supergbamidi doesn't know");
+                 "that agbsf2 doesn't support");
     SEQLIB_CHECK(rare == "no Rare sound driver found (try --song-table)");
     SEQLIB_CHECK(quintet ==
                  "no Quintet sound driver found: this game's music uses another engine, or a driver version "
-                 "supergbamidi doesn't know");
+                 "that agbsf2 doesn't support");
     SEQLIB_CHECK(rd2 ==
                  "no Nintendo R&D2 sound driver found: this game's music uses another engine, or a driver "
-                 "version supergbamidi doesn't know");
+                 "version that agbsf2 doesn't support");
     SEQLIB_CHECK(mp2k == "no MP2K sound driver found (try --song-table)");
     SEQLIB_CHECK(brownie ==
                  "no Brownie Brown sound driver found: this game's music uses another engine, or a driver "
-                 "version supergbamidi doesn't know");
+                 "version that agbsf2 doesn't support");
     SEQLIB_CHECK(krawall ==
                  "no Krawall sound driver found: this game's music uses another engine, or a driver version "
-                 "supergbamidi doesn't know");
+                 "that agbsf2 doesn't support");
     SEQLIB_CHECK(ubimilan ==
                  "no Ubisoft Milan sound driver found: this game's music uses another engine, or a driver "
-                 "version supergbamidi doesn't know");
+                 "version that agbsf2 doesn't support");
 }
 
 // A song's loop lasts until every track's loop is back where it started: loops of 3 and 4 bars make one of 12, and a
@@ -694,7 +694,7 @@ bool MakeTempFolder()
     for (int attempt = 0; attempt < 100; attempt++)
     {
         char name[48];
-        std::snprintf(name, sizeof name, "supergbamidi_tests_%08x%08x", unsigned(random()),
+        std::snprintf(name, sizeof name, "agbsf2_tests_%08x%08x", unsigned(random()),
                       unsigned(std::chrono::steady_clock::now().time_since_epoch().count()));
         std::error_code ec;
         g_temp = fs::temp_directory_path(ec) / name;
@@ -749,9 +749,9 @@ int Run()
 }
 
 } // namespace
-} // namespace supergbamidi::test
+} // namespace agbsf2::test
 
 int main()
 {
-    return supergbamidi::test::Run();
+    return agbsf2::test::Run();
 }

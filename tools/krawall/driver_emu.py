@@ -3,7 +3,7 @@
 
 """Run a game's build of Krawall, the XM and S3M player, under the Unicorn ARM emulator.
 
-This is the reference for checking supergbamidi's model of Krawall. It copies the game's code and data to IWRAM and
+This is the reference for checking agbsf2's model of Krawall. It copies the game's code and data to IWRAM and
 EWRAM as its start-up code does, calls the game's sound init and krapPlay() (no BIOS, no video), and calls the mixer's
 worker once a frame, as the game's VBlank handler does, with getDmaAddress() replaced by a routine that hands it the
 same two buffers and a frame's samples each time. It captures what the player and the mixer do:
@@ -17,7 +17,7 @@ same two buffers and a frame's samples each time. It captures what the player an
     driver_emu.py ROM trace MODULE FRAMES [--song N]
     driver_emu.py ROM render MODULE FRAMES OUT.wav [--song N]
 
-MODULE is the address of the module's header in hex. `supergbamidi --info` lists the addresses. krapPlay() plays the
+MODULE is the address of the module's header in hex. `agbsf2 --info` lists the addresses. krapPlay() plays the
 module in loop mode. With --song, krapPlay() plays song N of a module whose orders separate songs with +++, in song
 mode. Song mode loops back to the song's start at the song's end. The routine and RAM addresses are chosen by the ROM's
 game code. Those of Digimon Racing (BDGE) are built in. Another game requires its values in GAMES (see
@@ -103,7 +103,7 @@ class KrawallEmulator:
 
     def _unmapped(self, uc, access, address, size, value, user):
         # A note on a channel without a sample has the mixer read its points from address 0 on, and a sample near the
-        # ROM's end can have it read past the end, where the hardware reads open bus. supergbamidi reads 0 there, and
+        # ROM's end can have it read past the end, where the hardware reads open bus. agbsf2 reads 0 there, and
         # so does the emulator. The points don't change the mixer's positions, which the trace compares.
         if access == UC_MEM_READ_UNMAPPED:
             uc.mem_map(address & ~0xFFF, 0x1000 if (address & 0xFFF) + size <= 0x1000 else 0x2000)
@@ -183,7 +183,7 @@ class KrawallEmulator:
 
 def song_count(rom, module):
     """Returns the number of songs that a module's orders separate with +++, or 0 if they have no marker. A song is a
-    run of orders between markers. supergbamidi counts them the same way."""
+    run of orders between markers. agbsf2 counts them the same way."""
     count = rom[module + 1 - ROM_BASE]
     orders = rom[module + 3 - ROM_BASE:module + 3 + count - ROM_BASE]
     songs, in_song = 0, False
@@ -195,9 +195,9 @@ def song_count(rom, module):
 
 
 def song_plays(rom, modules):
-    """Returns how krapPlay() plays each piece that supergbamidi numbers, as (module, mode, song). `modules` maps the
-    numbers to the modules' addresses. A module without markers plays in loop mode. Each song of a module with markers
-    plays in song mode, in the order of the numbers."""
+    """Returns how krapPlay() plays each piece that agbsf2 numbers: a (module, mode, song) for each number. `modules`
+    maps the numbers to the modules' addresses. A module without markers plays in loop mode. Each song of a module with
+    markers plays in song mode, in the order of the numbers."""
     plays, seen = {}, {}
     for n in sorted(modules):
         module = modules[n]

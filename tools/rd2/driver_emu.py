@@ -3,12 +3,12 @@
 
 """Run Nintendo R&D2's GBA sound driver under the Unicorn ARM emulator.
 
-This is the reference for checking supergbamidi's model of the driver. It calls the game's sound init, the
+This is the reference for checking agbsf2's model of the driver. It calls the game's sound init, the
 driver's routine that asks for a sequence, and the driver's per-frame routines (no video and no interrupts; the BIOS
 calls the driver makes are emulated), and captures what the driver does:
 
     trace       each voice's state after each frame, and the writes to the PSG's registers, in the format of
-                supergbamidi --trace
+                agbsf2 --trace
     dump        the players and tracks in use after a number of frames
     render      the mixer's output, the samples the driver sends to the FIFOs, as a WAV file at the mixer's rate
                 (the PSG isn't rendered)
@@ -161,7 +161,7 @@ class DriverEmulator:
 
     def _unmapped(self, uc, access, address, size, value, user):
         # A region that plays an instrument the bank doesn't have reads its sample from past the sample set's table, and
-        # the address it finds there can be outside the GBA's memory, where the hardware reads open bus. supergbamidi
+        # the address it finds there can be outside the GBA's memory, where the hardware reads open bus. agbsf2
         # reads 0 there, and so does the emulator.
         if access == UC_MEM_READ_UNMAPPED:
             uc.mem_map(address & ~0xFFF, 0x1000 if (address & 0xFFF) + size <= 0x1000 else 0x2000)

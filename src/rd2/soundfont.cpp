@@ -13,7 +13,7 @@
 
 #include "rd2/driver.h"
 
-namespace supergbamidi::rd2
+namespace agbsf2::rd2
 {
 namespace
 {
@@ -451,4 +451,4 @@ void SoundfontBuilder::AddPreset(const std::string& name, int bank, int program,
     file_.presets.push_back(MakePreset(name, uint16_t(bank), uint16_t(program), instrument));
 }
 
-} // namespace supergbamidi::rd2
+} // namespace agbsf2::rd2

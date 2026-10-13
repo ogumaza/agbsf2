@@ -11,7 +11,7 @@
 #include "quintet/driver.h"
 #include "rom.h"
 
-namespace supergbamidi::quintet
+namespace agbsf2::quintet
 {
 
 // A song's header: its length in bytes and the start of each of its 6 channels' data.
@@ -43,4 +43,4 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
 // `error` on failure.
 bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::string& path, std::string& error);
 
-} // namespace supergbamidi::quintet
+} // namespace agbsf2::quintet

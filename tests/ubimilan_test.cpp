@@ -18,7 +18,7 @@
 #include "ubimilan/driver.h"
 #include "ubimilan/sequencer.h"
 
-namespace supergbamidi::ubimilan
+namespace agbsf2::ubimilan
 {
 namespace
 {
@@ -514,7 +514,7 @@ void TestMusic()
     const Rom rom = cart.ToRom();
     std::string error;
 
-    const std::unique_ptr<Music> music = supergbamidi::OpenMusic(rom, Overrides(), error);
+    const std::unique_ptr<Music> music = agbsf2::OpenMusic(rom, Overrides(), error);
 
     SEQLIB_CHECK(music && error.empty());
     if (music)
@@ -539,4 +539,4 @@ void RunTests()
     TestMusic();
 }
 
-} // namespace supergbamidi::ubimilan
+} // namespace agbsf2::ubimilan

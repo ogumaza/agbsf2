@@ -3,9 +3,9 @@
 
 """Check a conversion's MIDI files and SoundFonts against the game's driver, note by note.
 
-    compare_notes.py ROM SUPERGBAMIDI FOLDER [--songs 0-33] [--frames 12000]
+    compare_notes.py ROM AGBSF2 FOLDER [--songs 0-33] [--frames 12000]
 
-FOLDER holds supergbamidi's conversion of ROM: NAME_NN.mid and NAME_NN.sf2 for each sequence, or NAME_rd2_NN.mid and
+FOLDER holds agbsf2's conversion of ROM: NAME_NN.mid and NAME_NN.sf2 for each sequence, or NAME_rd2_NN.mid and
 NAME_rd2_NN.sf2 if detection finds another of the game's drivers first. For every sequence, the driver runs under
 driver_emu.py for as long as the MIDI file lasts, with hooks in its note on routine, and each note it starts with a
 voice has to be in the MIDI file, and the other way round:
@@ -19,8 +19,8 @@ voice has to be in the MIDI file, and the other way round:
   - and in each frame that its voice is the newest of its track's, with the pitch bend for the voice's pitch in that
     frame, which slides, the track's bend and the LFO change.
 
-A sequence named in --songs that has no MIDI file mustn't play any notes. SUPERGBAMIDI is used for its --info report,
-which names the driver's tables and gives each sequence's length.
+A sequence named in --songs that has no MIDI file mustn't play any notes. AGBSF2 is used for its --info report. The
+report names the driver's tables and gives each sequence's length.
 """
 import argparse
 import bisect
@@ -193,8 +193,8 @@ def read_midi(path):
         elif kind == 'program':
             program[ch] = a
         elif kind == 'cc' and a == 0:
-            # supergbamidi gives the SoundFont's bank number in CC0 alone, as FluidSynth reads it by default, and sets
-            # CC32 to 0.
+            # agbsf2 gives the SoundFont's bank number in CC0 alone and sets CC32 to 0. FluidSynth reads the bank from
+            # CC0 by default.
             bank[ch] = b
         elif kind == 'bend':
             times, values = bends.setdefault(ch, ([], []))
@@ -218,8 +218,8 @@ def bend_at(bends, ch, t):
 
 
 def driver_info(tool, rom_path):
-    """Returns the pitch and frequency tables' addresses and the table of banks from supergbamidi's --info report, and
-    the frames that each sequence it lists lasts, from its length in minutes and seconds."""
+    """Returns the pitch and frequency tables' addresses, the table of banks and the frames that each listed sequence
+    lasts. All come from agbsf2's --info report. The report gives each sequence's length in minutes and seconds."""
     text = subprocess.run([tool, '--driver', 'rd2', '--info', rom_path], capture_output=True, encoding='utf-8',
                           check=True).stdout
     pitch = int(re.search(r'pitch table: 0x([0-9A-F]+)', text).group(1), 16)
@@ -414,7 +414,7 @@ def check_song(rom, raw_rom, tables, bank_starts, song, midi_path, sf2_path, fra
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('rom', metavar='ROM', help='the game (.gba)')
-    p.add_argument('supergbamidi', metavar='SUPERGBAMIDI', help='the supergbamidi program that made the conversion')
+    p.add_argument('agbsf2', metavar='AGBSF2', help='the agbsf2 program that made the conversion')
     p.add_argument('folder', metavar='FOLDER', help='the conversion: NAME_NN.mid and NAME_NN.sf2, or NAME_rd2_NN')
     p.add_argument('--songs', help='sequences to check, such as 0-33 (default: every one in FOLDER)')
     p.add_argument('--frames', type=int, default=12000, help='frames to check in each sequence (default: 12000)')
@@ -422,7 +422,7 @@ def main():
 
     raw_rom = load_rom(a.rom)
     rom = Rom(raw_rom)
-    tables, (bank_table, bank_count), lengths = driver_info(a.supergbamidi, a.rom)
+    tables, (bank_table, bank_count), lengths = driver_info(a.agbsf2, a.rom)
     bank_starts = {bank_table + rom.u32(bank_table + 4 * i) for i in range(bank_count)}
     midis = dict(conversion.midi_files(a.folder, 'rd2'))
     if not midis:

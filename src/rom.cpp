@@ -16,7 +16,7 @@
 #include "files.h"
 #include "inflate.h"
 
-namespace supergbamidi
+namespace agbsf2
 {
 namespace
 {
@@ -40,8 +40,8 @@ bool IsArchive(const std::vector<uint8_t>& file)
     return false;
 }
 
-// Decompresses a GSF file's program with puff. supergbamidi doesn't check the header's CRC-32. puff checks the zlib
-// stream's Adler-32 instead.
+// Decompresses a GSF file's program with puff. agbsf2 doesn't check the header's CRC-32. puff checks the zlib stream's
+// Adler-32 instead.
 std::optional<std::string> Decompress(const uint8_t* data, size_t size, uint32_t, std::vector<uint8_t>& program)
 {
     std::string error;
@@ -76,7 +76,7 @@ bool Rom::Load(const std::string& path, std::string& error)
         return false;
     }
 
-    // An archive would otherwise be read as a ROM that has no driver supergbamidi knows.
+    // An archive would otherwise be read as a ROM with no driver that agbsf2 supports.
     if (IsArchive(file))
     {
         error = "it's an archive: extract the ROM or GSF files from it first";
@@ -299,4 +299,4 @@ std::string Rom::GameCode() const
     return s;
 }
 
-} // namespace supergbamidi
+} // namespace agbsf2

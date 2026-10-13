@@ -14,7 +14,7 @@
 #include "rd2/driver.h"
 #include "rom.h"
 
-namespace supergbamidi::rd2
+namespace agbsf2::rd2
 {
 
 // The voices: the mixer's sample voices, then one for each of the PSG's channels.
@@ -346,4 +346,4 @@ private:
     std::vector<std::string> warnings_;
 };
 
-} // namespace supergbamidi::rd2
+} // namespace agbsf2::rd2

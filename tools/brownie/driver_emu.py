@@ -3,7 +3,7 @@
 
 """Run Brownie Brown's GBA sound driver under the Unicorn ARM emulator.
 
-This is the reference for checking supergbamidi's model of the driver. It calls the driver's init, its request routine
+This is the reference for checking agbsf2's model of the driver. It calls the driver's init, its request routine
 and its per-frame routine (no BIOS, no video), and the routines that the game's DMA 1 and DMA 2 interrupts call. In the
 Sword of Mana revision, it copies the driver's mixer to IWRAM and runs it once for each 16 points the FIFOs play. In
 the Magical Vacation revision, each FIFO plays a sample at the rate its timer sets, and a FIFO that holds 16 points or

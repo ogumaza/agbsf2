@@ -10,7 +10,7 @@
 #include "rd2/driver.h"
 #include "rom.h"
 
-namespace supergbamidi::rd2
+namespace agbsf2::rd2
 {
 
 // A command of a track, as the driver reads it.
@@ -36,4 +36,4 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
 // `error` on failure.
 bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::string& path, std::string& error);
 
-} // namespace supergbamidi::rd2
+} // namespace agbsf2::rd2

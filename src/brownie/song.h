@@ -10,7 +10,7 @@
 #include "brownie/driver.h"
 #include "rom.h"
 
-namespace supergbamidi::brownie
+namespace agbsf2::brownie
 {
 
 // A command of a channel's data, as the driver reads it.
@@ -29,4 +29,4 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
 // `error` on failure.
 bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::string& path, std::string& error);
 
-} // namespace supergbamidi::brownie
+} // namespace agbsf2::brownie

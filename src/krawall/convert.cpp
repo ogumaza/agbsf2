@@ -22,7 +22,7 @@
 #include "program.h"
 #include "sf2.h"
 
-namespace supergbamidi::krawall
+namespace agbsf2::krawall
 {
 namespace
 {
@@ -961,4 +961,4 @@ SongSummary ConvertSong(const Rom& rom, const DriverInfo& info, int song, const 
     return Run(rom, info, song, opt, shared, true);
 }
 
-} // namespace supergbamidi::krawall
+} // namespace agbsf2::krawall

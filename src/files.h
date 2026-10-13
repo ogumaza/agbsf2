@@ -13,15 +13,14 @@
 #include "seqlib/file_name.h"
 #include "xsflib/files.h"
 
-namespace supergbamidi
+namespace agbsf2
 {
 
 using xsflib::PathFromUtf8;
 using xsflib::Utf8;
 
 // Makes a single filename component valid on Windows as well as macOS and Linux. Keeps UTF-8 characters intact.
-// supergbamidi's rules strip every trailing dot and space, put '_' before a device name and give "output" for an empty
-// name.
+// agbsf2's rules strip every trailing dot and space, put '_' before a device name and give "output" for an empty name.
 inline std::string SafeFileName(std::string name)
 {
     static const seqlib::FileNameRules kRules = {seqlib::TrailingRule::kRemoveAll, seqlib::DeviceMark::kBeforeName,
@@ -48,4 +47,4 @@ inline bool WriteFile(const std::string& path, const std::vector<uint8_t>& data,
     return true;
 }
 
-} // namespace supergbamidi
+} // namespace agbsf2

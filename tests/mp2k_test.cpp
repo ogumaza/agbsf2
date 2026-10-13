@@ -25,7 +25,7 @@
 #include "sf2.h"
 #include "test_util.h"
 
-namespace supergbamidi::mp2k
+namespace agbsf2::mp2k
 {
 namespace
 {
@@ -2044,9 +2044,9 @@ void TestMusic()
     forced.driver = Driver::kMp2k;
     std::string error, bare_error, forced_error;
 
-    const std::unique_ptr<Music> music = supergbamidi::OpenMusic(rom, Overrides(), error);
-    const std::unique_ptr<Music> bare_music = supergbamidi::OpenMusic(bare_rom, table, bare_error);
-    const std::unique_ptr<Music> bare_forced = supergbamidi::OpenMusic(bare_rom, forced, forced_error);
+    const std::unique_ptr<Music> music = agbsf2::OpenMusic(rom, Overrides(), error);
+    const std::unique_ptr<Music> bare_music = agbsf2::OpenMusic(bare_rom, table, bare_error);
+    const std::unique_ptr<Music> bare_forced = agbsf2::OpenMusic(bare_rom, forced, forced_error);
 
     SEQLIB_CHECK(music && music->Log().front() == "MP2K, Nintendo's MusicPlayer2000 sound driver");
     SEQLIB_CHECK(music && music->SongCount() == 2 && !music->HasSong(0) && music->HasSong(1));
@@ -2374,4 +2374,4 @@ void RunTests()
     TestCamelotConversion();
 }
 
-} // namespace supergbamidi::mp2k
+} // namespace agbsf2::mp2k

@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace supergbamidi::brownie
+namespace agbsf2::brownie
 {
 namespace
 {
@@ -326,4 +326,4 @@ bool ReadSong(const Rom& rom, const DriverInfo& info, int song, std::vector<Song
     return false;
 }
 
-} // namespace supergbamidi::brownie
+} // namespace agbsf2::brownie

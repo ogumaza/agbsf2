@@ -5,7 +5,7 @@
 #include <cmath>
 #include <cstdio>
 
-namespace supergbamidi::rare
+namespace agbsf2::rare
 {
 namespace
 {
@@ -778,4 +778,4 @@ void Sequencer::Warn(const std::string& message)
     warnings_.push_back(message);
 }
 
-} // namespace supergbamidi::rare
+} // namespace agbsf2::rare

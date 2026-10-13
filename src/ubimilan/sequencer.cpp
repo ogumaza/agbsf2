@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace supergbamidi::ubimilan
+namespace agbsf2::ubimilan
 {
 namespace
 {
@@ -605,4 +605,4 @@ void Sequencer::Write(uint32_t address, uint8_t size, uint32_t value)
     writes_.push_back({address, size, value});
 }
 
-} // namespace supergbamidi::ubimilan
+} // namespace agbsf2::ubimilan

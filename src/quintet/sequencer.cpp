@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <string>
 
-namespace supergbamidi::quintet
+namespace agbsf2::quintet
 {
 namespace
 {
@@ -1613,4 +1613,4 @@ void Sequencer::Warn(const std::string& message)
     warnings_.push_back(message);
 }
 
-} // namespace supergbamidi::quintet
+} // namespace agbsf2::quintet

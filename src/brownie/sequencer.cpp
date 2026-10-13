@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace supergbamidi::brownie
+namespace agbsf2::brownie
 {
 namespace
 {
@@ -1378,4 +1378,4 @@ void Sequencer::Warn(const std::string& message)
     warnings_.push_back(message);
 }
 
-} // namespace supergbamidi::brownie
+} // namespace agbsf2::brownie

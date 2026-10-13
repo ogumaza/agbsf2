@@ -31,7 +31,7 @@
 
 namespace fs = std::filesystem;
 
-namespace supergbamidi::konami
+namespace agbsf2::konami
 {
 namespace
 {
@@ -420,8 +420,8 @@ void TestLoopStartLast()
     SEQLIB_CHECK(looped_at == (std::vector<int>{14, 20, 26}));
 }
 
-// Track 5 plays a note of sample F0. Sample numbers above EF select a mode that supergbamidi leaves out. The track
-// stops with a warning that names the sample.
+// Track 5 plays a note of sample F0. Sample numbers above EF select a mode that agbsf2 leaves out. The track stops with
+// a warning that names the sample.
 void TestSampleAboveEf()
 {
     Image m = SyntheticImage();
@@ -1585,8 +1585,8 @@ void TestRevisionDetection()
                  "Ultimate Masters revision of the driver (from the command reader at 0x08000800)");
     SEQLIB_CHECK(!older.found);
     SEQLIB_CHECK(older.error ==
-                 "this game has an older revision of Konami's driver, whose commands supergbamidi can't "
-                 "read (its command reader is at 0x08000800)");
+                 "this game has an older revision of Konami's driver with commands that agbsf2 can't read "
+                 "(its command reader is at 0x08000800)");
     SEQLIB_CHECK(none.found && none.info.revision == Revision::kUltimateMasters);
     SEQLIB_CHECK(none.info.log[0] ==
                  "command reader not recognised, assuming the Ultimate Masters revision of the driver");
@@ -2572,8 +2572,8 @@ void TestDungeonDiceConversion()
 void TestDetectionFromCode()
 {
     // A cartridge with the play-song and note-start code, and three songs. Every track of song 0 plays samples 0, 1 and
-    // 2, and sample 1 has a negative length, a mode supergbamidi doesn't know. The tracks of song 1 use F4, a command
-    // it doesn't know either, and song 2 rests.
+    // 2. Sample 1's negative length selects a mode that agbsf2 doesn't support. The tracks of song 1 use F4. agbsf2
+    // doesn't support that command either. Song 2 rests.
     Image m(0x1000);
     constexpr uint32_t kTable = kRomBase + 0x100;
     constexpr uint32_t kSamples = kRomBase + 0x400;
@@ -2612,7 +2612,7 @@ void TestDetectionFromCode()
     // table holds sample 1 too, whose notes are skipped.
     const std::vector<std::string> kWarnings = {
         "song 1's tracks don't read cleanly, so the song table is taken to end before it (--song-count overrides this)",
-        "samples supergbamidi can't read, whose notes are skipped: 1"};
+        "agbsf2 can't read these samples and skips their notes: 1"};
     SEQLIB_CHECK(found);
     SEQLIB_CHECK_EQ(info.song_table, kTable);
     SEQLIB_CHECK_EQ(info.song_count, 1);
@@ -2633,10 +2633,9 @@ void TestDetectionFromCode()
     }
 
     SEQLIB_CHECK(!DetectDriver(m.ToRom(), rate_only, info, err));
-    SEQLIB_CHECK(
-        err ==
-        "found the note-start code, but supergbamidi can't read most of the songs' samples in the sample table "
-        "it loads, at 0x08000400 (--sample-table overrides detection)");
+    SEQLIB_CHECK(err ==
+                 "found the note-start code, but agbsf2 can't read most of the songs' samples in the sample table "
+                 "it loads, at 0x08000400 (--sample-table overrides detection)");
 
     // When song 0 only rests, the table the code loads is still taken, although none of the songs counted plays a note.
     // With no samples played, no sample table is needed.
@@ -2659,10 +2658,9 @@ void TestDetectionFromCode()
     m.Bytes(kRomBase + 0xA5B, {0x00, 0xA3, 0x01, 0x08, 0xE0, 0x00, 0xFF, 0x00, 0x00, 0xFD});
 
     SEQLIB_CHECK(!DetectDriver(m.ToRom(), rate_only, info, err));
-    SEQLIB_CHECK(
-        err ==
-        "found the play-song code, but the song table it loads, at 0x08000100, holds no songs supergbamidi can "
-        "read (--song-table and --song-count override detection)");
+    SEQLIB_CHECK(err ==
+                 "found the play-song code, but the song table it loads, at 0x08000100, holds no songs agbsf2 can "
+                 "read (--song-table and --song-count override detection)");
 }
 
 void TestSampleTableChoice()
@@ -2714,8 +2712,7 @@ void TestSampleTableChoice()
 
     SEQLIB_CHECK(found_half);
     SEQLIB_CHECK_EQ(info.sample_table, kRomBase + 0x400);
-    SEQLIB_CHECK(info.warnings ==
-                 std::vector<std::string>{"samples supergbamidi can't read, whose notes are skipped: 1"});
+    SEQLIB_CHECK(info.warnings == std::vector<std::string>{"agbsf2 can't read these samples and skips their notes: 1"});
 }
 
 void TestOverrides()
@@ -2770,9 +2767,9 @@ void TestMusic()
     std::string found_error, given_error, rare_error;
     std::vector<std::string> trace_warnings;
 
-    const std::unique_ptr<Music> found = supergbamidi::OpenMusic(scan, Overrides(), found_error);
-    const std::unique_ptr<Music> by_hand = supergbamidi::OpenMusic(synthetic, given, given_error);
-    const std::unique_ptr<Music> rare = supergbamidi::OpenMusic(scan, as_rare, rare_error);
+    const std::unique_ptr<Music> found = agbsf2::OpenMusic(scan, Overrides(), found_error);
+    const std::unique_ptr<Music> by_hand = agbsf2::OpenMusic(synthetic, given, given_error);
+    const std::unique_ptr<Music> rare = agbsf2::OpenMusic(scan, as_rare, rare_error);
 
     SEQLIB_CHECK(found && found->Log().front() == "Konami's sound driver");
     SEQLIB_CHECK(found && found->SongCount() == 2);
@@ -2842,4 +2839,4 @@ void RunTests()
     TestMusic();
 }
 
-} // namespace supergbamidi::konami
+} // namespace agbsf2::konami

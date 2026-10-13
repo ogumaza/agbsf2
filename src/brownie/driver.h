@@ -10,7 +10,7 @@
 
 #include "rom.h"
 
-namespace supergbamidi::brownie
+namespace agbsf2::brownie
 {
 
 // The CPU cycles in a frame, and a second's.
@@ -78,4 +78,4 @@ struct SongChannel
 // that the revision doesn't have, or doesn't end within its channels.
 bool ReadSong(const Rom& rom, const DriverInfo& info, int song, std::vector<SongChannel>& channels);
 
-} // namespace supergbamidi::brownie
+} // namespace agbsf2::brownie

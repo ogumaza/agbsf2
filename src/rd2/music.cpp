@@ -18,7 +18,7 @@
 #include "rd2/soundfont.h"
 #include "sf2.h"
 
-namespace supergbamidi::rd2
+namespace agbsf2::rd2
 {
 namespace
 {
@@ -231,4 +231,4 @@ std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std
     return std::make_unique<Rd2Music>(rom, std::move(info));
 }
 
-} // namespace supergbamidi::rd2
+} // namespace agbsf2::rd2
