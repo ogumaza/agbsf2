@@ -91,8 +91,10 @@ def read_sf2(path):
     for p in range(len(phdr) - 1):
         program, bank, bag = struct.unpack('<HHH', phdr[p][20:26])
         instrument = gens(pbag, pgen, bag)[41]
-        zone = struct.unpack('<H', inst[instrument][20:22])[0]
-        g = gens(ibag, igen, zone)
+
+        # The instrument's global zone comes first and holds no sample. The zone after it plays the sample.
+        first, last = (struct.unpack('<H', inst[i][20:22])[0] for i in (instrument, instrument + 1))
+        g = next(z for z in (gens(ibag, igen, b) for b in range(first, last)) if 53 in z)
         sample = dict(samples[g[53]])
         if not g.get(54, 0) & 1:
             sample['loop'] = None

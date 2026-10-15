@@ -36,6 +36,7 @@ namespace agbsf2::konami
 namespace
 {
 
+using test::FullBendRange;
 using test::ReadAll;
 using test::ReadSf2;
 using test::TempPath;
@@ -1106,6 +1107,7 @@ void TestSampleKeys()
     const std::vector<std::array<int, 3>> kExpected = {{48, 66, 60}, {67, 84, 60}, {50, 50, 0}, {0, 0, 127}};
     SEQLIB_CHECK(sum.ok);
     SEQLIB_CHECK(ReadZoneKeys(sum.sf2_path) == kExpected);
+    SEQLIB_CHECK(FullBendRange(ReadSf2(sum.sf2_path)));
     fs::remove_all(dir, ec);
 }
 

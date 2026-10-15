@@ -25,6 +25,7 @@ namespace agbsf2::krawall
 namespace
 {
 
+using test::FullBendRange;
 using test::Le16;
 using test::Le32;
 using test::ReadAll;
@@ -643,6 +644,7 @@ void TestConversion()
 
     // The SoundFont: a preset for each sample and point, and the note from point 256 starting there.
     SEQLIB_CHECK_EQ(sf2.Count("phdr", 38), 4u);
+    SEQLIB_CHECK(FullBendRange(sf2));
     bool offset_zone = false;
     for (size_t z = 0; z + 1 < sf2.Count("ibag", 4); z++)
     {

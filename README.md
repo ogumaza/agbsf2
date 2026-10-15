@@ -1017,9 +1017,19 @@ SoundFonts.
 ### Krawall
 
 * **Mixer character.** The mixer mixes at 16384 Hz and writes 8-bit output.
-  Unless the game asks it to interpolate, it plays each sample point by point,
-  where a SoundFont player plays the same samples more cleanly. A level past
-  the mixer's full scale, which the game clips, plays at full scale.
+  Unless the game asks it to interpolate, it plays each sample point by point.
+  A short looped wave then gains tones that aren't harmonics of its note.
+  Those tones can come close to the harmonics in level. A SoundFont player
+  interpolates and plays the same samples more cleanly. For a game that never
+  asks for interpolation, such as *Digimon Racing*, FluidSynth comes closer to
+  the game at the mixer's rate with interpolation off:
+
+  ```sh
+  fluidsynth -ni -f nointerp.txt -r 16384 -F song.wav song.sf2 song.mid
+  ```
+
+  The file `nointerp.txt` holds the line `interp 0`. The game clips a level
+  past the mixer's full scale. The conversion plays it at full scale.
 * **Jingles.** A game can play a module once, as a jingle, but nothing in the
   module says so, and its conversion loops like any other.
 * **The game's settings.** The conversion plays each module on its own, at the

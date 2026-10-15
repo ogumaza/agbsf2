@@ -211,12 +211,9 @@ private:
 // default curve squares it, and this takes its place.
 sf2::Instrument LinearInstrument(const std::string& name)
 {
-    sf2::Instrument si;
-    si.name = name;
-    sf2::Zone global;
-    global.modulators.push_back(
+    sf2::Instrument si = MakeInstrument(name);
+    si.zones.front().modulators.push_back(
         {sf2::kNoteOnVelocity | sf2::kNegative | sf2::kConcave, sf2::kInitialAttenuation, 480, 0, 0});
-    si.zones.push_back(global);
 
     return si;
 }

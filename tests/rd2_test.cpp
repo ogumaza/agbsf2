@@ -29,6 +29,7 @@ namespace agbsf2::rd2
 namespace
 {
 
+using test::FullBendRange;
 using test::Le16;
 using test::Le32;
 using test::MidiEvents;
@@ -886,9 +887,10 @@ void TestConversion()
     SEQLIB_CHECK(std::any_of(metas.begin(), metas.end(), is_marker));
 
     const Sf2Records sf = ReadSf2(sum.sf2_path);
+    SEQLIB_CHECK(FullBendRange(sf));
     SEQLIB_CHECK_EQ(sf.Count("phdr", 38), 3);
     SEQLIB_CHECK_EQ(sf.Count("shdr", 46), 3);
-    const auto zone = sf.ZoneGens(0);
+    const auto zone = sf.ZoneGens(1); // the first instrument's zone after its global zone
     SEQLIB_CHECK_EQ(zone.at(58), 48);
     SEQLIB_CHECK_EQ(Le32(sf.Record("shdr", 46, 0) + 36), 21024);
 }
@@ -963,6 +965,9 @@ void TestDrumPanAndWave()
 
     SEQLIB_CHECK(sum.ok);
     const Sf2Records sf = ReadSf2(sum.sf2_path);
+    SEQLIB_CHECK(FullBendRange(sf));
+
+    // The zones after the global zone of each instrument whose name ends in `suffix`.
     auto zones_of = [&](const std::string& suffix)
     {
         std::vector<size_t> zones;
@@ -971,7 +976,8 @@ void TestDrumPanAndWave()
             const std::string name(reinterpret_cast<const char*>(sf.Record("inst", 22, i)));
             if (name.size() >= suffix.size() && name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0)
             {
-                for (size_t z = Le16(sf.Record("inst", 22, i) + 20); z < Le16(sf.Record("inst", 22, i + 1) + 20); z++)
+                const size_t first = Le16(sf.Record("inst", 22, i) + 20) + 1;
+                for (size_t z = first; z < Le16(sf.Record("inst", 22, i + 1) + 20); z++)
                 {
                     zones.push_back(z);
                 }

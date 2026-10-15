@@ -30,6 +30,7 @@ namespace agbsf2::mp2k
 namespace
 {
 
+using test::FullBendRange;
 using test::g_temp;
 using test::Le16;
 using test::MidiEvents;
@@ -1283,6 +1284,7 @@ void TestConversion()
     }
     SEQLIB_CHECK(presets.count({0, 1}) && presets.count({0, 2}) && presets.count({0, 3}) && presets.count({128, 3}));
     SEQLIB_REQUIRE_EQ(presets.size(), 4);
+    SEQLIB_CHECK(FullBendRange(sf));
 
     auto zone_of = [&](int instrument, int index)
     {

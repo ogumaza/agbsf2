@@ -366,10 +366,7 @@ int SoundfontBuilder::GameSampleIndex(const GameSample& sample)
 
 int SoundfontBuilder::AddInstrument(const std::string& name, std::vector<sf2::Zone> zones)
 {
-    sf2::Instrument inst;
-    inst.name = name;
-    inst.zones = std::move(zones);
-    file_.instruments.push_back(std::move(inst));
+    file_.instruments.push_back(MakeInstrument(name, std::move(zones)));
 
     return int(file_.instruments.size()) - 1;
 }

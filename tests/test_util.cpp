@@ -2,6 +2,7 @@
 
 #include "test_util.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
@@ -10,6 +11,7 @@
 #include <vector>
 
 #include "seqlib/read_error.h"
+#include "seqlib/sf2/soundfont.h"
 
 #include "files.h"
 
@@ -106,6 +108,45 @@ Sf2Records ReadSf2(const std::string& path)
         std::printf("can't read %s: %s\n", path.c_str(), e.what());
         return {};
     }
+}
+
+bool FullBendRange(const Sf2Records& sf)
+{
+    const size_t records = sf.Count("inst", 22);
+    if (records < 2)
+    {
+        return false;
+    }
+
+    // The last instrument record only ends the list.
+    for (size_t i = 0; i + 1 < records; i++)
+    {
+        const uint16_t bag = Le16(sf.Record("inst", 22, i) + 20);
+        if (bag >= Le16(sf.Record("inst", 22, i + 1) + 20) || sf.ZoneGens(bag).count(seqlib::sf2::kSampleId))
+        {
+            return false;
+        }
+
+        const uint16_t first = Le16(sf.Record("ibag", 4, bag) + 2);
+        const uint16_t end = Le16(sf.Record("ibag", 4, bag + 1) + 2);
+        for (const seqlib::sf2::Modulator& wanted : seqlib::sf2::kNoVelocityFilterFullBend)
+        {
+            bool found = false;
+            for (uint16_t m = first; m < end; m++)
+            {
+                const uint8_t* mod = sf.Record("imod", 10, m);
+                found = found || (Le16(mod) == wanted.source && Le16(mod + 2) == wanted.dest &&
+                                  int16_t(Le16(mod + 4)) == wanted.amount && Le16(mod + 6) == wanted.amount_source &&
+                                  Le16(mod + 8) == wanted.transform);
+            }
+            if (!found)
+            {
+                return false;
+            }
+        }
+    }
+
+    return true;
 }
 
 } // namespace agbsf2::test

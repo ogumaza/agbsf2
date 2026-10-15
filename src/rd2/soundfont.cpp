@@ -441,7 +441,7 @@ int SoundfontBuilder::NoiseSample(uint8_t nr43)
 
 int SoundfontBuilder::AddInstrument(const std::string& name, std::vector<sf2::Zone> zones)
 {
-    file_.instruments.push_back({name, std::move(zones)});
+    file_.instruments.push_back(MakeInstrument(name, std::move(zones)));
 
     return int(file_.instruments.size()) - 1;
 }

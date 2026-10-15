@@ -23,6 +23,7 @@ namespace agbsf2::ubimilan
 namespace
 {
 
+using test::FullBendRange;
 using test::Le16;
 using test::Le32;
 using test::ReadMidi;
@@ -443,6 +444,7 @@ void TestConversion()
     SEQLIB_CHECK(midi.Find(0x99).empty() && midi.Find(0xB9).empty() && midi.Find(0xC9).empty());
 
     const test::Sf2Records sf = ReadSf2(sum.sf2_path);
+    SEQLIB_CHECK(FullBendRange(sf));
     SEQLIB_CHECK_EQ(sf.Count("phdr", 38), 2);
     if (sf.Count("phdr", 38) == 2)
     {

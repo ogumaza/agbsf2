@@ -126,9 +126,10 @@ class SoundFont:
         instrument = self.presets.get((bank, program))
         if instrument is None:
             return None
+        # The instrument's global zone comes first and holds no sample.
         for z in self.instruments[instrument]:
             key_range = z.get(43, 0x7F00)
-            if key_range & 0xFF <= key <= key_range >> 8:
+            if 53 in z and key_range & 0xFF <= key <= key_range >> 8:
                 sample = self.samples[z[53]]
                 return dict(sample, root=z.get(58, sample['key']), looped=bool(z.get(54, 0) & 1))
         return None

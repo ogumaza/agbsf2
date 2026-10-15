@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #include "seqlib/sf2/writer.h"
@@ -28,6 +29,15 @@ sf2::Preset MakePreset(const std::string& name, uint16_t bank, uint16_t program,
 int PresetInstrument(const sf2::Preset& preset)
 {
     return preset.zones.at(0).generators.at(0).amount;
+}
+
+sf2::Instrument MakeInstrument(const std::string& name, std::vector<sf2::Zone> zones)
+{
+    sf2::Zone global;
+    global.modulators.assign(sf2::kNoVelocityFilterFullBend.begin(), sf2::kNoVelocityFilterFullBend.end());
+    zones.insert(zones.begin(), std::move(global));
+
+    return {name, std::move(zones)};
 }
 
 bool Sf2File::Write(const std::string& path, std::string& error) const

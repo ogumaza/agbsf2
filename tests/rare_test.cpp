@@ -31,6 +31,7 @@ namespace agbsf2::rare
 namespace
 {
 
+using test::FullBendRange;
 using test::g_temp;
 using test::Le16;
 using test::Le32;
@@ -1423,11 +1424,12 @@ void TestConversion()
                  presets.count({128, 127}));
     SEQLIB_REQUIRE_EQ(presets.size(), 4);
 
-    // Each instrument's global zone has the two modulators. The lead's zone has its envelope and fine tune, the key
-    // split's zones split at key 60, its high sample loops in loop mode 4, and the drum kit's zone plays at its
-    // sample's pitch whatever the key.
-    SEQLIB_CHECK_EQ(sf.Count("imod", 10), 3 * 2 + 1);
+    // Each instrument's global zone has seqlib's three modulators and the driver's two.
+    SEQLIB_CHECK(FullBendRange(sf));
+    SEQLIB_CHECK_EQ(sf.Count("imod", 10), 3 * (3 + 2) + 1);
 
+    // The lead's zone has its envelope and fine tune. The key split's zones split at key 60. Its high sample loops in
+    // loop mode 4. The drum kit's zone plays at its sample's pitch whatever the key.
     auto zone_of = [&](int instrument, int index)
     {
         return sf.ZoneGens(Le16(sf.Record("inst", 22, size_t(instrument)) + 20) + size_t(index));

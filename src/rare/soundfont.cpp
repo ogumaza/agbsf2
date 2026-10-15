@@ -156,18 +156,15 @@ int SoundfontBuilder::InstrumentFor(uint32_t address, const EnvelopeSettings& se
 
     // The global zone makes velocity and controller 7 scale the level in a straight line, as the driver does. The
     // default curves square them, and these take the place of the defaults.
-    sf2::Instrument si;
-    si.name = InstrumentName(address, settings);
-    sf2::Zone global;
-    global.modulators.push_back(
+    sf2::Instrument si = MakeInstrument(InstrumentName(address, settings));
+    si.zones.front().modulators.push_back(
         {sf2::kNoteOnVelocity | sf2::kNegative | sf2::kConcave, sf2::kInitialAttenuation, 480, 0, 0});
-    global.modulators.push_back(
+    si.zones.front().modulators.push_back(
         {uint16_t(sf2::kController | 7) | sf2::kNegative | sf2::kConcave, sf2::kInitialAttenuation, 480, 0, 0});
     if (mutes_)
     {
-        global.modulators.push_back(kMute);
+        si.zones.front().modulators.push_back(kMute);
     }
-    si.zones.push_back(global);
 
     if (top.IsSample())
     {

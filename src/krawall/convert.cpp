@@ -929,11 +929,7 @@ Sf2File InstrumentSet::Build(const Rom& rom, const DriverInfo& info) const
         z.generators.push_back(sf2::Generator::Value(sf2::kSampleModes, Looped(sample) ? 1 : 0));
         z.generators.push_back(sf2::Generator::Value(sf2::kSampleId, it->second));
 
-        sf2::Instrument instrument;
-        instrument.name = name;
-        instrument.zones.push_back(std::move(z));
-        f.instruments.push_back(std::move(instrument));
-
+        f.instruments.push_back(MakeInstrument(name, {z}));
         f.presets.push_back(MakePreset(name, uint16_t(inst.program / 128), uint16_t(inst.program % 128),
                                        int(f.instruments.size()) - 1));
     }

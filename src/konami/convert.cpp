@@ -1292,10 +1292,7 @@ Programs AddPresets(const Usage& usage, SoundfontBuilder& sf, const Rom& rom, co
 
     auto add_preset = [&](const std::string& name, std::vector<sf2::Zone> zones)
     {
-        sf2::Instrument inst;
-        inst.name = prefix + name;
-        inst.zones = std::move(zones);
-        file.instruments.push_back(std::move(inst));
+        file.instruments.push_back(MakeInstrument(prefix + name, std::move(zones)));
 
         const std::optional<BankProgram> slot = sf.Banks().Next();
         programs.fits = programs.fits && slot;

@@ -31,6 +31,7 @@ namespace agbsf2::quintet
 namespace
 {
 
+using test::FullBendRange;
 using test::Le16;
 using test::Le32;
 using test::MidiEvents;
@@ -668,8 +669,9 @@ void TestWaveSwitch()
 
     const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
 
+    // The instrument's zones after its global zone.
     const Sf2Records sf2 = ReadSf2(sum.sf2_path);
-    const size_t first = Le16(sf2.Record("inst", 22, 0) + 20);
+    const size_t first = Le16(sf2.Record("inst", 22, 0) + 20) + 1;
     const size_t zones = Le16(sf2.Record("inst", 22, 1) + 20) - first;
 
     // A zone's root key: its overriding root key, or else its sample's.
@@ -680,6 +682,7 @@ void TestWaveSwitch()
         return key != gens.end() ? int(key->second) : int(sf2.Record("shdr", 46, gens.at(sf2::kSampleId))[40]);
     };
 
+    SEQLIB_CHECK(FullBendRange(sf2));
     SEQLIB_CHECK(sum.ok && zones == 2);
     if (zones == 2)
     {

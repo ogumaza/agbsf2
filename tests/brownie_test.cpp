@@ -28,6 +28,7 @@ namespace agbsf2::brownie
 namespace
 {
 
+using test::FullBendRange;
 using test::Le16;
 using test::Le32;
 using test::MidiEvents;
@@ -653,6 +654,7 @@ void TestConversion()
     SEQLIB_CHECK_EQ(sample_on.size() ? sample_on[0].bytes[1] : 0, 39);
     SEQLIB_CHECK(tuned);
     SEQLIB_CHECK(rooted);
+    SEQLIB_CHECK(FullBendRange(sf2));
     SEQLIB_CHECK(fading.size() > 10 && std::is_sorted(fading.rbegin(), fading.rend()));
 }
 

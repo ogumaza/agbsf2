@@ -56,6 +56,10 @@ bool RepeatsTempoAtLoopStart(const MidiEvents& midi);
 // says why.
 Sf2Records ReadSf2(const std::string& path);
 
+// Returns true if the SoundFont has an instrument and every instrument starts with a global zone that holds the
+// modulators of seqlib's kNoVelocityFilterFullBend. The pitch wheel then covers the whole range that RPN 0 sets.
+bool FullBendRange(const Sf2Records& sf);
+
 } // namespace agbsf2::test
 
 // Each driver's tests, in konami_test.cpp, rare_test.cpp, quintet_test.cpp, mp2k_test.cpp, rd2_test.cpp,
