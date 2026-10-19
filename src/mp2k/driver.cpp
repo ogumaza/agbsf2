@@ -4,6 +4,9 @@
 
 #include <algorithm>
 #include <iterator>
+#include <string_view>
+
+#include "xsflib/bytes.h"
 
 #include "mp2k/song.h"
 #include "thumb.h"
@@ -24,11 +27,13 @@ constexpr int kMaxPlayers = 64;
 // lsrs r0, r0, #13; adds r0, r0, r1; ldrh r3, [r0, #4]; lsls r1, r3, #1; adds r1, r1, r3; lsls r1, r1, #2;
 // adds r1, r1, r2; ldr r2, [r1]; ldr r1, [r0]; adds r0, r2, #0; bl MPlayStart; pop {r0}; bx r0. Some games' compiler
 // swaps r2 and r3: ldr r3, =players and ldrh r2, [r0, #4], then lsls r1, r2, #1; adds r1, r1, r2; lsls r1, r1, #2;
-// adds r1, r1, r3. The two loads' offsets aren't compared.
-constexpr int kSongStartLength = 14;
-constexpr uint16_t kSongStart[][kSongStartLength] = {
-    {0xB500, 0x0400, 0x4A00, 0x4900, 0x0B40, 0x1840, 0x8883, 0x0059, 0x18C9, 0x0089, 0x1889, 0x680A, 0x6801, 0x1C10},
-    {0xB500, 0x0400, 0x4B00, 0x4900, 0x0B40, 0x1840, 0x8882, 0x0051, 0x1889, 0x0089, 0x18C9, 0x680A, 0x6801, 0x1C10}};
+// adds r1, r1, r3. The patterns end before the bl. The two loads' offsets aren't compared.
+constexpr std::string_view kSongStart[] = {"B500 0400 4Axx 49xx 0B40 1840 8883 0059 18C9 0089 1889 680A 6801 1C10",
+                                           "B500 0400 4Bxx 49xx 0B40 1840 8882 0051 1889 0089 18C9 680A 6801 1C10"};
+
+// The offset of the routine's bl MPlayStart, and the routine's length, in bytes.
+constexpr uint32_t kSongStartBl = 28;
+constexpr uint32_t kSongStartSize = 36;
 
 // The mixer's test for a voice that plays its sample backwards or a compressed sample, in the ARM code the init copies
 // to IWRAM: ldrb r0, [r4, #1]; tst r0, #0x30. Older versions of the driver don't have it.
@@ -69,31 +74,19 @@ bool InRam(uint32_t address)
 // is passed over. Returns false if there's none.
 bool FindSongStart(const Rom& rom, DriverInfo& info)
 {
-    const uint8_t* data = rom.Ptr(kRomBase);
-    const size_t size = rom.Size();
-    for (size_t o = 0; o + 2 * (kSongStartLength + 4) <= size; o += 2)
+    // The matches of both forms, in address order.
+    std::vector<uint32_t> hits;
+    for (std::string_view form : kSongStart)
     {
-        const auto matches = [&](const uint16_t (&pattern)[kSongStartLength])
-        {
-            for (int i = 0; i < kSongStartLength; i++)
-            {
-                const uint16_t h = uint16_t(data[o + 2 * size_t(i)] | (data[o + 2 * size_t(i) + 1] << 8));
-                const uint16_t mask = i == 2 || i == 3 ? 0xFF00 : 0xFFFF;
-                if ((h & mask) != pattern[i])
-                {
-                    return false;
-                }
-            }
+        const std::vector<uint32_t> found = FindThumb(rom, ParseThumbPattern(form));
+        hits.insert(hits.end(), found.begin(), found.end());
+    }
+    std::sort(hits.begin(), hits.end());
 
-            return true;
-        };
-        if (!std::any_of(std::begin(kSongStart), std::end(kSongStart), matches))
-        {
-            continue;
-        }
-
-        const uint32_t at = kRomBase + uint32_t(o);
-        if (!IsBl(rom, at + 2 * kSongStartLength) || rom.U16(at + 2 * kSongStartLength + 4) != 0xBC01)
+    for (uint32_t at : hits)
+    {
+        if (!rom.Contains(at, kSongStartSize) || !IsBl(rom, at + kSongStartBl) ||
+            rom.U16(at + kSongStartBl + 4) != 0xBC01)
         {
             continue;
         }
@@ -132,8 +125,7 @@ uint32_t FindSoundMode(const Rom& rom, uint32_t player_table)
     const size_t size = rom.Size();
     for (size_t o = 0; o + 4 <= size; o += 4)
     {
-        const uint32_t word = data[o] | (data[o + 1] << 8) | (data[o + 2] << 16) | (uint32_t(data[o + 3]) << 24);
-        if (word != player_table)
+        if (xsflib::LoadLe32(data + o) != player_table)
         {
             continue;
         }
@@ -204,7 +196,7 @@ void ReadPlayers(const Rom& rom, DriverInfo& info)
         }
 
         Player player;
-        player.track_count = rom.U8(at + 8) > 16 ? 16 : rom.U8(at + 8);
+        player.track_count = rom.U8(at + 8) > kMaxTracks ? kMaxTracks : rom.U8(at + 8);
         info.players.push_back(player);
     }
 }
@@ -351,7 +343,7 @@ Player SongPlayer(const Rom& rom, const DriverInfo& info, int song)
     }
 
     Player player;
-    player.track_count = 16;
+    player.track_count = kMaxTracks;
 
     return player;
 }

@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: MIT
 
+# Builds agbsf2 for each push to main that changes more than docs: on macOS ARM64, and on 64-bit Windows with
+# clang-cl. Only the Windows job runs the tests. The macOS job builds Release without them (AGBSF2_BUILD_TESTS=OFF).
 name: CI
 
 on:
@@ -23,6 +25,7 @@ jobs:
         include:
           - name: macOS ARM64
             os: macos-15
+            cmake-args: -DAGBSF2_BUILD_TESTS=OFF
           - name: Windows x86-64 clang-cl
             os: windows-2025
             cmake-args: -A x64 -T ClangCL

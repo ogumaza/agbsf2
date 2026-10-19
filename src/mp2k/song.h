@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "mp2k/driver.h"
+#include "music.h"
 #include "rom.h"
 
 namespace agbsf2::mp2k
@@ -16,17 +18,18 @@ namespace agbsf2::mp2k
 // The track commands. Bytes 0x80 to 0xB0 are waits, and 0xD0 to 0xFF notes with a length.
 enum Command : uint8_t
 {
-    kCmdWait = 0x80,   // 0x80-0xB0: a wait of ClockLength(command - 0x80) ticks
-    kCmdFine = 0xB1,   // the end of the track
-    kCmdGoto = 0xB2,   // 4 bytes: an address to go on from
-    kCmdPatt = 0xB3,   // 4 bytes: the address of a pattern to play, which ends at a kCmdPend
-    kCmdPend = 0xB4,   // the end of a pattern
-    kCmdRept = 0xB5,   // a count and 4 bytes: an address to go back to, so that the part plays count times in all
-    kCmdMemAcc = 0xB9, // an operation, a byte of the memory area, a value, and an address for the conditional jumps
-    kCmdPrio = 0xBA,   // the track's priority
-    kCmdTempo = 0xBB,  // half the tempo, in quarter notes a minute
-    kCmdKeySh = 0xBC,  // a key shift in semitones
-    kCmdVoice = 0xBD,  // a voice of the voice group
+    kCmdWait = 0x80,     // 0x80-0xB0: a wait of ClockLength(command - 0x80) ticks
+    kCmdLastWait = 0xB0, // the longest wait
+    kCmdFine = 0xB1,     // the end of the track
+    kCmdGoto = 0xB2,     // 4 bytes: an address to go on from
+    kCmdPatt = 0xB3,     // 4 bytes: the address of a pattern to play, which ends at a kCmdPend
+    kCmdPend = 0xB4,     // the end of a pattern
+    kCmdRept = 0xB5,     // a count and 4 bytes: an address to go back to, so that the part plays count times in all
+    kCmdMemAcc = 0xB9,   // an operation, a byte of the memory area, a value, and an address for the conditional jumps
+    kCmdPrio = 0xBA,     // the track's priority
+    kCmdTempo = 0xBB,    // half the tempo, in quarter notes a minute
+    kCmdKeySh = 0xBC,    // a key shift in semitones
+    kCmdVoice = 0xBD,    // a voice of the voice group
     kCmdVol = 0xBE,
     kCmdPan = 0xBF,   // the track's pan, with 0x40 the centre
     kCmdBend = 0xC0,  // the pitch bend, with 0x40 the centre
@@ -60,6 +63,9 @@ enum Xcommand : uint8_t
     kXcmdCount
 };
 
+// The size of the memory area that kCmdMemAcc reads and writes: a byte offset reaches 256 bytes.
+constexpr size_t kMemAccSize = 256;
+
 // Returns true if a command ends the track: kCmdFine, and the command numbers that the driver's command table gives the
 // same handler.
 bool EndsTrack(uint8_t command);
@@ -82,6 +88,13 @@ struct SongHeader
 // and tracks in the ROM unless it has no tracks.
 bool ReadSongHeader(const Rom& rom, uint32_t address, SongHeader& header);
 
+// Reads the header of song `song`. Returns false if it can't be read, or if it has no tracks. An entry without tracks
+// is a placeholder.
+bool ReadSong(const Rom& rom, const DriverInfo& info, int song, SongHeader& header);
+
+// Returns the number of a song's tracks that its music player plays: the first ones, as many as it has room for.
+int PlayedTracks(const Rom& rom, const DriverInfo& info, int song, const SongHeader& header);
+
 // The kinds of voice, in a voice's type byte.
 constexpr uint8_t kVoicePsg = 0x07;     // the PSG channel: 1-2 square, 3 wave, 4 noise; 0 for a DirectSound sample
 constexpr uint8_t kVoiceFixed = 0x08;   // a sample that plays at the mixer's rate, whatever the key
@@ -101,6 +114,12 @@ struct Voice
     bool IsSplit() const
     {
         return (type & (kVoiceKeySplit | kVoiceDrumKit)) != 0;
+    }
+
+    // Returns the pan that a drum kit's voice plays at, from -128 to 127.
+    int8_t RhythmPan() const
+    {
+        return pan_sweep & 0x80 ? int8_t(uint8_t((pan_sweep - 0xC0) * 2)) : 0;
     }
 
     uint32_t address = 0;
@@ -158,26 +177,23 @@ struct Event
 // false if the command is unknown or runs past the end of the ROM, or needs the running status when there's none.
 bool DecodeEvent(const Rom& rom, uint32_t address, uint8_t running, Event& event);
 
+// Returns true if a decoded command ends the track: a command that EndsTrack(uint8_t) accepts, or extended command 00
+// or 03. The driver handles those two as it handles kCmdFine.
+bool EndsTrack(const Event& event);
+
 // Returns the running status after `event`: its command if it's a command from kCmdVoice up, or else `running`.
 uint8_t RunningStatus(const Event& event, uint8_t running);
 
 // Returns a description of a command for listings, such as "N24 key 60 vel 100".
 std::string DescribeEvent(const Event& event);
 
-// A track's loop and end, in ticks, from its commands without timing them.
-struct TrackLayout
-{
-    bool loops = false;
-    uint64_t loop_start = 0;   // the tick that the loop starts at, the first time through
-    uint64_t loop_end = 0;     // the tick at which the track goes back to the loop's start
-    uint64_t end = 0;          // the end of a track without a loop
-    uint64_t last_command = 0; // the tick by which a track without a loop has played its last command other than a
-                               // wait, and its notes have been released
-};
-
 // Reads the loop and end of the track at `address`. A loop is a kCmdGoto, or a kCmdRept with a count of 0, that goes
 // back to a command played before. Conditional jumps read the memory area as the driver leaves it at the start, with
-// every byte 0.
+// every byte 0. For a track without a loop, the layout's last command is the tick by which the track has played its
+// last command other than a wait and released its notes.
 TrackLayout ScanTrack(const Rom& rom, uint32_t address);
+
+// Writes a text listing of every command of every track of a song. Returns false and sets `error` on failure.
+bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::string& path, std::string& error);
 
 } // namespace agbsf2::mp2k

@@ -3,7 +3,9 @@
 #include "rare/driver.h"
 
 #include <initializer_list>
+#include <span>
 
+#include "arm.h"
 #include "thumb.h"
 
 namespace agbsf2::rare
@@ -46,6 +48,9 @@ struct RateSetting
 constexpr RateSetting kRateSettings[] = {
     {10512, 176, 0x018F0064}, {13379, 224, 0x01397FC3}, {18157, 304, 0x00E70086}, {21024, 352, 0x00C78032}};
 
+// The rate that detection assumes where the init sets a rate that the rate routine doesn't know.
+constexpr const RateSetting& kAssumedRate = kRateSettings[1];
+
 // Maximum number of tunes to read during detection.
 constexpr int kMaxTunes = 1024;
 
@@ -72,16 +77,9 @@ constexpr uint32_t kTestR4 = 0xE3540000;    // cmp r4, #0
 // The size of a note slot in the driver's RAM.
 constexpr uint32_t kSlotSize = 0x28;
 
-// An ARM instruction that detection looks for, with the bits it doesn't compare clear in `mask`.
-struct ArmMatch
-{
-    uint32_t value;
-    uint32_t mask = 0xFFFFFFFF;
-};
-
 // Any branch, and any branch taken when the last comparison was equal.
-constexpr ArmMatch kAnyBranch = {0xEA000000, 0xFF000000};
-constexpr ArmMatch kAnyBranchIfEqual = {0x0A000000, 0xFF000000};
+constexpr ArmPattern kAnyBranch = {0xEA000000, 0xFF000000};
+constexpr ArmPattern kAnyBranchIfEqual = {0x0A000000, 0xFF000000};
 
 // Returns true if the halfword is `ldr r<reg>, [pc, #imm]`.
 bool IsLdrLiteral(uint16_t h, int reg)
@@ -157,52 +155,20 @@ bool ReadTableSetup(const Rom& rom, const InitCode& init, DriverInfo& info)
     return false;
 }
 
-// Returns the word that the ARM instruction `ldr rX, [pc, #imm12]` at `at` loads.
-uint32_t ArmLiteral(const Rom& rom, uint32_t at)
-{
-    const uint32_t insn = rom.U32(at);
-    const uint32_t offset = insn & 0xFFF;
-    return rom.U32((insn & 0x00800000) ? at + 8 + offset : at + 8 - offset);
-}
-
 // Finds the table that a `ldr rX, =table` just before the instruction `use` loads, in the driver's code. Returns 0 if
 // there's none.
 uint32_t FindArmTable(const Rom& rom, const InitCode& init, uint32_t load, uint32_t use)
 {
-    for (uint32_t at = init.code; at + 8 <= init.code + init.code_size; at += 4)
-    {
-        if ((rom.U32(at) & kLdrPcMask) == load && rom.U32(at + 4) == use)
-        {
-            return ArmLiteral(rom, at);
-        }
-    }
-
-    return 0;
+    const ArmPattern pattern[] = {{load, kLdrPcMask}, {use}};
+    const uint32_t at = FindArm(rom, init.code, init.code + init.code_size, pattern);
+    return at ? ArmLiteral(rom, at) : 0;
 }
 
 // Returns true if the driver's code has the instructions of `pattern` one after another.
-bool HasArmCode(const Rom& rom, const InitCode& init, std::initializer_list<ArmMatch> pattern)
+bool HasArmCode(const Rom& rom, const InitCode& init, std::initializer_list<ArmPattern> pattern)
 {
-    const uint32_t size = uint32_t(pattern.size()) * 4;
-    for (uint32_t at = init.code; at + size <= init.code + init.code_size; at += 4)
-    {
-        uint32_t next = at;
-        for (const ArmMatch& m : pattern)
-        {
-            if ((rom.U32(next) & m.mask) != m.value)
-            {
-                break;
-            }
-
-            next += 4;
-        }
-        if (next == at + size)
-        {
-            return true;
-        }
-    }
-
-    return false;
+    const std::span<const ArmPattern> instructions(pattern.begin(), pattern.size());
+    return FindArm(rom, init.code, init.code + init.code_size, instructions) != 0;
 }
 
 // Reads the format and tables from the driver's code. Returns false if its command dispatch isn't there.
@@ -422,10 +388,11 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
     if (!known_rate)
     {
         info.warnings.push_back("the init sets a mix rate of " + std::to_string(info.mix_rate) +
-                                " Hz, which the driver doesn't know; 13379 Hz is assumed");
-        info.mix_rate = 13379;
-        info.samples_per_frame = 224;
-        info.rate_scale = 0x01397FC3;
+                                " Hz, which the driver doesn't know; " + std::to_string(kAssumedRate.rate) +
+                                " Hz is assumed");
+        info.mix_rate = kAssumedRate.rate;
+        info.samples_per_frame = kAssumedRate.samples_per_frame;
+        info.rate_scale = kAssumedRate.scale;
     }
 
     if (info.voice_limit < 1 || info.voice_limit > 101)
@@ -473,6 +440,11 @@ int FadeFrames(const DriverInfo& info, uint32_t index)
 int FadeEntryFrames(uint32_t entry)
 {
     return entry ? int(entry) + 1 : 0;
+}
+
+int FadeFrames(const DriverInfo& info, uint32_t index, uint8_t setting)
+{
+    return setting < 0x80 ? FadeEntryFrames(setting) : FadeFrames(info, index);
 }
 
 } // namespace agbsf2::rare

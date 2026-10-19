@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "music.h"
 #include "rom.h"
 
 namespace agbsf2::rare
@@ -41,6 +42,12 @@ enum Command : uint8_t
     kCmdNop = 12,     // a command that does nothing
     kCommandCount
 };
+
+// Returns true if `command` is one of the delays.
+constexpr bool IsDelay(uint8_t command)
+{
+    return command == kCmdDelay1 || command == kCmdDelay2 || command == kCmdDelay3;
+}
 
 // The controllers the driver reacts to. Controllers 20-23 set a channel's envelope only in the revision of Donkey Kong
 // Country 3.
@@ -87,20 +94,11 @@ bool DecodeEvent(const Rom& rom, uint32_t address, Format format, Event& event);
 // Returns a description of a command for listings, such as "note on ch 2 key 60 vel 100".
 std::string DescribeEvent(const Event& event);
 
-// A track's loop and end, in ticks, read from its commands without timing them.
-struct TrackLayout
-{
-    bool loops = false;
-    uint64_t loop_start = 0;   // loop start tick
-    uint64_t loop_end = 0;     // tick at which the track returns to the loop start
-    uint64_t end = 0;          // end tick for a track without a loop
-    uint64_t last_command = 0; // the tick of a track without a loop's last command other than a delay or the end
-};
-
 // The most commands of a track that ScanTrack() and detection read before they give up on finding its end.
 constexpr int kMaxTrackCommands = 1000000;
 
 // Reads the loop and end of the track at `address`. A loop ends at the first loop end controller after a loop start.
+// For a track without a loop, the layout's last command is the tick of its last command other than a delay or the end.
 TrackLayout ScanTrack(const Rom& rom, uint32_t address, Format format);
 
 // The kinds of instrument.
@@ -116,6 +114,12 @@ constexpr uint32_t kLoopForward = 2;
 constexpr uint32_t kLoopOnceB = 3;
 constexpr uint32_t kLoopForwardB = 4;
 
+// Returns true if the mixer loops a sample in loop mode `mode`.
+constexpr bool LoopsForward(uint32_t mode)
+{
+    return mode == kLoopForward || mode == kLoopForwardB;
+}
+
 // An instrument: 17 words. A sample instrument plays a sample of signed 8-bit PCM. A drum kit or key split picks one of
 // its instruments for each key from its key map, and a drum kit plays that instrument at its root key.
 struct Instrument
@@ -128,7 +132,7 @@ struct Instrument
     // Returns true if the mixer loops the sample.
     bool Loops() const
     {
-        return loop_mode == kLoopForward || loop_mode == kLoopForwardB;
+        return LoopsForward(loop_mode);
     }
 
     uint32_t type = 0;
@@ -150,6 +154,10 @@ struct Instrument
     int32_t vibrato_depth = 0; // the vibrato's depth scale
 };
 
+// Reads the instrument at `address` as the driver does, without checking that it's in the ROM. A byte outside the ROM
+// reads as 0.
+Instrument InstrumentAt(const Rom& rom, uint32_t address);
+
 // Reads the instrument at `address`. Returns false if it isn't in the ROM.
 bool ReadInstrument(const Rom& rom, uint32_t address, Instrument& instrument);
 
@@ -164,6 +172,15 @@ struct EnvelopeSettings
     bool None() const
     {
         return attack >= 0x80 && decay >= 0x80 && sustain >= 0x80 && release >= 0x80;
+    }
+
+    // Takes the settings of `other` that are below 0x80. The others stay as they are.
+    void Merge(const EnvelopeSettings& other)
+    {
+        attack = other.attack < 0x80 ? other.attack : attack;
+        decay = other.decay < 0x80 ? other.decay : decay;
+        sustain = other.sustain < 0x80 ? other.sustain : sustain;
+        release = other.release < 0x80 ? other.release : release;
     }
 
     uint8_t attack = 0xFF;

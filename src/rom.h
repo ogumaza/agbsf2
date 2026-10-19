@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -115,5 +116,20 @@ private:
     bool from_gsf_ = false;
     std::string library_;
 };
+
+// Returns the `count` bytes of `rom` from `address` on in hex. Each byte comes out as two capital digits and a space.
+// The --dump listings show each command's bytes this way.
+std::string HexBytes(const Rom& rom, uint32_t address, uint32_t count);
+
+// A table that detection found: its address, the bytes that it takes up and its name for an error.
+struct RomTable
+{
+    uint32_t address = 0;
+    uint32_t size = 0;
+    const char* name = "";
+};
+
+// Returns the name of the first of `tables` that isn't whole in `rom`, or null if all of them are.
+const char* MissingTable(const Rom& rom, std::span<const RomTable> tables);
 
 } // namespace agbsf2

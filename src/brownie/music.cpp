@@ -15,7 +15,7 @@
 #include "brownie/sequencer.h"
 #include "brownie/song.h"
 #include "brownie/soundfont.h"
-#include "program.h"
+#include "gba.h"
 #include "sf2.h"
 
 namespace agbsf2::brownie
@@ -37,20 +37,9 @@ class BrownieMusic : public Music
 {
 public:
     // Keeps a reference to `rom`, which has to outlive this.
-    BrownieMusic(const Rom& rom, DriverInfo info) : rom_(rom), info_(std::move(info))
+    BrownieMusic(const Rom& rom, DriverInfo info)
+        : Music("Brownie Brown's sound driver", info.log, info.warnings), rom_(rom), info_(std::move(info))
     {
-        log_.push_back("Brownie Brown's sound driver");
-        log_.insert(log_.end(), info_.log.begin(), info_.log.end());
-    }
-
-    const std::vector<std::string>& Log() const override
-    {
-        return log_;
-    }
-
-    const std::vector<std::string>& Warnings() const override
-    {
-        return info_.warnings;
     }
 
     int SongCount() const override
@@ -72,7 +61,7 @@ public:
 
     SongReport InspectSong(int song, const ConvertSettings& settings) const override
     {
-        SongReport r = Report(brownie::InspectSong(rom_, info_, song, OptionsFor(settings)));
+        SongReport r = brownie::InspectSong(rom_, info_, song, settings);
         r.address = Address(song);
 
         return r;
@@ -80,15 +69,7 @@ public:
 
     SongReport ConvertSong(int song, const ConvertSettings& settings) override
     {
-        SongReport r = Report(brownie::ConvertSong(rom_, info_, song, OptionsFor(settings), shared_.get()));
-        r.address = Address(song);
-
-        return r;
-    }
-
-    bool SupportsVoiceChannels() const override
-    {
-        return false;
+        return brownie::ConvertSong(rom_, info_, song, settings, shared_.get());
     }
 
     // The shared SoundFont numbers the instruments of every song together.
@@ -99,12 +80,10 @@ public:
 
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
-        int base = 0;
         SoundfontBuilder sf(rom_, uint32_t(info_.mix_rate));
-        shared_->Build(sf, PsgTuning(rom_, info_, base));
+        shared_->Build(sf, PsgTuning(rom_, info_).cents);
         Sf2File& f = sf.File();
-        f.name = rom_.Title();
-        f.comment = "Instruments for " + rom_.Title() + ", extracted by " + kProgramName;
+        f.SetTitle(rom_.Title());
 
         return f.Write(path, error);
     }
@@ -129,8 +108,7 @@ public:
         {
             for (const RegisterWrite& w : seq.Step())
             {
-                std::fprintf(out, "%lld w %08x %d %0*x\n", f, unsigned(w.address), int(w.size), 2 * int(w.size),
-                             unsigned(w.value));
+                PrintWrite(out, f, w, "w");
             }
 
             for (int c = 0; c < seq.ChannelCount(); c++)
@@ -180,42 +158,11 @@ private:
     // Returns the address of a sound's list of channels.
     uint32_t Address(int song) const
     {
-        return song >= 0 && song < SongCount() ? rom_.U32(info_.song_table + 4 * uint32_t(song)) : 0;
-    }
-
-    static ConvertOptions OptionsFor(const ConvertSettings& settings)
-    {
-        ConvertOptions opt;
-        opt.loops = settings.loops;
-        opt.track_mask = uint16_t(settings.track_mask);
-        opt.frame_timing = settings.frame_timing;
-        opt.out_dir = settings.out_dir;
-        opt.base_name = settings.base_name;
-
-        return opt;
-    }
-
-    // Returns a song's summary as a report.
-    static SongReport Report(const SongSummary& sum)
-    {
-        SongReport r;
-        r.ok = sum.ok;
-        r.silent = sum.silent;
-        r.seconds = sum.seconds;
-        r.loop_start = sum.loop_start;
-        r.loop_end = sum.loop_end;
-        r.tracks = sum.tracks;
-        r.bpm = sum.bpm;
-        r.midi_path = sum.midi_path;
-        r.sf2_path = sum.sf2_path;
-        r.warnings = sum.warnings;
-
-        return r;
+        return song >= 0 && song < SongCount() ? SongAddress(rom_, info_, song) : 0;
     }
 
     const Rom& rom_;
     DriverInfo info_;
-    std::vector<std::string> log_;
     std::unique_ptr<InstrumentSet> shared_;
 };
 

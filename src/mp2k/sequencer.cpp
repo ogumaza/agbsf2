@@ -4,6 +4,8 @@
 
 #include <algorithm>
 
+#include "warnings.h"
+
 namespace agbsf2::mp2k
 {
 namespace
@@ -14,19 +16,14 @@ constexpr uint8_t kFlagVolSet = 0x01;
 constexpr uint8_t kFlagVolChange = 0x03;
 constexpr uint8_t kFlagPitSet = 0x04;
 constexpr uint8_t kFlagPitChange = 0x0C;
+constexpr uint8_t kFlagVolPitChange = kFlagVolChange | kFlagPitChange;
 constexpr uint8_t kFlagStart = 0x40;
 constexpr uint8_t kFlagExist = 0x80;
-
-// The player's status once every track has ended.
-constexpr uint32_t kPlayerStopped = 0x80000000u;
 
 // The settings that a track sets, for the conversion's reports.
 constexpr uint8_t kSetVolume = 0x01;
 constexpr uint8_t kSetPan = 0x02;
 constexpr uint8_t kSetPitch = 0x04;
-
-// The driver's tick: each frame adds the tempo to a counter, and each 150 in it is a tick.
-constexpr int kTickCounter = 150;
 
 // 2^31 * 2^(n/12), rounded: a semitone's steps in the driver's table of sample rates, an octave below key 180.
 constexpr uint32_t kFreqTable[12] = {2147483648u, 2275179671u, 2410468894u, 2553802834u, 2705659852u, 2866546760u,
@@ -48,6 +45,141 @@ uint32_t MulHigh(uint32_t a, uint32_t b)
 uint32_t ScaleEntry(int key)
 {
     return uint32_t(((14 - key / 12) << 4) | (key % 12));
+}
+
+// Sets a PSG channel's pan and its envelope's full and sustain levels from its volumes.
+void SetPsgVolume(Channel& c)
+{
+    // A note panned at least two to one plays on one side only, at up to the full level. Otherwise it plays on both.
+    bool one_side = false;
+    if (c.right >= c.left && c.right / 2 >= c.left)
+    {
+        c.pan = 0x0F;
+        one_side = true;
+    }
+    else if (c.right < c.left && c.left / 2 >= c.right)
+    {
+        c.pan = 0xF0;
+        one_side = true;
+    }
+
+    const uint32_t sum = uint32_t(c.left) + c.right;
+    c.goal = uint8_t(sum / 16);
+    if (!one_side)
+    {
+        c.pan = 0xFF;
+    }
+    else if (c.goal > 15)
+    {
+        c.goal = 15;
+    }
+
+    c.sustain_goal = uint8_t((c.goal * c.sustain + 15) >> 4);
+    c.pan &= c.pan_mask;
+}
+
+// Each part of a PSG channel's envelope ends in a step of its counter, the end of the frame's envelope work, or the
+// channel's end.
+enum class Next
+{
+    kStep,
+    kDone,
+    kOff
+};
+
+// Starts the echo after a PSG note's release. A silent echo ends the channel.
+Next StartEcho(Channel& c)
+{
+    c.envelope = uint8_t((c.goal * c.echo_volume + 0xFF) >> 8);
+    if (!c.envelope)
+    {
+        return Next::kOff;
+    }
+
+    c.status |= kStatusEcho;
+
+    return Next::kDone;
+}
+
+// Starts a PSG channel's sustain, or its echo if the voice's sustain is 0.
+Next StartSustain(Channel& c)
+{
+    if (c.sustain == 0)
+    {
+        c.status &= uint8_t(~kStatusEnvelope);
+        return StartEcho(c);
+    }
+
+    c.status--;
+    c.envelope = c.sustain_goal;
+    c.counter = 7;
+
+    return Next::kStep;
+}
+
+// Starts a PSG channel's decay, or its sustain if the voice's decay is 0.
+Next StartDecay(Channel& c)
+{
+    c.status--;
+    c.counter = c.decay;
+    if (!c.counter)
+    {
+        return StartSustain(c);
+    }
+
+    c.envelope = c.goal;
+
+    return Next::kStep;
+}
+
+// Moves a PSG channel's envelope a level on in its phase once the counter has run out, and sets the counter again.
+Next StepEnvelope(Channel& c)
+{
+    if (c.counter != 0)
+    {
+        return Next::kStep;
+    }
+
+    SetPsgVolume(c);
+
+    const uint8_t phase = c.status & kStatusEnvelope;
+    if (phase == kPhaseRelease)
+    {
+        c.envelope--;
+        if (int8_t(c.envelope) <= 0)
+        {
+            return StartEcho(c);
+        }
+
+        c.counter = c.release;
+    }
+    else if (phase == kPhaseSustain)
+    {
+        c.envelope = c.sustain_goal;
+        c.counter = 7;
+    }
+    else if (phase == kPhaseDecay)
+    {
+        c.envelope--;
+        if (int8_t(c.envelope) <= int8_t(c.sustain_goal))
+        {
+            return StartSustain(c);
+        }
+
+        c.counter = c.decay;
+    }
+    else
+    {
+        c.envelope++;
+        if (c.envelope >= c.goal)
+        {
+            return StartDecay(c);
+        }
+
+        c.counter = c.attack;
+    }
+
+    return Next::kStep;
 }
 
 } // namespace
@@ -124,15 +256,14 @@ uint32_t KeyToPsgFrequency(int channel, int key, int fine)
 
 Sequencer::Sequencer(const Rom& rom, const DriverInfo& info, int song) : rom_(rom), info_(info)
 {
-    if (!ReadSongHeader(rom, SongAddress(rom, info, song), header_) || header_.track_count == 0)
+    if (!ReadSong(rom, info, song, header_))
     {
         return;
     }
 
     // The song's tracks go on the player's, as far as it has room for them.
     valid_ = true;
-    const Player player = SongPlayer(rom, info, song);
-    const int count = std::min(header_.track_count, player.track_count);
+    const int count = PlayedTracks(rom, info, song, header_);
     tracks_.resize(size_t(count));
     for (int t = 0; t < count; t++)
     {
@@ -242,12 +373,7 @@ void Sequencer::RunTrack(int t)
         }
         else if (ch.gate && --ch.gate == 0)
         {
-            ch.status |= kStatusStop;
-            Action a;
-            a.kind = Action::kRelease;
-            a.track = uint8_t(t);
-            a.channel = c;
-            AddAction(a);
+            ReleaseNote(t, c);
         }
 
         c = next;
@@ -336,7 +462,7 @@ bool Sequencer::RunCommand(int t)
         EndTrack(t);
         return false;
     }
-    if (c <= 0xB0)
+    if (c <= kCmdLastWait)
     {
         track.wait = uint8_t(ClockLength(c - kCmdWait));
         return true;
@@ -425,7 +551,7 @@ bool Sequencer::RunCommand(int t)
             Action a;
             a.kind = Action::kVoice;
             a.track = uint8_t(t);
-            a.a = uint8_t(voice);
+            a.value = voice;
             AddAction(a);
             break;
         }
@@ -480,7 +606,7 @@ bool Sequencer::RunCommand(int t)
             if (track.mod_t != type)
             {
                 track.mod_t = type;
-                track.flags |= kFlagVolChange | kFlagPitChange;
+                track.flags |= kFlagVolPitChange;
             }
             break;
         }
@@ -550,8 +676,8 @@ void Sequencer::Note(int t, int length_index)
     Action a;
     a.kind = Action::kNoteOn;
     a.track = uint8_t(t);
-    a.a = track.key;
-    a.b = track.velocity;
+    a.key = track.key;
+    a.velocity = track.velocity;
     a.program = track.voice;
     a.modified = track.modified || track.offset != 0;
     a.voice = track.voice >= 0 ? header_.voices + 12 * uint32_t(track.voice) : 0;
@@ -561,13 +687,13 @@ void Sequencer::Note(int t, int length_index)
     Voice voice = track.tone;
     uint8_t key = track.key;
     int8_t rhythm_pan = 0;
-    if (track.tone.type & (kVoiceKeySplit | kVoiceDrumKit))
+    if (track.tone.IsSplit())
     {
         const uint32_t index =
             track.tone.type & kVoiceKeySplit ? rom_.U8(track.tone.key_table + track.key) : uint32_t(track.key);
         a.voice = track.tone.wave + 12 * index;
         ReadVoice(rom_, a.voice, voice);
-        if (voice.type & (kVoiceKeySplit | kVoiceDrumKit))
+        if (voice.IsSplit())
         {
             a.kind = Action::kNoteDropped;
             AddAction(a);
@@ -576,11 +702,7 @@ void Sequencer::Note(int t, int length_index)
 
         if (track.tone.type & kVoiceDrumKit)
         {
-            if (voice.pan_sweep & 0x80)
-            {
-                rhythm_pan = int8_t(uint8_t((voice.pan_sweep - 0xC0) * 2));
-            }
-
+            rhythm_pan = voice.RhythmPan();
             key = voice.key;
         }
     }
@@ -631,24 +753,19 @@ void Sequencer::Note(int t, int length_index)
     ch.echo_length = track.echo_length;
     SetChannelVolume(ch, track);
 
-    const int pitch_key = std::max(0, key + track.key_m);
-    if (psg)
-    {
-        ch.frequency = KeyToPsgFrequency(psg, pitch_key, track.pit_m);
-    }
-    else
+    SetChannelPitch(ch, track);
+    if (!psg)
     {
         ch.count = int32_t(track.offset);
-        ch.frequency = SampleFrequency(info_, rom_.U32(voice.wave + 4), pitch_key, track.pit_m);
     }
 
     ch.status = kStatusStart;
     ch.synth = false;
     ch.audible = false;
-    track.flags &= 0xF0;
+    track.flags &= uint8_t(~kFlagVolPitChange);
 
     a.channel = c;
-    a.value = key;
+    a.play_key = key;
     AddAction(a);
 }
 
@@ -666,12 +783,7 @@ void Sequencer::EndTie(int t)
         Channel& ch = channels_[size_t(c)];
         if ((ch.status & (kStatusStart | kStatusEnvelope)) && !(ch.status & kStatusStop) && ch.midi_key == track.key)
         {
-            ch.status |= kStatusStop;
-            Action a;
-            a.kind = Action::kRelease;
-            a.track = uint8_t(t);
-            a.channel = c;
-            AddAction(a);
+            ReleaseNote(t, c);
             break;
         }
     }
@@ -687,12 +799,7 @@ void Sequencer::EndTrack(int t)
         const int next = ch.next;
         if ((ch.status & kStatusOn) && !(ch.status & kStatusStop))
         {
-            ch.status |= kStatusStop;
-            Action a;
-            a.kind = Action::kRelease;
-            a.track = uint8_t(t);
-            a.channel = c;
-            AddAction(a);
+            ReleaseNote(t, c);
         }
 
         UnlinkChannel(c);
@@ -766,7 +873,7 @@ void Sequencer::ExtendedCommand(int t)
     case kXcmdWait:
         {
             // The command runs again on each tick until its count runs out.
-            const uint16_t length = uint16_t(rom_.U8(track.position) | (rom_.U8(track.position + 1) << 8));
+            const uint16_t length = rom_.U16(track.position);
             if (track.timer < length)
             {
                 track.timer++;
@@ -889,12 +996,7 @@ void Sequencer::UpdateTrack(Track& track)
     // The pitch is in 256ths of a semitone: the key offset in the high bits, and the fine tune in the low 8.
     if (track.flags & kFlagPitSet)
     {
-        int32_t pitch = (track.tune + track.bend * track.bend_range) * 4 + track.key_shift * 256;
-        if (track.mod_t == 0)
-        {
-            pitch += 16 * track.mod_m;
-        }
-
+        const int32_t pitch = TrackPitch(track);
         track.key_m = int8_t(uint8_t(pitch >> 8));
         track.pit_m = uint8_t(pitch);
     }
@@ -912,12 +1014,26 @@ void Sequencer::SetChannelVolume(Channel& c, const Track& track) const
     c.left = uint8_t(std::min(left, 255));
 }
 
+void Sequencer::SetChannelPitch(Channel& c, const Track& track) const
+{
+    const int key = std::max(0, c.key + track.key_m);
+    const int psg = c.type & kVoicePsg;
+    if (psg)
+    {
+        c.frequency = KeyToPsgFrequency(psg, key, track.pit_m);
+    }
+    else
+    {
+        c.frequency = SampleFrequency(info_, rom_.U32(c.wave + 4), key, track.pit_m);
+    }
+}
+
 void Sequencer::UpdateChannels()
 {
     for (int t = 0; t < TrackCount(); t++)
     {
         Track& track = tracks_[size_t(t)];
-        if (!(track.flags & kFlagExist) || !(track.flags & (kFlagVolChange | kFlagPitChange)))
+        if (!(track.flags & kFlagExist) || !(track.flags & kFlagVolPitChange))
         {
             continue;
         }
@@ -934,28 +1050,19 @@ void Sequencer::UpdateChannels()
                 continue;
             }
 
-            const int psg = ch.type & kVoicePsg;
             if (track.flags & kFlagVolChange)
             {
                 SetChannelVolume(ch, track);
             }
             if (track.flags & kFlagPitChange)
             {
-                const int key = std::max(0, ch.key + track.key_m);
-                if (psg)
-                {
-                    ch.frequency = KeyToPsgFrequency(psg, key, track.pit_m);
-                }
-                else
-                {
-                    ch.frequency = SampleFrequency(info_, rom_.U32(ch.wave + 4), key, track.pit_m);
-                }
+                SetChannelPitch(ch, track);
             }
 
             c = next;
         }
 
-        track.flags &= 0xF0;
+        track.flags &= uint8_t(~kFlagVolPitChange);
     }
 }
 
@@ -1144,106 +1251,6 @@ void Sequencer::RunPsg()
             continue;
         }
 
-        // Each part of the envelope ends in a step of its counter, the end of the frame's envelope work, or the
-        // channel's end.
-        enum class Next
-        {
-            kStep,
-            kDone,
-            kOff
-        };
-
-        auto echo_start = [&]()
-        {
-            c.envelope = uint8_t((c.goal * c.echo_volume + 0xFF) >> 8);
-            if (!c.envelope)
-            {
-                return Next::kOff;
-            }
-
-            c.status |= kStatusEcho;
-
-            return Next::kDone;
-        };
-
-        auto sustain_start = [&]()
-        {
-            if (c.sustain == 0)
-            {
-                c.status &= uint8_t(~kStatusEnvelope);
-                return echo_start();
-            }
-
-            c.status--;
-            c.envelope = c.sustain_goal;
-            c.counter = 7;
-
-            return Next::kStep;
-        };
-
-        auto decay_start = [&]()
-        {
-            c.status--;
-            c.counter = c.decay;
-            if (!c.counter)
-            {
-                return sustain_start();
-            }
-
-            c.envelope = c.goal;
-
-            return Next::kStep;
-        };
-
-        auto step = [&]()
-        {
-            if (c.counter != 0)
-            {
-                return Next::kStep;
-            }
-
-            SetPsgVolume(c);
-
-            const uint8_t phase = c.status & kStatusEnvelope;
-            if (phase == kPhaseRelease)
-            {
-                c.envelope--;
-                if (int8_t(c.envelope) <= 0)
-                {
-                    return echo_start();
-                }
-
-                c.counter = c.release;
-            }
-            else if (phase == kPhaseSustain)
-            {
-                c.envelope = c.sustain_goal;
-                c.counter = 7;
-            }
-            else if (phase == kPhaseDecay)
-            {
-                c.envelope--;
-                if (int8_t(c.envelope) <= int8_t(c.sustain_goal))
-                {
-                    return sustain_start();
-                }
-
-                c.counter = c.decay;
-            }
-            else
-            {
-                c.envelope++;
-                if (c.envelope >= c.goal)
-                {
-                    return decay_start();
-                }
-
-                c.counter = c.attack;
-            }
-
-            return Next::kStep;
-        };
-
         // A note released before the channel started it never sounds.
         Next next = Next::kStep;
         const bool never_started = (c.status & kStatusStart) && (c.status & kStatusStop);
@@ -1262,7 +1269,7 @@ void Sequencer::RunPsg()
             }
             else
             {
-                next = decay_start();
+                next = StartDecay(c);
             }
         }
         else if (c.status & kStatusEcho)
@@ -1276,12 +1283,12 @@ void Sequencer::RunPsg()
             c.counter = c.release;
             if (!c.release)
             {
-                next = echo_start();
+                next = StartEcho(c);
             }
         }
         else
         {
-            next = step();
+            next = StepEnvelope(c);
         }
 
         // The counter steps once a frame, and twice every 15th frame.
@@ -1296,7 +1303,7 @@ void Sequencer::RunPsg()
             }
 
             c15--;
-            next = step();
+            next = StepEnvelope(c);
         }
         if (next == Next::kOff)
         {
@@ -1321,36 +1328,6 @@ void Sequencer::RunPsg()
             }
         }
     }
-}
-
-void Sequencer::SetPsgVolume(Channel& c) const
-{
-    // A note panned at least two to one plays on one side only, at up to the full level. Otherwise it plays on both.
-    bool one_side = false;
-    if (c.right >= c.left && c.right / 2 >= c.left)
-    {
-        c.pan = 0x0F;
-        one_side = true;
-    }
-    else if (c.right < c.left && c.left / 2 >= c.right)
-    {
-        c.pan = 0xF0;
-        one_side = true;
-    }
-
-    const uint32_t sum = uint32_t(c.left) + c.right;
-    c.goal = uint8_t(sum / 16);
-    if (!one_side)
-    {
-        c.pan = 0xFF;
-    }
-    else if (c.goal > 15)
-    {
-        c.goal = 15;
-    }
-
-    c.sustain_goal = uint8_t((c.goal * c.sustain + 15) >> 4);
-    c.pan &= c.pan_mask;
 }
 
 void Sequencer::RunDirect()
@@ -1572,18 +1549,18 @@ void Sequencer::MixChannel(Channel& c, const Wave& wave)
 
 void Sequencer::MixSynth(Channel& c) const
 {
-    // A synth voice's sample data starts 0x80 and its type: 0 for a pulse wave, 1 for a saw wave, and anything else for
-    // a triangle wave. Its phase moves on by 8 times the step that a sample's position would, so a cycle of the wave
-    // lasts 64 of the sample's points.
-    const int type = int8_t(rom_.U8(c.wave + 17));
-    const uint32_t step = (c.frequency * info_.step_scale) << 3;
+    // A synth voice's data follows its sample's 16-byte header. It starts 0x80 and its type: 0 for a pulse wave, 1 for
+    // a saw wave, and anything else for a triangle wave.
+    const uint32_t data = c.wave + 16;
+    const int type = int8_t(rom_.U8(data + 1));
+    const uint32_t step = SynthStep(c.frequency, info_.step_scale);
     const int samples = info_.samples_per_frame;
 
     // A pulse wave's duty follows a triangle wave whose phase is the top byte of the count, which moves on by the
     // fourth byte of the sample's data each frame.
     if (type == 0)
     {
-        c.count = int32_t(uint32_t(c.count) + (uint32_t(rom_.U8(c.wave + 19)) << 24));
+        c.count = int32_t(uint32_t(c.count) + DutyStep(rom_, data));
         c.fraction += step * uint32_t(samples);
         return;
     }
@@ -1595,8 +1572,7 @@ void Sequencer::MixSynth(Channel& c) const
         for (int i = 0; i < samples; i++)
         {
             c.fraction += step;
-            const int32_t point = int32_t(c.fraction >> 24) - 0x70 - int32_t((c.fraction >> 26) & 0x1F);
-            filter = point + (filter >> 1);
+            filter = FilterSaw(SawPoint(c.fraction), filter);
         }
 
         c.count = filter;
@@ -1625,7 +1601,7 @@ void Sequencer::ReportTrack(int t)
         track.restate &= uint8_t(~kSetVolume);
         track.last_volume = volume;
         a.kind = Action::kVolume;
-        a.a = uint8_t(volume);
+        a.value = volume;
         AddAction(a);
     }
 
@@ -1635,15 +1611,11 @@ void Sequencer::ReportTrack(int t)
         track.restate &= uint8_t(~kSetPan);
         track.last_pan = pan;
         a.kind = Action::kPan;
-        a.a = uint8_t(pan);
+        a.value = pan;
         AddAction(a);
     }
 
-    int pitch = (track.tune + track.bend * track.bend_range) * 4 + track.key_shift * 256;
-    if (track.mod_t == 0)
-    {
-        pitch += 16 * track.mod_m;
-    }
+    const int pitch = TrackPitch(track);
     if (pitch != track.last_pitch || (again & kSetPitch))
     {
         track.restate &= uint8_t(~kSetPitch);
@@ -1654,11 +1626,33 @@ void Sequencer::ReportTrack(int t)
     }
 }
 
+int32_t Sequencer::TrackPitch(const Track& track)
+{
+    int32_t pitch = (track.tune + track.bend * track.bend_range) * 4 + track.key_shift * 256;
+    if (track.mod_t == 0)
+    {
+        pitch += 16 * track.mod_m;
+    }
+
+    return pitch;
+}
+
 void Sequencer::AddAction(Action action)
 {
     action.tick = clock_;
     action.frame = frame_;
     actions_.push_back(action);
+}
+
+void Sequencer::ReleaseNote(int t, int channel)
+{
+    channels_[size_t(channel)].status |= kStatusStop;
+
+    Action a;
+    a.kind = Action::kRelease;
+    a.track = uint8_t(t);
+    a.channel = channel;
+    AddAction(a);
 }
 
 void Sequencer::EndNote(int channel, bool sounded)
@@ -1685,10 +1679,7 @@ void Sequencer::CheckAudible(int channel)
 
 void Sequencer::Warn(const std::string& message)
 {
-    if (std::find(warnings_.begin(), warnings_.end(), message) == warnings_.end())
-    {
-        warnings_.push_back(message);
-    }
+    WarnOnce(warnings_, message);
 }
 
 } // namespace agbsf2::mp2k

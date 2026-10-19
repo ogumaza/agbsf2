@@ -12,39 +12,12 @@
 
 #include "konami/pitch.h"
 #include "konami/seqformat.h"
+#include "psg.h"
 
 namespace agbsf2::konami
 {
 namespace
 {
-
-// Sample kinds, combined with a source parameter to form cache keys.
-enum Kind
-{
-    kDsKind,
-    kSquareKind,
-    kWaveKind,
-    kNoiseKind
-};
-
-constexpr int kGuardPoints = 8; // loop-start copies after a loop end, for interpolation
-
-// Game Boy square duty waveforms, 8 steps, most significant bit first.
-constexpr uint8_t kDutyPatterns[4] = {0x01, 0x81, 0x87, 0x7E};
-
-// Stores one waveform cycle as three copies looping over the middle one, so players get lead-in and lead-out points
-// around the loop.
-void SetCycle(sf2::Sample& out, const std::vector<int16_t>& cycle)
-{
-    out.data.clear();
-    for (int i = 0; i < 3; i++)
-    {
-        out.data.insert(out.data.end(), cycle.begin(), cycle.end());
-    }
-
-    out.loop_start = uint32_t(cycle.size());
-    out.loop_end = uint32_t(2 * cycle.size());
-}
 
 // Returns the frequency of GB square note 0, from the first entry of the driver's frequency table, or C2 if there's no
 // usable entry.
@@ -55,7 +28,7 @@ double SquareNoteZeroHz(const Rom& rom, const DriverInfo& info)
         const uint32_t x = rom.U16(info.psg_freq_table) & 0x7FF;
         if (x < 2040)
         {
-            return 131072.0 / (2048 - x);
+            return SquareHz(int(x));
         }
     }
 
@@ -63,6 +36,14 @@ double SquareNoteZeroHz(const Rom& rom, const DriverInfo& info)
 }
 
 } // namespace
+
+std::string WaveName(int wave, int volume)
+{
+    char name[32];
+    std::snprintf(name, sizeof name, "Wave %02d vol %d", wave, volume);
+
+    return name;
+}
 
 SoundfontBuilder::SoundfontBuilder(const Rom& rom, const DriverInfo& info, int songs)
     : rom_(rom),
@@ -126,7 +107,7 @@ bool SoundfontBuilder::DsPitched(int index)
 
 int SoundfontBuilder::DsSample(int index)
 {
-    const auto key = std::make_pair(int(kDsKind), index);
+    const auto key = std::make_pair(Kind::kSample, index);
     if (auto it = cache_.find(key); it != cache_.end())
     {
         return it->second;
@@ -145,7 +126,7 @@ int SoundfontBuilder::DsSample(int index)
     out.sample_rate = uint32_t(std::max(1L, std::lround(s.Rate(info_.mix_rate))));
     out.original_key = uint8_t(DsRootKey(index));
 
-    out.data.reserve(size_t(s.length) + kGuardPoints);
+    out.data.reserve(size_t(s.length) + kLoopGuard);
     for (int32_t i = 0; i < s.length; i++)
     {
         out.data.push_back(int16_t(rom_.S8(s.data + uint32_t(i)) * 256));
@@ -155,11 +136,7 @@ int SoundfontBuilder::DsSample(int index)
     {
         out.loop_start = uint32_t(s.loop_start);
         out.loop_end = uint32_t(s.length);
-        const int32_t loop_len = s.length - s.loop_start;
-        for (int i = 0; i < kGuardPoints; i++)
-        {
-            out.data.push_back(out.data[size_t(s.loop_start + i % loop_len)]);
-        }
+        AddLoopGuard(out);
     }
 
     file_.samples.push_back(std::move(out));
@@ -169,26 +146,15 @@ int SoundfontBuilder::DsSample(int index)
 int SoundfontBuilder::SquareSample(int duty)
 {
     duty &= 3;
-    const auto key = std::make_pair(int(kSquareKind), duty);
+    const auto key = std::make_pair(Kind::kSquare, duty);
     if (auto it = cache_.find(key); it != cache_.end())
     {
         return it->second;
     }
 
     sf2::Sample out;
-    out.name = std::string("Square ") + kDutyNames[duty];
-
-    constexpr int kPerStep = 8; // 64 points per cycle
-    std::vector<int16_t> cycle;
-    for (int step = 0; step < 8; step++)
-    {
-        const bool high = (kDutyPatterns[duty] >> (7 - step)) & 1;
-        for (int i = 0; i < kPerStep; i++)
-        {
-            cycle.push_back(high ? 32767 : -32767);
-        }
-    }
-    SetCycle(out, cycle);
+    out.name = SquareName(duty);
+    SetCycle(out, SquareCycle(duty, 32767));
 
     // Root key C4; one cycle lasts 64 points.
     const double c4 = square_note0_hz_ * std::pow(2.0, (60 - square_base_) / 12.0);
@@ -317,7 +283,7 @@ void SoundfontBuilder::WaveRow(int wave, int volume, int (&steps)[32]) const
 
 int SoundfontBuilder::WaveSample(int wave, int volume)
 {
-    const auto key = std::make_pair(int(kWaveKind), (wave << 4) | (volume & 15));
+    const auto key = std::make_pair(Kind::kWave, (wave << 4) | (volume & 15));
     if (auto it = cache_.find(key); it != cache_.end())
     {
         return it->second;
@@ -335,9 +301,7 @@ int SoundfontBuilder::WaveSample(int wave, int volume)
     mean /= 32;
 
     sf2::Sample out;
-    char name[32];
-    std::snprintf(name, sizeof name, "Wave %02d vol %d", wave, volume);
-    out.name = name;
+    out.name = WaveName(wave, volume);
 
     constexpr int kPerStep = 4; // 128 points per 32-step period
     std::vector<int16_t> cycle;
@@ -362,7 +326,7 @@ int SoundfontBuilder::WaveSample(int wave, int volume)
 int SoundfontBuilder::NoiseSample(uint16_t setting)
 {
     const int nr43 = setting & 0xFF;
-    const auto key = std::make_pair(int(kNoiseKind), nr43);
+    const auto key = std::make_pair(Kind::kNoise, nr43);
     if (auto it = cache_.find(key); it != cache_.end())
     {
         return it->second;
@@ -403,26 +367,21 @@ int SoundfontBuilder::NoiseSample(uint16_t setting)
             const uint64_t target = k * 16 / den;
             for (; done < target; done++)
             {
-                const uint32_t bit = (lfsr ^ (lfsr >> 1)) & 1;
-                lfsr = (lfsr >> 1) | (bit << 14);
-                if (narrow)
-                {
-                    lfsr = (lfsr & ~0x40u) | (bit << 6);
-                }
+                lfsr = NextLfsr(lfsr, narrow);
             }
 
             out.data.push_back((lfsr & 1) ? -32767 : 32767);
         }
     }
 
-    // Loop the whole sequence, wrapped in copies of its ends as lead-in/out.
+    // Loop the whole sequence, wrapped in copies of its ends as lead-in and lead-out.
     const size_t n = out.data.size();
-    std::vector<int16_t> wrapped(out.data.end() - kGuardPoints, out.data.end());
+    std::vector<int16_t> wrapped(out.data.end() - kLoopGuard, out.data.end());
     wrapped.insert(wrapped.end(), out.data.begin(), out.data.end());
-    wrapped.insert(wrapped.end(), out.data.begin(), out.data.begin() + kGuardPoints);
     out.data = std::move(wrapped);
-    out.loop_start = kGuardPoints;
-    out.loop_end = uint32_t(kGuardPoints + n);
+    out.loop_start = kLoopGuard;
+    out.loop_end = uint32_t(kLoopGuard + n);
+    AddLoopGuard(out);
 
     file_.samples.push_back(std::move(out));
     return cache_[key] = int(file_.samples.size()) - 1;

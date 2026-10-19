@@ -9,14 +9,12 @@
 #include <string>
 #include <vector>
 
+#include "gba.h"
 #include "rare/song.h"
 #include "rom.h"
 
 namespace agbsf2::rare
 {
-
-// The frame rate of the GBA's display, which the driver's per-frame routine follows: 280896 CPU cycles a frame.
-constexpr double kFrameRate = 16777216.0 / 280896.0;
 
 // The driver counts each frame as 1/60 s of the song's time, so a song plays slower on the GBA than its tempo says, by
 // this factor.
@@ -64,5 +62,9 @@ int FadeFrames(const DriverInfo& info, uint32_t index);
 // Returns the number of frames that a decay or release takes whose fade table entry is `entry`, or 0 for an instant
 // one.
 int FadeEntryFrames(uint32_t entry);
+
+// Returns the number of frames that a note's decay or release takes, or 0 for an instant one. A channel's `setting`
+// from controller 21 or 23 gives the fade table entry. A setting from 0x80 up leaves the instrument's index `index`.
+int FadeFrames(const DriverInfo& info, uint32_t index, uint8_t setting);
 
 } // namespace agbsf2::rare

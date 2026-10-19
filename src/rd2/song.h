@@ -16,14 +16,16 @@ namespace agbsf2::rd2
 // A command of a track, as the driver reads it.
 struct Command
 {
-    uint32_t size = 1;   // in bytes
-    uint32_t ticks = 0;  // a wait's ticks, or a note's length
-    bool note = false;   // 00-BF
-    bool wait = false;   // C0 and C1
-    bool end = false;    // FF
-    uint32_t target = 0; // F0's, F4's and F8's address, as an offset from the sequence's start
-    uint16_t length = 0; // a note's new length, or C1's new wait, if it gives one
-    bool has_length = false;
+    uint8_t op = 0;          // the command's first byte
+    uint32_t size = 1;       // in bytes
+    uint32_t ticks = 0;      // a wait's ticks, or a note's length
+    uint8_t velocity = 0;    // a note's velocity
+    bool note = false;       // 00-BF
+    bool wait = false;       // C0 and C1
+    bool end = false;        // FF
+    uint32_t target = 0;     // F0's, F4's and F8's address, as an offset from the sequence's start
+    uint8_t track = 0;       // the player's track that F8 starts
+    bool has_length = false; // a note gives a length and velocity, or C1 a wait, and the track keeps them
     std::string text;
 };
 

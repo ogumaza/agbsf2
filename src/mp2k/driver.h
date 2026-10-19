@@ -8,16 +8,17 @@
 #include <string>
 #include <vector>
 
+#include "gba.h"
 #include "rom.h"
 
 namespace agbsf2::mp2k
 {
 
-// The frame rate of the GBA's display, which the driver's per-frame routine follows: 280896 CPU cycles a frame.
-constexpr double kFrameRate = 16777216.0 / 280896.0;
-
 // The DirectSound channels the driver has room for.
 constexpr int kMaxDirectChannels = 12;
+
+// The most tracks a song can have, and the most a music player can play.
+constexpr int kMaxTracks = 16;
 
 // User-supplied overrides for driver detection.
 struct DriverOverrides

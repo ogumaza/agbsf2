@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "files.h"
+#include "gba.h"
 #include "konami/convert.h"
 #include "konami/driver.h"
 #include "konami/seqformat.h"
@@ -45,45 +46,20 @@ using test::TempPath;
 constexpr uint32_t kSongEntrySize = 36;
 
 // A cartridge image being put together.
-struct Image
+class Image : public test::CartImage
 {
-    explicit Image(size_t size) : d(size, 0)
-    {
-    }
+public:
+    using CartImage::CartImage;
 
-    void Put16(uint32_t a, uint16_t v)
+    // Writes entry `song` of the song table at `table` in revision `revision`: its base address and the offset of
+    // every track. Each offset is `rest` unless `offsets` gives another. Entries of the WCT 2004 revision have the same
+    // layout as those of the Ultimate Masters revision.
+    void Song(uint32_t table, int song, uint32_t base, uint16_t rest, const std::vector<std::pair<int, int>>& offsets,
+              Revision revision = Revision::kUltimateMasters)
     {
-        d[a - kRomBase] = uint8_t(v);
-        d[a - kRomBase + 1] = uint8_t(v >> 8);
-    }
-
-    void Put32(uint32_t a, uint32_t v)
-    {
-        Put16(a, uint16_t(v));
-        Put16(a + 2, uint16_t(v >> 16));
-    }
-
-    void Bytes(uint32_t a, const std::vector<uint8_t>& b)
-    {
-        std::copy(b.begin(), b.end(), d.begin() + (a - kRomBase));
-    }
-
-    // Writes the halfwords `h`, such as Thumb code, from `a` on.
-    void Halfwords(uint32_t a, const std::vector<uint16_t>& h)
-    {
-        for (size_t i = 0; i < h.size(); i++)
-        {
-            Put16(a + 2 * uint32_t(i), h[i]);
-        }
-    }
-
-    // Writes entry `song` of the song table at `table`: its base address, and the offset of every track, which is
-    // `rest` unless `offsets` gives another.
-    void Song(uint32_t table, int song, uint32_t base, uint16_t rest, const std::vector<std::pair<int, int>>& offsets)
-    {
-        const uint32_t e = table + uint32_t(song) * kSongEntrySize;
+        const uint32_t e = table + uint32_t(song) * SongEntrySize(revision);
         Put32(e, base);
-        for (int t = 0; t < kTracks; t++)
+        for (int t = 0; t < TrackCount(revision); t++)
         {
             Put16(e + 4 + 2 * uint32_t(t), rest);
         }
@@ -92,16 +68,6 @@ struct Image
             Put16(e + 4 + 2 * uint32_t(t), uint16_t(o));
         }
     }
-
-    Rom ToRom() const
-    {
-        Rom r;
-        r.Assign(d);
-
-        return r;
-    }
-
-    std::vector<uint8_t> d;
 };
 
 // Songs and one sample at fixed places, for use with DriverOverrides.
@@ -122,20 +88,20 @@ Image SyntheticImage()
 
     // Song 0.
     m.Song(kSongTable, 0, kSongBase, kRestOffset, kTrackOffsets);
-    m.Bytes(kSongBase + 0x100, {0x00, 0xFD});
+    m.PutBytes(kSongBase + 0x100, {0x00, 0xFD});
 
     // Track 4: note (vol 16, sample 5), wait 10, rest, wait 5, loop the song.
-    m.Bytes(kSongBase + 0x00, {0x00, 0xA8, 0x10, 0x05, 0x0A, 0xE0, 0x05, 0xFF, 0x01, 0x00});
+    m.PutBytes(kSongBase + 0x00, {0x00, 0xA8, 0x10, 0x05, 0x0A, 0xE0, 0x05, 0xFF, 0x01, 0x00});
 
     // Track 5: wait 5, loop point (+2 bytes), wait 2, note (vol 7, sample 5, +12), wait 3, rest, wait 1, end.
-    m.Bytes(kSongBase + 0x80, {0x05, 0xF3, 0xAA, 0xBB, 0x02, 0xB7, 0x05, 0x0C, 0x03, 0xE0, 0x01, 0xFE});
+    m.PutBytes(kSongBase + 0x80, {0x05, 0xF3, 0xAA, 0xBB, 0x02, 0xB7, 0x05, 0x0C, 0x03, 0xE0, 0x01, 0xFE});
 
     // Track 0: duty 25%, PSG note (vol 3, note 24), wait 4, rest, wait 0, end.
-    m.Bytes(kSongBase + 0x40, {0x00, 0x81, 0x00, 0xD3, 0x18, 0x04, 0xE0, 0x00, 0xFE});
+    m.PutBytes(kSongBase + 0x40, {0x00, 0x81, 0x00, 0xD3, 0x18, 0x04, 0xE0, 0x00, 0xFE});
 
     // Song 1: a placeholder that plays no notes. Every track: rest, wait 5, end.
     m.Song(kSongTable, 1, kSongBase + 0x180, 0, {});
-    m.Bytes(kSongBase + 0x180, {0x00, 0xE0, 0x05, 0xFE});
+    m.PutBytes(kSongBase + 0x180, {0x00, 0xE0, 0x05, 0xFE});
 
     // Sample 5: 64-point sawtooth at the mixer rate, one-shot.
     m.Put32(kSampleTable + 4 * 5, kSampleHeader);
@@ -144,7 +110,7 @@ Image SyntheticImage()
     m.Put32(kSampleHeader + 8, 0xFFFFFFFF);
     for (int i = 0; i < 64; i++)
     {
-        m.d[kSampleHeader - kRomBase + 12 + i] = uint8_t(int8_t(i * 4 - 128));
+        m.Put8(kSampleHeader + 12 + i, uint8_t(int8_t(i * 4 - 128)));
     }
 
     return m;
@@ -166,6 +132,20 @@ DriverInfo SongsAt(uint32_t song_table, bool bend_kept = true)
     return info;
 }
 
+// Detects the driver in `rom` with its tables given by hand: `song_count` songs in the song table at `song_table`, the
+// sample table at kSampleTable and a mixer rate of 16000 Hz. Fills in `info`, and returns false if the detection fails.
+bool DetectGiven(const Rom& rom, uint32_t song_table, int song_count, DriverInfo& info)
+{
+    DriverOverrides ov;
+    ov.song_table = song_table;
+    ov.song_count = song_count;
+    ov.sample_table = kSampleTable;
+    ov.mix_rate = 16000;
+    std::string err;
+
+    return DetectDriver(rom, ov, info, err);
+}
+
 // The addresses ScanRom puts the song and sample tables at.
 constexpr uint32_t kScanSongTable = kRomBase + 0x100;
 constexpr uint32_t kScanSampleTable = kRomBase + 0x168;
@@ -180,16 +160,16 @@ Image ScanImage(uint32_t gap = 0)
 
     // Song 0: track 4 at +0 (note, sample 0), track 0 at +8 (PSG note), the other tracks share +17.
     m.Song(kScanSongTable, 0, kSong0, 17, {{4, 0}, {0, 8}});
-    m.Bytes(kSong0 + 0, {0x00, 0xA8, 0x10, 0x00, 0x0A, 0xE0, 0x05, 0xFE});
-    m.Bytes(kSong0 + 8, {0x00, 0x81, 0x00, 0xD3, 0x18, 0x04, 0xE0, 0x00, 0xFE});
-    m.Bytes(kSong0 + 17, {0x00, 0xFD});
+    m.PutBytes(kSong0 + 0, {0x00, 0xA8, 0x10, 0x00, 0x0A, 0xE0, 0x05, 0xFE});
+    m.PutBytes(kSong0 + 8, {0x00, 0x81, 0x00, 0xD3, 0x18, 0x04, 0xE0, 0x00, 0xFE});
+    m.PutBytes(kSong0 + 17, {0x00, 0xFD});
 
     // Song 1, from the end of song 0's data: track 5 at +0 (note, sample 1, then stop the song), the other tracks share
     // +8.
     const uint32_t song1 = kSong0 + 19 + gap;
     m.Song(kScanSongTable, 1, song1, 8, {{5, 0}});
-    m.Bytes(song1 + 0, {0x00, 0xA3, 0x01, 0x08, 0xE0, 0x00, 0xFF, 0x00});
-    m.Bytes(song1 + 8, {0x00, 0xFD});
+    m.PutBytes(song1 + 0, {0x00, 0xA3, 0x01, 0x08, 0xE0, 0x00, 0xFF, 0x00});
+    m.PutBytes(song1 + 8, {0x00, 0xFD});
 
     // Samples 0 (one-shot) and 1 (looped), with their headers right after the table.
     constexpr uint32_t kHeader0 = kScanSampleTable + 8, kHeader1 = kHeader0 + 12 + 32;
@@ -201,7 +181,7 @@ Image ScanImage(uint32_t gap = 0)
     m.Put32(kHeader0 + 8, 0xFFFFFFFF);
     for (uint32_t i = 0; i < 32; i++)
     {
-        m.d[kHeader0 - kRomBase + 12 + i] = uint8_t(i * 8);
+        m.Put8(kHeader0 + 12 + i, uint8_t(i * 8));
     }
 
     m.Put32(kHeader1, 0xC2D);
@@ -209,7 +189,7 @@ Image ScanImage(uint32_t gap = 0)
     m.Put32(kHeader1 + 8, 4);
     for (uint32_t i = 0; i < 16; i++)
     {
-        m.d[kHeader1 - kRomBase + 12 + i] = uint8_t(i * 16);
+        m.Put8(kHeader1 + 12 + i, uint8_t(i * 16));
     }
 
     return m;
@@ -349,22 +329,32 @@ void TestSequencer()
     SEQLIB_CHECK(!frames[16][7].active);
 }
 
+// Runs an Ultimate Masters song until it first loops, and returns the frame it loops in.
+int FirstLoop(UltimateMastersSequencer& seq)
+{
+    for (int f = 0; f < 20; f++)
+    {
+        seq.Step();
+        if (seq.LoopedLastFrame())
+        {
+            return f;
+        }
+    }
+
+    return -1;
+}
+
 void TestLoopStart()
 {
     // Track 4 ends where it looped the song, and track 5 loops the song where it ended, at frame 11. It passed its loop
     // point at frame 5.
     Image m = SyntheticImage();
-    m.Bytes(kSongBase + 0x07, {0xFE});
-    m.Bytes(kSongBase + 0x8B, {0xFF, 0x01, 0x00});
+    m.PutBytes(kSongBase + 0x07, {0xFE});
+    m.PutBytes(kSongBase + 0x8B, {0xFF, 0x01, 0x00});
     const Rom rom = m.ToRom();
     UltimateMastersSequencer seq(rom, SongsAt(kSongTable), 0);
 
-    int looped_at = -1;
-    for (int f = 0; f < 20 && looped_at < 0; f++)
-    {
-        seq.Step();
-        looped_at = seq.LoopedLastFrame() ? f : -1;
-    }
+    const int looped_at = FirstLoop(seq);
 
     // The loop goes back to the frame where track 5 passed its loop point.
     SEQLIB_CHECK_EQ(looped_at, 11);
@@ -376,18 +366,13 @@ void TestLoopStartEarliest()
     // As in TestLoopStart, but track 0 also passes a loop point, at frame 4: duty 25%, PSG note (vol 3, note 24), wait
     // 4, loop point, rest, end. The loop goes back to frame 4, the earlier of the two.
     Image m = SyntheticImage();
-    m.Bytes(kSongBase + 0x07, {0xFE});
-    m.Bytes(kSongBase + 0x8B, {0xFF, 0x01, 0x00});
-    m.Bytes(kSongBase + 0x40, {0x00, 0x81, 0x00, 0xD3, 0x18, 0x04, 0xF3, 0x00, 0xE0, 0x00, 0xFE});
+    m.PutBytes(kSongBase + 0x07, {0xFE});
+    m.PutBytes(kSongBase + 0x8B, {0xFF, 0x01, 0x00});
+    m.PutBytes(kSongBase + 0x40, {0x00, 0x81, 0x00, 0xD3, 0x18, 0x04, 0xF3, 0x00, 0xE0, 0x00, 0xFE});
     const Rom rom = m.ToRom();
     UltimateMastersSequencer seq(rom, SongsAt(kSongTable), 0);
 
-    int looped_at = -1;
-    for (int f = 0; f < 20 && looped_at < 0; f++)
-    {
-        seq.Step();
-        looped_at = seq.LoopedLastFrame() ? f : -1;
-    }
+    const int looped_at = FirstLoop(seq);
 
     SEQLIB_CHECK_EQ(looped_at, 11);
     SEQLIB_CHECK_EQ(seq.LoopStartFrame(), 4);
@@ -399,8 +384,8 @@ void TestLoopStartLast()
     // wait 2, note, wait 3, rest, wait 1, loop the song. Each loop takes the track back to the second loop point, so
     // the song loops at frame 14 and every 6 frames after it.
     Image m = SyntheticImage();
-    m.Bytes(kSongBase + 0x07, {0xFE});
-    m.Bytes(kSongBase + 0x80, {0x05, 0xF3, 0xAA, 0xBB, 0x03, 0xF3, 0xAA, 0xBB, 0x02, 0xB7, 0x05, 0x0C, 0x03, 0xE0, 0x01,
+    m.PutBytes(kSongBase + 0x07, {0xFE});
+    m.PutBytes(kSongBase + 0x80, {0x05, 0xF3, 0xAA, 0xBB, 0x03, 0xF3, 0xAA, 0xBB, 0x02, 0xB7, 0x05, 0x0C, 0x03, 0xE0, 0x01,
                                0xFF, 0x01, 0x00});
     const Rom rom = m.ToRom();
     UltimateMastersSequencer seq(rom, SongsAt(kSongTable), 0);
@@ -426,7 +411,7 @@ void TestLoopStartLast()
 void TestSampleAboveEf()
 {
     Image m = SyntheticImage();
-    m.Bytes(kSongBase + 0x80, {0x00, 0xA0, 0xF0, 0x03, 0xFE});
+    m.PutBytes(kSongBase + 0x80, {0x00, 0xA0, 0xF0, 0x03, 0xFE});
     const Rom rom = m.ToRom();
     UltimateMastersSequencer seq(rom, SongsAt(kSongTable), 0);
 
@@ -440,30 +425,15 @@ void TestSampleAboveEf()
                              [](const std::string& w) { return w.find("note of sample F0") != std::string::npos; }));
 }
 
-// Runs an Ultimate Masters song until it first loops, and returns the frame it loops in.
-int FirstLoop(UltimateMastersSequencer& seq)
-{
-    for (int f = 0; f < 20; f++)
-    {
-        seq.Step();
-        if (seq.LoopedLastFrame())
-        {
-            return f;
-        }
-    }
-
-    return -1;
-}
-
 void TestLoopStartFarEarlier()
 {
     // As in TestLoopStart, but track 0 passes a loop point at its first command, in frame 0. Such a loop point means
     // the same as none: loop point, duty 25%, PSG note (vol 3, note 24), wait 12, rest, end. It comes more than
     // kLoopPointWindow frames before track 5's loop point, at frame 5. So the loop starts at frame 5.
     Image m = SyntheticImage();
-    m.Bytes(kSongBase + 0x07, {0xFE});
-    m.Bytes(kSongBase + 0x8B, {0xFF, 0x01, 0x00});
-    m.Bytes(kSongBase + 0x40, {0x00, 0xF3, 0x00, 0x81, 0x00, 0xD3, 0x18, 0x0C, 0xE0, 0x00, 0xFE});
+    m.PutBytes(kSongBase + 0x07, {0xFE});
+    m.PutBytes(kSongBase + 0x8B, {0xFF, 0x01, 0x00});
+    m.PutBytes(kSongBase + 0x40, {0x00, 0xF3, 0x00, 0x81, 0x00, 0xD3, 0x18, 0x0C, 0xE0, 0x00, 0xFE});
     const Rom rom = m.ToRom();
     UltimateMastersSequencer seq(rom, SongsAt(kSongTable), 0);
 
@@ -478,9 +448,9 @@ void TestLoopStartEndedTrack()
     // As in TestLoopStartEarliest, but track 0 ends with FD. No loop restarts a track after FD. Track 0's loop point,
     // at frame 4, no longer counts, and the loop starts at track 5's loop point, at frame 5.
     Image m = SyntheticImage();
-    m.Bytes(kSongBase + 0x07, {0xFE});
-    m.Bytes(kSongBase + 0x8B, {0xFF, 0x01, 0x00});
-    m.Bytes(kSongBase + 0x40, {0x00, 0x81, 0x00, 0xD3, 0x18, 0x04, 0xF3, 0x00, 0xE0, 0x00, 0xFD});
+    m.PutBytes(kSongBase + 0x07, {0xFE});
+    m.PutBytes(kSongBase + 0x8B, {0xFF, 0x01, 0x00});
+    m.PutBytes(kSongBase + 0x40, {0x00, 0x81, 0x00, 0xD3, 0x18, 0x04, 0xF3, 0x00, 0xE0, 0x00, 0xFD});
     const Rom rom = m.ToRom();
     UltimateMastersSequencer seq(rom, SongsAt(kSongTable), 0);
 
@@ -498,8 +468,8 @@ void TestBendKept()
     constexpr uint32_t kTable = kRomBase + 0x100;
     constexpr uint32_t kBase = kTable + kSongEntrySize;
     m.Song(kTable, 0, kBase, 0x20, {{4, 0}});
-    m.Bytes(kBase, {0x00, 0xA8, 0x10, 0x05, 0x01, 0xF2, 0x50, 0x01, 0xA8, 0x10, 0x05, 0x01, 0xF1, 0x20, 0x02, 0xFD});
-    m.Bytes(kBase + 0x20, {0x00, 0xFD});
+    m.PutBytes(kBase, {0x00, 0xA8, 0x10, 0x05, 0x01, 0xF2, 0x50, 0x01, 0xA8, 0x10, 0x05, 0x01, 0xF1, 0x20, 0x02, 0xFD});
+    m.PutBytes(kBase + 0x20, {0x00, 0xFD});
     const Rom rom = m.ToRom();
 
     for (const bool kept : {true, false})
@@ -574,7 +544,7 @@ std::vector<MidiEvent> ReadEvents(const std::string& path)
             tempo = value;
         }
         seconds += double(ticks[e] - at) * tempo / division / 1e6;
-        events[e].frame = uint32_t(std::lround(seconds / kFrameSeconds));
+        events[e].frame = uint32_t(std::lround(seconds / FrameSeconds(1)));
     }
 
     return events;
@@ -626,30 +596,24 @@ std::vector<std::array<int, 3>> ReadZoneKeys(const std::string& path)
 void TestConversion()
 {
     const Rom rom = SyntheticRom();
-    DriverOverrides ov;
-    ov.song_table = kSongTable;
-    ov.song_count = 1;
-    ov.sample_table = kSampleTable;
-    ov.mix_rate = 16000;
     DriverInfo info;
-    std::string err;
-    SEQLIB_CHECK(DetectDriver(rom, ov, info, err));
+    SEQLIB_CHECK(DetectGiven(rom, kSongTable, 1, info));
     SEQLIB_CHECK_EQ(info.song_count, 1);
 
     const fs::path dir = TempPath("out");
     fs::create_directories(dir);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.frame_timing = true;
     opt.loops = 1;
     opt.out_dir = Utf8(dir);
     opt.base_name = "synthetic";
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(sum.ok);
-    SEQLIB_CHECK_EQ(sum.loop_start_frame, 0);
-    SEQLIB_CHECK_EQ(sum.loop_end_frame, 15);
-    SEQLIB_CHECK_EQ(sum.frames, 15);
+    SEQLIB_CHECK(sum.loop_start == 0.0);
+    SEQLIB_CHECK(sum.loop_end == FrameSeconds(15));
+    SEQLIB_CHECK(sum.seconds == FrameSeconds(15));
     SEQLIB_CHECK_EQ(sum.tracks, 3);
     SEQLIB_CHECK(fs::exists(PathFromUtf8(sum.sf2_path)));
 
@@ -685,7 +649,7 @@ void TestConversion()
 
     opt.base_name = "\xE9\x9F\xB3\xE6\xA5\xBD:demo. ";
 
-    const SongSummary renamed = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport renamed = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(renamed.ok);
     SEQLIB_CHECK(PathFromUtf8(renamed.midi_path) == dir / PathFromUtf8("\xE9\x9F\xB3\xE6\xA5\xBD_demo_00.mid"));
@@ -699,14 +663,8 @@ void TestConversion()
 void TestSilentSongs()
 {
     const Rom rom = SyntheticRom();
-    DriverOverrides ov;
-    ov.song_table = kSongTable;
-    ov.song_count = 2;
-    ov.sample_table = kSampleTable;
-    ov.mix_rate = 16000;
     DriverInfo info;
-    std::string err;
-    SEQLIB_CHECK(DetectDriver(rom, ov, info, err));
+    SEQLIB_CHECK(DetectGiven(rom, kSongTable, 2, info));
 
     std::error_code ec;
     const fs::path dir = TempPath("silent");
@@ -717,13 +675,13 @@ void TestSilentSongs()
         return;
     }
 
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.frame_timing = true;
     opt.out_dir = Utf8(dir);
     opt.base_name = "silent";
 
     // Song 1 plays no notes, so nothing is written for it.
-    SongSummary sum = ConvertSong(rom, info, 1, opt, nullptr);
+    SongReport sum = ConvertSong(rom, info, 1, opt, nullptr);
 
     SEQLIB_CHECK(sum.ok && sum.silent);
     SEQLIB_CHECK_EQ(sum.tracks, 0);
@@ -745,32 +703,26 @@ void TestSharedSoundfont()
     // 127. Song 128's presets therefore take the free programs after the presets of song 0 in bank 0. This table has
     // the synthetic song as both song 0 and song 128.
     Image m = SyntheticImage();
-    m.d.resize(0x3000);
+    m.Resize(0x3000);
     constexpr uint32_t kTable = kRomBase + 0x1000;
     m.Song(kTable, 0, kSongBase, kRestOffset, kTrackOffsets);
     m.Song(kTable, 128, kSongBase, kRestOffset, kTrackOffsets);
     const Rom rom = m.ToRom();
 
-    DriverOverrides ov;
-    ov.song_table = kTable;
-    ov.song_count = 129;
-    ov.sample_table = kSampleTable;
-    ov.mix_rate = 16000;
     DriverInfo info;
-    std::string err;
-    SEQLIB_CHECK(DetectDriver(rom, ov, info, err));
+    SEQLIB_CHECK(DetectGiven(rom, kTable, 129, info));
 
     std::error_code ec;
     const fs::path dir = TempPath("shared");
     fs::create_directories(dir, ec);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.frame_timing = true;
     opt.out_dir = Utf8(dir);
     SoundfontBuilder shared(rom, info, 129);
 
-    const SongSummary first = ConvertSong(rom, info, 0, opt, &shared);
+    const SongReport first = ConvertSong(rom, info, 0, opt, &shared);
     const size_t first_count = shared.File().presets.size();
-    const SongSummary last = ConvertSong(rom, info, 128, opt, &shared);
+    const SongReport last = ConvertSong(rom, info, 128, opt, &shared);
 
     const std::vector<sf2::Preset>& presets = shared.File().presets;
     SEQLIB_CHECK(first.ok && last.ok && first.sf2_path.empty());
@@ -790,28 +742,22 @@ void TestEchoRouting()
     Image m = SyntheticImage();
     constexpr uint32_t kBase = kRomBase + 0x600;
     m.Song(kSongTable, 2, kBase, 0x40, {{4, 0}});
-    m.Bytes(kBase, {0x00, 0xF7, 0x7F, 0x00, 0xF9, 0x01, 0x00, 0xA8, 0x10, 0x05, 0x05,
+    m.PutBytes(kBase, {0x00, 0xF7, 0x7F, 0x00, 0xF9, 0x01, 0x00, 0xA8, 0x10, 0x05, 0x05,
                     0xF9, 0x02, 0x05, 0xF9, 0x00, 0x05, 0xF9, 0x01, 0x05, 0xFD});
-    m.Bytes(kBase + 0x40, {0x00, 0xFD});
+    m.PutBytes(kBase + 0x40, {0x00, 0xFD});
     const Rom rom = m.ToRom();
 
-    DriverOverrides ov;
-    ov.song_table = kSongTable;
-    ov.song_count = 3;
-    ov.sample_table = kSampleTable;
-    ov.mix_rate = 16000;
     DriverInfo info;
-    std::string err;
-    SEQLIB_CHECK(DetectDriver(rom, ov, info, err));
+    SEQLIB_CHECK(DetectGiven(rom, kSongTable, 3, info));
 
     std::error_code ec;
     const fs::path dir = TempPath("echo");
     fs::create_directories(dir, ec);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.frame_timing = true;
     opt.out_dir = Utf8(dir);
 
-    const SongSummary sum = ConvertSong(rom, info, 2, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 2, opt, nullptr);
 
     std::vector<std::pair<uint32_t, int>> sends;
     for (const MidiEvent& e : ReadEvents(sum.midi_path))
@@ -836,28 +782,22 @@ void TestLoopSettingsAgain()
     Image m = SyntheticImage();
     constexpr uint32_t kBase = kRomBase + 0x600;
     m.Song(kSongTable, 2, kBase, 0x40, {{4, 0}});
-    m.Bytes(kBase, {0x00, 0xA8, 0x10, 0x05, 0x0A, 0xF3, 0x00, 0x00, 0x00, 0xA8,
+    m.PutBytes(kBase, {0x00, 0xA8, 0x10, 0x05, 0x0A, 0xF3, 0x00, 0x00, 0x00, 0xA8,
                     0x10, 0x05, 0x0A, 0xA8, 0x08, 0x05, 0x0A, 0xFF, 0x01, 0x00});
-    m.Bytes(kBase + 0x40, {0x00, 0xFD});
+    m.PutBytes(kBase + 0x40, {0x00, 0xFD});
     const Rom rom = m.ToRom();
 
-    DriverOverrides ov;
-    ov.song_table = kSongTable;
-    ov.song_count = 3;
-    ov.sample_table = kSampleTable;
-    ov.mix_rate = 16000;
     DriverInfo info;
-    std::string err;
-    SEQLIB_CHECK(DetectDriver(rom, ov, info, err));
+    SEQLIB_CHECK(DetectGiven(rom, kSongTable, 3, info));
 
     std::error_code ec;
     const fs::path dir = TempPath("loop_again");
     fs::create_directories(dir, ec);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.frame_timing = true;
     opt.out_dir = Utf8(dir);
 
-    const SongSummary sum = ConvertSong(rom, info, 2, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 2, opt, nullptr);
 
     std::vector<std::pair<uint32_t, int>> levels, programs;
     for (const MidiEvent& e : ReadEvents(sum.midi_path))
@@ -873,7 +813,7 @@ void TestLoopSettingsAgain()
     }
 
     SEQLIB_CHECK(sum.ok);
-    SEQLIB_CHECK_EQ(sum.loop_start_frame, 10);
+    SEQLIB_CHECK(sum.loop_start == FrameSeconds(10));
     SEQLIB_CHECK(test::RepeatsTempoAtLoopStart(test::ReadMidi(sum.midi_path)));
     SEQLIB_REQUIRE_EQ(levels.size(), 6);
     SEQLIB_REQUIRE_EQ(programs.size(), 2);
@@ -891,35 +831,29 @@ void TestLoopStartsAtSecondPass()
     Image m = SyntheticImage();
     constexpr uint32_t kBase = kRomBase + 0x600;
     m.Song(kSongTable, 2, kBase, 0x40, {{4, 0}});
-    m.Bytes(kBase, {0x00, 0xF0, 0x00, 0x00, 0xF3, 0x00, 0x00, 0x00, 0xA8, 0x10, 0x05, 0x0A, 0xF0, 0x7F, 0x0A, 0xFF,
+    m.PutBytes(kBase, {0x00, 0xF0, 0x00, 0x00, 0xF3, 0x00, 0x00, 0x00, 0xA8, 0x10, 0x05, 0x0A, 0xF0, 0x7F, 0x0A, 0xFF,
                     0x01, 0x00});
-    m.Bytes(kBase + 0x40, {0x00, 0xFD});
+    m.PutBytes(kBase + 0x40, {0x00, 0xFD});
     const Rom rom = m.ToRom();
 
-    DriverOverrides ov;
-    ov.song_table = kSongTable;
-    ov.song_count = 3;
-    ov.sample_table = kSampleTable;
-    ov.mix_rate = 16000;
     DriverInfo info;
-    std::string err;
-    SEQLIB_CHECK(DetectDriver(rom, ov, info, err));
+    SEQLIB_CHECK(DetectGiven(rom, kSongTable, 3, info));
 
     std::error_code ec;
     const fs::path dir = TempPath("loop_second");
     fs::create_directories(dir, ec);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.frame_timing = true;
     opt.out_dir = Utf8(dir);
 
-    const SongSummary sum = ConvertSong(rom, info, 2, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 2, opt, nullptr);
 
     // The first pass runs from frame 0 to 20, so the loop runs from 20 to 40, and the song ends after its second
     // pass through it.
     SEQLIB_CHECK(sum.ok);
-    SEQLIB_CHECK_EQ(sum.loop_start_frame, 20);
-    SEQLIB_CHECK_EQ(sum.loop_end_frame, 40);
-    SEQLIB_CHECK_EQ(sum.frames, 60u);
+    SEQLIB_CHECK(sum.loop_start == FrameSeconds(20));
+    SEQLIB_CHECK(sum.loop_end == FrameSeconds(40));
+    SEQLIB_CHECK(sum.seconds == FrameSeconds(60));
     fs::remove_all(dir, ec);
 }
 
@@ -928,7 +862,7 @@ void TestNoiseKeys()
     // A noise track that plays notes 0 to 129, more than one preset has keys for. Notes 0 to 91 go on keys 36 to 127
     // and 92 to 127 on the keys below 36, and 128 and 129 need a second preset. Each note gets a key of its own.
     Image m = SyntheticImage();
-    m.d.resize(0x2000);
+    m.Resize(0x2000);
     constexpr uint32_t kBase = kRomBase + 0x1000;
     m.Song(kSongTable, 3, kBase, 0x400, {{3, 0}});
     std::vector<uint8_t> track = {0x00};
@@ -937,27 +871,21 @@ void TestNoiseKeys()
         track.insert(track.end(), {0xD8, 0x0F, uint8_t(n), 0x01}); // note n at volume 15, then wait a frame
     }
     track.insert(track.end(), {0xE0, 0x00, 0xFD});
-    m.Bytes(kBase, track);
-    m.Bytes(kBase + 0x400, {0x00, 0xFD});
+    m.PutBytes(kBase, track);
+    m.PutBytes(kBase + 0x400, {0x00, 0xFD});
     const Rom rom = m.ToRom();
 
-    DriverOverrides ov;
-    ov.song_table = kSongTable;
-    ov.song_count = 4;
-    ov.sample_table = kSampleTable;
-    ov.mix_rate = 16000;
     DriverInfo info;
-    std::string err;
-    SEQLIB_CHECK(DetectDriver(rom, ov, info, err));
+    SEQLIB_CHECK(DetectGiven(rom, kSongTable, 4, info));
 
     const fs::path dir = TempPath("noise");
     std::error_code ec;
     fs::create_directories(dir, ec);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.frame_timing = true;
     opt.out_dir = Utf8(dir);
 
-    const SongSummary sum = ConvertSong(rom, info, 3, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 3, opt, nullptr);
 
     std::vector<std::pair<int, int>> sounds; // (program, key) of each note
     int program = -1;
@@ -989,27 +917,22 @@ void TestPsgPastTable()
     // Square 1 plays note 9, note FF, a rest and note FF again, 5 frames apart. The code at kFreqCode loads the address
     // of the PSG frequency table, which has an entry for note 9. Note FF reads the word at 0x3FC0 past its start.
     Image m = SyntheticImage();
-    m.d.resize(0x6000);
+    m.Resize(0x6000);
     constexpr uint32_t kBase = kRomBase + 0x1000;
     constexpr uint32_t kFreqCode = kRomBase + 0x1100;
     constexpr uint32_t kFreqTable = kRomBase + 0x1200;
     m.Song(kSongTable, 2, kBase, 0x80, {{0, 0}});
-    m.Bytes(kBase, {0x00, 0x82, 0x00, 0xD5, 0x09, 0x05, 0xD5, 0xFF, 0x05, 0xE0, 0x05, 0xD5, 0xFF, 0x05, 0xFD});
-    m.Bytes(kBase + 0x80, {0x00, 0xFD});
-    m.Halfwords(kFreqCode, {0x4803, 0x2700, 0x5FE9, 0x0049, 0x1809, 0x880D});
+    m.PutBytes(kBase, {0x00, 0x82, 0x00, 0xD5, 0x09, 0x05, 0xD5, 0xFF, 0x05, 0xE0, 0x05, 0xD5, 0xFF, 0x05, 0xFD});
+    m.PutBytes(kBase + 0x80, {0x00, 0xFD});
+    m.PutHalfwords(kFreqCode, {0x4803, 0x2700, 0x5FE9, 0x0049, 0x1809, 0x880D});
     m.Put32(kFreqCode + 0x10, kFreqTable);
     m.Put16(kFreqTable, 0x802C);
     m.Put16(kFreqTable + 2 * 9 * 32, 0x8358);
 
-    DriverOverrides ov;
-    ov.song_table = kSongTable;
-    ov.song_count = 3;
-    ov.sample_table = kSampleTable;
-    ov.mix_rate = 16000;
     const fs::path dir = TempPath("past_table");
     std::error_code ec;
     fs::create_directories(dir, ec);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.frame_timing = true;
     opt.out_dir = Utf8(dir);
 
@@ -1025,10 +948,9 @@ void TestPsgPastTable()
         m.Put16(kFreqTable + 0x3FC0, word);
         const Rom rom = m.ToRom();
         DriverInfo info;
-        std::string err;
-        SEQLIB_CHECK(DetectDriver(rom, ov, info, err) && info.psg_freq_table == kFreqTable);
+        SEQLIB_CHECK(DetectGiven(rom, kSongTable, 3, info) && info.psg_freq_table == kFreqTable);
 
-        const SongSummary sum = ConvertSong(rom, info, 2, opt, nullptr);
+        const SongReport sum = ConvertSong(rom, info, 2, opt, nullptr);
         SEQLIB_CHECK(sum.ok);
 
         Square1 square;
@@ -1076,30 +998,24 @@ void TestSampleKeys()
     m.Put32(kSampleTable + 4 * 6, kSampleHeader);
     constexpr uint32_t kBase = kRomBase + 0x600;
     m.Song(kSongTable, 2, kBase, 0x40, {{4, 0x00}, {5, 0x20}, {6, 0x30}});
-    m.Bytes(kBase, {0x00, 0xB7, 0x05, 0x00, 0x02, 0xB7, 0x05, 0x02, 0x02, 0xB7,
+    m.PutBytes(kBase, {0x00, 0xB7, 0x05, 0x00, 0x02, 0xB7, 0x05, 0x02, 0x02, 0xB7,
                     0x06, 0x0A, 0x02, 0xB7, 0x06, 0x0C, 0x02, 0xE0, 0x00, 0xFD});
-    m.Bytes(kBase + 0x20, {0x00, 0xB7, 0x05, 0x32, 0x02, 0xE0, 0x00, 0xFD});
-    m.Bytes(kBase + 0x30, {0x00, 0xB7, 0x05, 0x80, 0x02, 0xE0, 0x00, 0xFD});
-    m.Bytes(kBase + 0x40, {0x00, 0xFD});
+    m.PutBytes(kBase + 0x20, {0x00, 0xB7, 0x05, 0x32, 0x02, 0xE0, 0x00, 0xFD});
+    m.PutBytes(kBase + 0x30, {0x00, 0xB7, 0x05, 0x80, 0x02, 0xE0, 0x00, 0xFD});
+    m.PutBytes(kBase + 0x40, {0x00, 0xFD});
     const Rom rom = m.ToRom();
 
-    DriverOverrides ov;
-    ov.song_table = kSongTable;
-    ov.song_count = 3;
-    ov.sample_table = kSampleTable;
-    ov.mix_rate = 16000;
     DriverInfo info;
-    std::string err;
-    SEQLIB_CHECK(DetectDriver(rom, ov, info, err));
+    SEQLIB_CHECK(DetectGiven(rom, kSongTable, 3, info));
 
     const fs::path dir = TempPath("keys");
     std::error_code ec;
     fs::create_directories(dir, ec);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.frame_timing = true;
     opt.out_dir = Utf8(dir);
 
-    const SongSummary sum = ConvertSong(rom, info, 2, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 2, opt, nullptr);
 
     // Voice 0's zones start out on keys 60-62 and 70-72. The keys between them are split halfway, and the outer ends
     // grow by an octave. Voice 1's key is one whose root key, 50 below it, is a MIDI key too. No key has a root key 128
@@ -1120,34 +1036,28 @@ void TestLoopWithoutDelay()
     constexpr uint32_t kBase = kRomBase + 0x600;
     m.Song(kSongTable, 2, kBase, 0x40, {{4, 0}});
     m.Song(kSongTable, 3, kBase, 0x40, {{4, 0x20}});
-    m.Bytes(kBase, {0x00, 0xA7, 0x05, 0x00, 0xFF, 0x01});
-    m.Bytes(kBase + 0x20, {0x00, 0xA7, 0x05, 0x14, 0xF3, 0x00, 0x00, 0x00, 0xFF, 0x01});
-    m.Bytes(kBase + 0x40, {0x00, 0xFD});
+    m.PutBytes(kBase, {0x00, 0xA7, 0x05, 0x00, 0xFF, 0x01});
+    m.PutBytes(kBase + 0x20, {0x00, 0xA7, 0x05, 0x14, 0xF3, 0x00, 0x00, 0x00, 0xFF, 0x01});
+    m.PutBytes(kBase + 0x40, {0x00, 0xFD});
     const Rom rom = m.ToRom();
 
-    DriverOverrides ov;
-    ov.song_table = kSongTable;
-    ov.song_count = 4;
-    ov.sample_table = kSampleTable;
-    ov.mix_rate = 16000;
     DriverInfo info;
-    std::string err;
-    SEQLIB_CHECK(DetectDriver(rom, ov, info, err));
+    SEQLIB_CHECK(DetectGiven(rom, kSongTable, 4, info));
 
     const fs::path dir = TempPath("hang");
     std::error_code ec;
     fs::create_directories(dir, ec);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.frame_timing = true;
     opt.out_dir = Utf8(dir);
-    ConvertOptions looped = opt;
+    ConvertSettings looped = opt;
     looped.loops = 10;
 
-    const SongSummary at_start = ConvertSong(rom, info, 2, opt, nullptr);
-    const SongSummary at_start_looped = ConvertSong(rom, info, 2, looped, nullptr);
-    const SongSummary later = ConvertSong(rom, info, 3, looped, nullptr);
+    const SongReport at_start = ConvertSong(rom, info, 2, opt, nullptr);
+    const SongReport at_start_looped = ConvertSong(rom, info, 2, looped, nullptr);
+    const SongReport later = ConvertSong(rom, info, 3, looped, nullptr);
 
-    auto hangs = [](const SongSummary& s)
+    auto hangs = [](const SongReport& s)
     {
         return s.warnings.size() == 1 && s.warnings[0].find("song loops without waiting a frame") != std::string::npos;
     };
@@ -1156,8 +1066,8 @@ void TestLoopWithoutDelay()
     SEQLIB_CHECK(at_start.ok && at_start.silent && hangs(at_start));
     SEQLIB_CHECK(at_start_looped.ok && at_start_looped.silent && hangs(at_start_looped));
     SEQLIB_CHECK(later.ok && !later.silent && hangs(later));
-    SEQLIB_CHECK_EQ(later.frames, 21);
-    SEQLIB_CHECK_EQ(later.loop_end_frame, -1);
+    SEQLIB_CHECK(later.seconds == FrameSeconds(21));
+    SEQLIB_CHECK(later.loop_end == -1.0);
     fs::remove_all(dir, ec);
 }
 
@@ -1170,37 +1080,31 @@ void TestFrameLimit()
     constexpr uint32_t kBase = kRomBase + 0x600;
     m.Song(kSongTable, 2, kBase, 0x20, {{4, 0}});
     m.Song(kSongTable, 3, kBase, 0x20, {{4, 0x10}});
-    m.Bytes(kBase, {0x00, 0xA7, 0x05, 0xF0, 0x00, 0x08, 0xFF, 0x01});
-    m.Bytes(kBase + 0x10, {0x00, 0xA7, 0x05, 0xF0, 0xFF, 0xFF, 0xE0, 0xF0, 0xFF, 0xFF, 0xFE});
-    m.Bytes(kBase + 0x20, {0x00, 0xFD});
+    m.PutBytes(kBase, {0x00, 0xA7, 0x05, 0xF0, 0x00, 0x08, 0xFF, 0x01});
+    m.PutBytes(kBase + 0x10, {0x00, 0xA7, 0x05, 0xF0, 0xFF, 0xFF, 0xE0, 0xF0, 0xFF, 0xFF, 0xFE});
+    m.PutBytes(kBase + 0x20, {0x00, 0xFD});
     const Rom rom = m.ToRom();
 
-    DriverOverrides ov;
-    ov.song_table = kSongTable;
-    ov.song_count = 4;
-    ov.sample_table = kSampleTable;
-    ov.mix_rate = 16000;
     DriverInfo info;
-    std::string err;
-    SEQLIB_CHECK(DetectDriver(rom, ov, info, err));
+    SEQLIB_CHECK(DetectGiven(rom, kSongTable, 4, info));
 
     const fs::path dir = TempPath("limit");
     std::error_code ec;
     fs::create_directories(dir, ec);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.frame_timing = true;
     opt.out_dir = Utf8(dir);
     opt.loops = 100;
 
-    const SongSummary looped = ConvertSong(rom, info, 2, opt, nullptr);
-    const SongSummary long_song = ConvertSong(rom, info, 3, opt, nullptr);
+    const SongReport looped = ConvertSong(rom, info, 2, opt, nullptr);
+    const SongReport long_song = ConvertSong(rom, info, 3, opt, nullptr);
 
     // Both are cut off at the limit, and the warnings say how far each got.
-    SEQLIB_CHECK(looped.ok && looped.frames == int(kMaxFrames));
+    SEQLIB_CHECK(looped.ok && looped.seconds == FrameSeconds(kMaxFrames));
     SEQLIB_CHECK(looped.warnings ==
                  std::vector<std::string>{
                      "song reached the frame limit after playing its loop 52 of 100 times; output truncated"});
-    SEQLIB_CHECK(long_song.ok && long_song.frames == int(kMaxFrames));
+    SEQLIB_CHECK(long_song.ok && long_song.seconds == FrameSeconds(kMaxFrames));
     SEQLIB_CHECK(long_song.warnings ==
                  std::vector<std::string>{"song didn't end or loop within the frame limit; output truncated"});
     fs::remove_all(dir, ec);
@@ -1212,7 +1116,7 @@ void TestTrackPastEnd()
     Image m(0x12A);
     constexpr uint32_t kTable = kRomBase + 0x100;
     m.Song(kTable, 0, kTable + kSongEntrySize, 0, {{0, 2}});
-    m.Bytes(kTable + kSongEntrySize, {0x00, 0xFD, 0x00, 0xD7, 0x30, 0x02});
+    m.PutBytes(kTable + kSongEntrySize, {0x00, 0xFD, 0x00, 0xD7, 0x30, 0x02});
     const Rom rom = m.ToRom();
     UltimateMastersSequencer seq(rom, SongsAt(kTable), 0);
 
@@ -1231,7 +1135,7 @@ void TestManyPresets()
     // A song that needs 149 presets. The wave track plays 9 waves at 15 volumes, which makes 135 wave presets, and
     // every other track plays a note, so the song uses all 16 MIDI channels, channel 10 included.
     Image m = SyntheticImage();
-    m.d.resize(0x2000);
+    m.Resize(0x2000);
     constexpr uint32_t kBase = kRomBase + 0x1000;
     std::vector<uint8_t> waves = {0x00};
     for (int w = 0; w < 9; w++)
@@ -1243,32 +1147,26 @@ void TestManyPresets()
         }
     }
     waves.insert(waves.end(), {0xE0, 0x00, 0xFD});
-    m.Bytes(kBase, waves);
-    m.Bytes(kBase + 0x300, {0x00, 0x81, 0x00, 0xD3, 0x18, 0x04, 0xE0, 0x00, 0xFD}); // the squares
-    m.Bytes(kBase + 0x310, {0x00, 0xD3, 0x05, 0x04, 0xE0, 0x00, 0xFD});             // noise
-    m.Bytes(kBase + 0x320, {0x00, 0xA8, 0x10, 0x05, 0x0A, 0xE0, 0x05, 0xFD});       // every sample voice
+    m.PutBytes(kBase, waves);
+    m.PutBytes(kBase + 0x300, {0x00, 0x81, 0x00, 0xD3, 0x18, 0x04, 0xE0, 0x00, 0xFD}); // the squares
+    m.PutBytes(kBase + 0x310, {0x00, 0xD3, 0x05, 0x04, 0xE0, 0x00, 0xFD});             // noise
+    m.PutBytes(kBase + 0x320, {0x00, 0xA8, 0x10, 0x05, 0x0A, 0xE0, 0x05, 0xFD});       // every sample voice
     m.Song(kSongTable, 3, kBase, 0x320, {{0, 0x300}, {1, 0x300}, {2, 0x000}, {3, 0x310}});
     const Rom rom = m.ToRom();
 
-    DriverOverrides ov;
-    ov.song_table = kSongTable;
-    ov.song_count = 4;
-    ov.sample_table = kSampleTable;
-    ov.mix_rate = 16000;
     DriverInfo info;
-    std::string err;
-    SEQLIB_CHECK(DetectDriver(rom, ov, info, err));
+    SEQLIB_CHECK(DetectGiven(rom, kSongTable, 4, info));
 
     const fs::path dir = TempPath("presets");
     std::error_code ec;
     fs::create_directories(dir, ec);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.frame_timing = true;
     opt.out_dir = Utf8(dir);
 
     // In a SoundFont of its own, the presets go on into bank 1. Only the preset of the track on channel 10, the last
     // one, gets a copy in the drum bank, so no two presets have the same bank and program.
-    const SongSummary own = ConvertSong(rom, info, 3, opt, nullptr);
+    const SongReport own = ConvertSong(rom, info, 3, opt, nullptr);
 
     const std::vector<PresetHeader> presets = ReadPresets(own.sf2_path);
     std::set<std::pair<int, int>> ids;
@@ -1289,7 +1187,7 @@ void TestManyPresets()
     SEQLIB_CHECK(ConvertSong(rom, info, 0, opt, &shared).ok);
     const int song0 = int(shared.File().presets.size());
 
-    const SongSummary in_shared = ConvertSong(rom, info, 3, opt, &shared);
+    const SongReport in_shared = ConvertSong(rom, info, 3, opt, &shared);
 
     const std::vector<sf2::Preset>& shared_presets = shared.File().presets;
     std::set<std::pair<int, int>> shared_ids;
@@ -1337,11 +1235,11 @@ void TestDetectionScan()
     Image partial(0x400);
     constexpr uint32_t kTable = kRomBase + 0x100;
     partial.Song(kTable, 0, kRomBase + 0x16C, 0, {});
-    partial.Bytes(kRomBase + 0x16C, {0x00, 0xF4, 0x00, 0xFD});
+    partial.PutBytes(kRomBase + 0x16C, {0x00, 0xF4, 0x00, 0xFD});
     partial.Song(kTable, 1, kRomBase + 0x190, 8, {{4, 0}});
-    partial.Bytes(kRomBase + 0x190, {0x00, 0xA8, 0x10, 0x00, 0x0A, 0xE0, 0x05, 0xFE, 0x00, 0xFD});
+    partial.PutBytes(kRomBase + 0x190, {0x00, 0xA8, 0x10, 0x00, 0x0A, 0xE0, 0x05, 0xFE, 0x00, 0xFD});
     partial.Song(kTable, 2, kRomBase + 0x19A, 8, {{5, 0}});
-    partial.Bytes(kRomBase + 0x19A, {0x00, 0xA3, 0x01, 0x08, 0xE0, 0x00, 0xFF, 0x00, 0x00, 0xFD});
+    partial.PutBytes(kRomBase + 0x19A, {0x00, 0xA3, 0x01, 0x08, 0xE0, 0x00, 0xFF, 0x00, 0x00, 0xFD});
 
     SEQLIB_CHECK(!DetectDriver(partial.ToRom(), DriverOverrides(), info, err));
     SEQLIB_CHECK(err.empty());
@@ -1350,11 +1248,11 @@ void TestDetectionScan()
     // PSG note, and song 2 uses F4.
     Image later(0x400);
     later.Song(kTable, 0, kRomBase + 0x16C, 9, {{0, 0}});
-    later.Bytes(kRomBase + 0x16C, {0x00, 0x81, 0x00, 0xD3, 0x18, 0x04, 0xE0, 0x00, 0xFE, 0x00, 0xFD});
+    later.PutBytes(kRomBase + 0x16C, {0x00, 0x81, 0x00, 0xD3, 0x18, 0x04, 0xE0, 0x00, 0xFE, 0x00, 0xFD});
     later.Song(kTable, 1, kRomBase + 0x177, 9, {{0, 0}});
-    later.Bytes(kRomBase + 0x177, {0x00, 0x81, 0x00, 0xD3, 0x18, 0x04, 0xE0, 0x00, 0xFE, 0x00, 0xFD});
+    later.PutBytes(kRomBase + 0x177, {0x00, 0x81, 0x00, 0xD3, 0x18, 0x04, 0xE0, 0x00, 0xFE, 0x00, 0xFD});
     later.Song(kTable, 2, kRomBase + 0x182, 0, {});
-    later.Bytes(kRomBase + 0x182, {0x00, 0xF4, 0x00, 0xFD});
+    later.PutBytes(kRomBase + 0x182, {0x00, 0xF4, 0x00, 0xFD});
 
     DriverOverrides rate_only; // so that the mixer rate, which it has no code for, isn't a warning
     rate_only.mix_rate = 16000;
@@ -1372,9 +1270,9 @@ void TestDetectionScan()
     // The driver's code doesn't stop the scans when the tables it loads aren't in the ROM, and the log says why they
     // ran.
     Image outside = ScanImage();
-    outside.Halfwords(kRomBase + 0x300, kPlaySongCode);
+    outside.PutHalfwords(kRomBase + 0x300, kPlaySongCode);
     outside.Put32(kRomBase + 0x318, 0x02000000);
-    outside.Halfwords(kRomBase + 0x340, kNoteStartCode);
+    outside.PutHalfwords(kRomBase + 0x340, kNoteStartCode);
     outside.Put32(kRomBase + 0x354, 0x02000000);
 
     SEQLIB_CHECK(DetectDriver(outside.ToRom(), DriverOverrides(), info, err));
@@ -1404,9 +1302,9 @@ void TestDetectionScan()
     // Noise isn't taken for the driver's data.
     Image noise(0x40000);
     uint32_t x = 1;
-    for (uint8_t& b : noise.d)
+    for (uint32_t a = kRomBase; a < kRomBase + 0x40000; a++)
     {
-        b = uint8_t((x = x * 1103515245u + 12345u) >> 16);
+        noise.Put8(a, uint8_t((x = x * 1103515245u + 12345u) >> 16));
     }
 
     SEQLIB_CHECK(!DetectDriver(noise.ToRom(), DriverOverrides(), info, err));
@@ -1419,7 +1317,7 @@ void TestSongTableFromOtherCode()
     constexpr uint32_t kCode = kRomBase + 0x300;
     const std::vector<uint16_t> kCodeHalfwords = {0x00D0, 0x1880, 0x0080, 0x4902};
     Image m = ScanImage();
-    m.Halfwords(kCode, kCodeHalfwords);
+    m.PutHalfwords(kCode, kCodeHalfwords);
     m.Put32(kCode + 0x10, kScanSongTable);
     DriverInfo info;
     std::string err;
@@ -1434,7 +1332,7 @@ void TestSongTableFromOtherCode()
     // With a byte between its two songs, it isn't, although both songs parse and play notes. The data scan doesn't take
     // it either.
     Image gap = ScanImage(1);
-    gap.Halfwords(kCode, kCodeHalfwords);
+    gap.PutHalfwords(kCode, kCodeHalfwords);
     gap.Put32(kCode + 0x10, kScanSongTable);
 
     const bool found_gap = DetectDriver(gap.ToRom(), DriverOverrides(), info, err);
@@ -1450,7 +1348,7 @@ void TestMixerRate()
     Image m = ScanImage();
     constexpr uint32_t kTimerCode = kRomBase + 0x380;
     constexpr uint32_t kTimerTable = kRomBase + 0x3A0;
-    m.Halfwords(kTimerCode, {0x4904, 0x0098, 0x1840, 0x6800, 0x2180, 0x0409, 0x4308, 0x6010});
+    m.PutHalfwords(kTimerCode, {0x4904, 0x0098, 0x1840, 0x6800, 0x2180, 0x0409, 0x4308, 0x6010});
     m.Put32(kTimerCode + 0x14, kTimerTable);
     m.Put32(kTimerTable, 0xFC00);
     DriverInfo info;
@@ -1465,7 +1363,7 @@ void TestMixerRate()
     SEQLIB_CHECK(info.warnings.empty());
 
     // The rate is also detected when the code loads the setting into r3.
-    m.Halfwords(kTimerCode + 6, {0x6803, 0x2080, 0x0400, 0x4318});
+    m.PutHalfwords(kTimerCode + 6, {0x6803, 0x2080, 0x0400, 0x4318});
 
     const bool found_r3 = DetectDriver(m.ToRom(), DriverOverrides(), info, err);
 
@@ -1495,7 +1393,7 @@ void TestBendDetection()
                                              0x8038, 0x7978, 0x2120, 0x4308, 0x7178};
     constexpr uint32_t kCode = kRomBase + 0x300;
     Image m = ScanImage();
-    m.Halfwords(kCode, kBendCode);
+    m.PutHalfwords(kCode, kBendCode);
     m.Put16(kCode + 20, 0x83F4);
     DriverInfo info;
     std::string err;
@@ -1551,7 +1449,7 @@ void TestRevisionDetection()
         Image m = SyntheticImage();
         if (third)
         {
-            m.Halfwords(kCode, CommandReader(third, fifth));
+            m.PutHalfwords(kCode, CommandReader(third, fifth));
         }
 
         Result r;
@@ -1597,7 +1495,7 @@ void TestRevisionDetection()
     // still shows that the game has the driver, so detection fails with an error that names it, where a cartridge
     // without the reader shows no sign of the driver.
     Image reader_only(0x1000);
-    reader_only.Halfwords(kCode, CommandReader(0x2DFE, 0x2DFA));
+    reader_only.PutHalfwords(kCode, CommandReader(0x2DFE, 0x2DFA));
     DriverInfo info;
     std::string reader_error, blank_error;
 
@@ -1689,13 +1587,9 @@ void TestRaveMasterSequencer()
     Image m(0x200);
     constexpr uint32_t kTable = kRomBase + 0x100;
     constexpr uint32_t kBase = kTable + 28;
-    m.Put32(kTable, kBase);
-    for (int t = 0; t < 12; t++)
-    {
-        m.Put16(kTable + 4 + 2 * uint32_t(t), t == 4 ? 0 : 0x10);
-    }
-    m.Bytes(kBase, {0x00, 0xF0, 0x8F, 0x00, 0xA7, 0x07, 0xE0, 0x20, 0xFE});
-    m.Bytes(kBase + 0x10, {0x00, 0xFD});
+    m.Song(kTable, 0, kBase, 0x10, {{4, 0}}, Revision::kRaveMaster);
+    m.PutBytes(kBase, {0x00, 0xF0, 0x8F, 0x00, 0xA7, 0x07, 0xE0, 0x20, 0xFE});
+    m.PutBytes(kBase + 0x10, {0x00, 0xFD});
     const Rom rom = m.ToRom();
     DriverInfo info = SongsAt(kTable);
     info.revision = Revision::kRaveMaster;
@@ -1725,13 +1619,13 @@ void TestWct2004Sequencer()
     constexpr uint32_t kTable = kRomBase + 0x100;
     constexpr uint32_t kBase = kTable + 2 * kSongEntrySize;
     m.Song(kTable, 0, kBase, 0x40, {{0, 0x00}, {4, 0x10}, {5, 0x30}});
-    m.Bytes(kBase + 0x00, {0x00, 0xF4, 0x40, 0x00, 0xD8, 0x30, 0x04, 0xFD});
-    m.Bytes(kBase + 0x10, {0x00, 0x93, 0x0A, 0x00, 0x01, 0x05, 0xA9, 0x07, 0x03, 0xFD, 0x02, 0xA5, 0x0B, 0x06});
-    m.Bytes(kBase + 0x30, {0x00, 0xF0, 0x8F, 0x00, 0xA7, 0x07, 0xE0, 0x20, 0xFE});
-    m.Bytes(kBase + 0x40, {0x00, 0xFD});
+    m.PutBytes(kBase + 0x00, {0x00, 0xF4, 0x40, 0x00, 0xD8, 0x30, 0x04, 0xFD});
+    m.PutBytes(kBase + 0x10, {0x00, 0x93, 0x0A, 0x00, 0x01, 0x05, 0xA9, 0x07, 0x03, 0xFD, 0x02, 0xA5, 0x0B, 0x06});
+    m.PutBytes(kBase + 0x30, {0x00, 0xF0, 0x8F, 0x00, 0xA7, 0x07, 0xE0, 0x20, 0xFE});
+    m.PutBytes(kBase + 0x40, {0x00, 0xFD});
     m.Song(kTable, 1, kBase + 0x50, 0x10, {{4, 0x00}});
-    m.Bytes(kBase + 0x50, {0x00, 0xA7, 0x07, 0x03, 0xFF});
-    m.Bytes(kBase + 0x60, {0x00, 0xFD});
+    m.PutBytes(kBase + 0x50, {0x00, 0xA7, 0x07, 0x03, 0xFF});
+    m.PutBytes(kBase + 0x60, {0x00, 0xFD});
     const Rom rom = m.ToRom();
     DriverInfo info = SongsAt(kTable);
     info.revision = Revision::kWct2004;
@@ -1789,8 +1683,8 @@ void TestCallDump()
     constexpr uint32_t kTable = kRomBase + 0x100;
     constexpr uint32_t kBase = kTable + 2 * kSongEntrySize;
     m.Song(kTable, 0, kBase, 0x20, {{0, 0x00}});
-    m.Bytes(kBase, {0x00, 0x93, 0x0A, 0x00, 0x01, 0x05, 0xD9, 0x30, 0x03, 0xFD, 0x02, 0xD5, 0x30, 0x06});
-    m.Bytes(kBase + 0x20, {0x00, 0xFD});
+    m.PutBytes(kBase, {0x00, 0x93, 0x0A, 0x00, 0x01, 0x05, 0xD9, 0x30, 0x03, 0xFD, 0x02, 0xD5, 0x30, 0x06});
+    m.PutBytes(kBase + 0x20, {0x00, 0xFD});
     const Rom rom = m.ToRom();
     DriverInfo info = SongsAt(kTable);
     std::string error;
@@ -1831,30 +1725,24 @@ void TestWct2004Panning()
     // 0x20 at volume 5. A WCT 2004 command reader is at kCode, and the tables are given by hand.
     Image m = SyntheticImage();
     constexpr uint32_t kCode = kRomBase + 0x800;
-    m.Halfwords(kCode, CommandReader(0x2DFE, 0x2DFA));
+    m.PutHalfwords(kCode, CommandReader(0x2DFE, 0x2DFA));
     m.Song(kSongTable, 0, kSongBase, 0x60, {{0, 0x00}, {1, 0x20}});
-    m.Bytes(kSongBase + 0x00, {0x00, 0xF0, 0x8F, 0x00, 0xDC, 0x30, 0x08, 0xFD});
-    m.Bytes(kSongBase + 0x20, {0x00, 0xD5, 0x20, 0x10, 0xFD});
-    m.Bytes(kSongBase + 0x60, {0x00, 0xFD});
+    m.PutBytes(kSongBase + 0x00, {0x00, 0xF0, 0x8F, 0x00, 0xDC, 0x30, 0x08, 0xFD});
+    m.PutBytes(kSongBase + 0x20, {0x00, 0xD5, 0x20, 0x10, 0xFD});
+    m.PutBytes(kSongBase + 0x60, {0x00, 0xFD});
     const Rom rom = m.ToRom();
 
-    DriverOverrides ov;
-    ov.song_table = kSongTable;
-    ov.song_count = 1;
-    ov.sample_table = kSampleTable;
-    ov.mix_rate = 16000;
     DriverInfo info;
-    std::string err;
-    SEQLIB_CHECK(DetectDriver(rom, ov, info, err) && info.revision == Revision::kWct2004);
+    SEQLIB_CHECK(DetectGiven(rom, kSongTable, 1, info) && info.revision == Revision::kWct2004);
 
     const fs::path dir = TempPath("wct2004_pan");
     std::error_code ec;
     fs::create_directories(dir, ec);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.frame_timing = true;
     opt.out_dir = Utf8(dir);
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     // Each square's note-ons (key), and the pan (CC10) each starts with, the default of 64 if its track has none yet.
     std::map<std::string, std::vector<std::pair<int, int>>> notes;
@@ -1880,23 +1768,6 @@ void TestWct2004Panning()
     SEQLIB_CHECK_EQ(notes["Square 2"][0].first, notes["Square 1"][0].first);
 
     fs::remove_all(dir, ec);
-}
-
-// Writes entry `song` of a song table at `table` for the Eternal Duelist revision, whose songs have 10 tracks: the
-// song's base address, and the offset of every track, which is `rest` unless `offsets` gives another.
-void EternalDuelistSong(Image& m, uint32_t table, int song, uint32_t base, uint16_t rest,
-                        const std::vector<std::pair<int, int>>& offsets)
-{
-    const uint32_t e = table + uint32_t(song) * SongEntrySize(Revision::kEternalDuelist);
-    m.Put32(e, base);
-    for (int t = 0; t < TrackCount(Revision::kEternalDuelist); t++)
-    {
-        m.Put16(e + 4 + 2 * uint32_t(t), rest);
-    }
-    for (const auto& [t, o] : offsets)
-    {
-        m.Put16(e + 4 + 2 * uint32_t(t), uint16_t(o));
-    }
 }
 
 void TestEternalDuelistDecoding()
@@ -1942,13 +1813,13 @@ void TestEternalDuelistSequencer()
     Image m(0x800);
     constexpr uint32_t kTable = kRomBase + 0x100;
     constexpr uint32_t kBase = kRomBase + 0x200;
-    EternalDuelistSong(m, kTable, 0, kBase, 0x60, {{0, 0x00}, {5, 0x20}, {6, 0x30}, {7, 0x50}});
-    m.Bytes(kBase + 0x00,
+    m.Song(kTable, 0, kBase, 0x60, {{0, 0x00}, {5, 0x20}, {6, 0x30}, {7, 0x50}}, Revision::kEternalDuelist);
+    m.PutBytes(kBase + 0x00,
             {0x00, 0xF0, 0x10, 0x00, 0xF3, 0x00, 0xD8, 0x30, 0x04, 0xD8, 0x24, 0x04, 0xDA, 0x24, 0x04, 0xFD});
-    m.Bytes(kBase + 0x20, {0x00, 0xAC, 0x07, 0x04, 0xF0, 0x5A, 0x04, 0xFD});
-    m.Bytes(kBase + 0x30, {0x00, 0xA8, 0x07, 0x04, 0xF1, 0x20, 0x04, 0xA9, 0x0B, 0x04, 0xFD});
-    m.Bytes(kBase + 0x50, {0x00, 0xE0, 0x20, 0xFE});
-    m.Bytes(kBase + 0x60, {0x00, 0xFD});
+    m.PutBytes(kBase + 0x20, {0x00, 0xAC, 0x07, 0x04, 0xF0, 0x5A, 0x04, 0xFD});
+    m.PutBytes(kBase + 0x30, {0x00, 0xA8, 0x07, 0x04, 0xF1, 0x20, 0x04, 0xA9, 0x0B, 0x04, 0xFD});
+    m.PutBytes(kBase + 0x50, {0x00, 0xE0, 0x20, 0xFE});
+    m.PutBytes(kBase + 0x60, {0x00, 0xFD});
 
     // Song 1. Voice 0: a call of 1 command from the fragment after the end, wait 2, note (vol 9, sample 7), wait 1,
     // then 260 commands that do nothing, each followed by a wait of 1, and the end. The fragment: wait 3, note (vol 5,
@@ -1963,9 +1834,9 @@ void TestEternalDuelistSequencer()
     calls[2] = uint8_t(calls.size());
     calls[3] = uint8_t(calls.size() >> 8);
     calls.insert(calls.end(), {0x03, 0xA5, 0x0B, 0x06});
-    EternalDuelistSong(m, kTable, 1, kBase1, 0x220, {{4, 0x00}});
-    m.Bytes(kBase1, calls);
-    m.Bytes(kBase1 + 0x220, {0x00, 0xFD});
+    m.Song(kTable, 1, kBase1, 0x220, {{4, 0x00}}, Revision::kEternalDuelist);
+    m.PutBytes(kBase1, calls);
+    m.PutBytes(kBase1 + 0x220, {0x00, 0xFD});
     const Rom rom = m.ToRom();
     DriverInfo info = SongsAt(kTable);
     info.revision = Revision::kEternalDuelist;
@@ -2001,7 +1872,7 @@ void TestEternalDuelistSequencer()
     SEQLIB_CHECK(frames[4][6].vol == 5 && frames[4][6].trig == 1);
 
     // Vibrato replaces the flags of voice 2's second note, so the note doesn't start.
-    SEQLIB_CHECK(frames[8][6].flags == kOutPsgNote && frames[8][6].key == 11);
+    SEQLIB_CHECK(frames[8][6].flags == kOutEternalDuelistPitch && frames[8][6].key == 11);
 
     // The loop sets square 1's pan back to the default, and the track goes on from its loop point, after its F0.
     SEQLIB_CHECK_EQ(looped_at, 32);
@@ -2021,13 +1892,13 @@ void TestEternalDuelistConversion()
     Image m = SyntheticImage();
     constexpr uint32_t kCode = kRomBase + 0x800;
     constexpr uint32_t kWaveTable = kRomBase + 0x900;
-    m.Halfwords(kCode, CommandReader(0x2DFE, 0x2DF3));
-    EternalDuelistSong(m, kSongTable, 0, kSongBase, 0x60, {{0, 0x00}, {2, 0x20}, {4, 0x40}, {5, 0x70}});
-    m.Bytes(kSongBase + 0x00, {0x00, 0xD8, 0x30, 0x04, 0xD8, 0x10, 0x04, 0xD8, 0x50, 0x04, 0xE0, 0x04, 0xFD});
-    m.Bytes(kSongBase + 0x20, {0x00, 0x86, 0x00, 0xD8, 0x20, 0x04, 0xD8, 0x24, 0x04, 0xE0, 0x04, 0xFD});
-    m.Bytes(kSongBase + 0x40, {0x00, 0xA8, 0x05, 0x08, 0xB8, 0x05, 0x07, 0x00, 0xF2, 0x40, 0x04, 0xE0, 0x04, 0xFD});
-    m.Bytes(kSongBase + 0x60, {0x00, 0xFD});
-    m.Bytes(kSongBase + 0x70, {0x00, 0xA8, 0x05, 0x08, 0xA8, 0x06, 0x00, 0xF2, 0x40, 0x04, 0xE0, 0x04, 0xFD});
+    m.PutHalfwords(kCode, CommandReader(0x2DFE, 0x2DF3));
+    m.Song(kSongTable, 0, kSongBase, 0x60, {{0, 0x00}, {2, 0x20}, {4, 0x40}, {5, 0x70}}, Revision::kEternalDuelist);
+    m.PutBytes(kSongBase + 0x00, {0x00, 0xD8, 0x30, 0x04, 0xD8, 0x10, 0x04, 0xD8, 0x50, 0x04, 0xE0, 0x04, 0xFD});
+    m.PutBytes(kSongBase + 0x20, {0x00, 0x86, 0x00, 0xD8, 0x20, 0x04, 0xD8, 0x24, 0x04, 0xE0, 0x04, 0xFD});
+    m.PutBytes(kSongBase + 0x40, {0x00, 0xA8, 0x05, 0x08, 0xB8, 0x05, 0x07, 0x00, 0xF2, 0x40, 0x04, 0xE0, 0x04, 0xFD});
+    m.PutBytes(kSongBase + 0x60, {0x00, 0xFD});
+    m.PutBytes(kSongBase + 0x70, {0x00, 0xA8, 0x05, 0x08, 0xA8, 0x06, 0x00, 0xF2, 0x40, 0x04, 0xE0, 0x04, 0xFD});
 
     // Sample 6: sample 5's data, at twice its step.
     constexpr uint32_t kHeader6 = kRomBase + 0x600;
@@ -2035,34 +1906,31 @@ void TestEternalDuelistConversion()
     m.Put32(kHeader6, 0x2000);
     m.Put32(kHeader6 + 4, 64);
     m.Put32(kHeader6 + 8, 0xFFFFFFFF);
-    std::copy_n(m.d.begin() + (kSampleHeader + 12 - kRomBase), 64, m.d.begin() + (kHeader6 + 12 - kRomBase));
+    for (uint32_t i = 0; i < 64; i++)
+    {
+        m.Put8(kHeader6 + 12 + i, m.Get8(kSampleHeader + 12 + i));
+    }
 
     // Waves 0 and 2 at volume 8: a square and a sawtooth.
     for (int i = 0; i < 16; i++)
     {
-        m.d[kWaveTable - kRomBase + 8 * 16 + uint32_t(i)] = i < 8 ? 0x88 : 0x00;
-        m.d[kWaveTable - kRomBase + 40 * 16 + uint32_t(i)] = uint8_t(i * 0x11);
+        m.Put8(kWaveTable + 8 * 16 + uint32_t(i), i < 8 ? 0x88 : 0x00);
+        m.Put8(kWaveTable + 40 * 16 + uint32_t(i), uint8_t(i * 0x11));
     }
 
     const Rom rom = m.ToRom();
-    DriverOverrides ov;
-    ov.song_table = kSongTable;
-    ov.song_count = 1;
-    ov.sample_table = kSampleTable;
-    ov.mix_rate = 16000;
     DriverInfo info;
-    std::string err;
-    SEQLIB_CHECK(DetectDriver(rom, ov, info, err) && info.revision == Revision::kEternalDuelist);
+    SEQLIB_CHECK(DetectGiven(rom, kSongTable, 1, info) && info.revision == Revision::kEternalDuelist);
     info.wave_table = kWaveTable;
 
     const fs::path dir = TempPath("eternal_duelist");
     std::error_code ec;
     fs::create_directories(dir, ec);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.frame_timing = true;
     opt.out_dir = Utf8(dir);
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     // Each track's note-ons (frame, program), bends (frame, value) and bend range.
     std::map<std::string, std::vector<std::pair<uint32_t, int>>> notes, bends;
@@ -2110,23 +1978,6 @@ void TestEternalDuelistConversion()
     SEQLIB_CHECK(bends["Voice 1"] == (std::vector<std::pair<uint32_t, int>>{{8, 16383}}));
 
     fs::remove_all(dir, ec);
-}
-
-// Writes entry `song` of a song table at `table` for the Dungeon Dice Monsters revision, whose songs have 8 tracks: the
-// song's base address, and the offset of every track, which is `rest` unless `offsets` gives another.
-void DungeonDiceSong(Image& m, uint32_t table, int song, uint32_t base, uint16_t rest,
-                     const std::vector<std::pair<int, int>>& offsets)
-{
-    const uint32_t e = table + uint32_t(song) * SongEntrySize(Revision::kDungeonDiceMonsters);
-    m.Put32(e, base);
-    for (int t = 0; t < TrackCount(Revision::kDungeonDiceMonsters); t++)
-    {
-        m.Put16(e + 4 + 2 * uint32_t(t), rest);
-    }
-    for (const auto& [t, o] : offsets)
-    {
-        m.Put16(e + 4 + 2 * uint32_t(t), uint16_t(o));
-    }
 }
 
 void TestDungeonDiceDecoding()
@@ -2202,14 +2053,14 @@ void TestDungeonDiceSequencer()
     constexpr uint32_t kBase = kRomBase + 0x200;
     constexpr uint32_t kMap = kRomBase + 0x600;
     constexpr uint32_t kPeriods = kRomBase + 0x800;
-    DungeonDiceSong(m, kTable, 0, kBase, 0x60, {{0, 0x00}, {1, 0x40}, {3, 0x20}, {4, 0x28}});
-    m.Bytes(kBase + 0x00, {0x00, 0xF0, 0x53, 0x00, 0xE8, 0x20, 0x04, 0x82, 0x00, 0xE8, 0x21, 0x0C, 0xF8, 0x06, 0xFD});
-    m.Bytes(kBase + 0x20, {0x00, 0xE4, 0x48, 0x01, 0xFD});
-    m.Bytes(kBase + 0x28, {0x00, 0xBC, 0x01, 0x00, 0xA6, 0x02, 0x04, 0xF9, 0x08, 0xF2, 0x30, 0x04, 0x99, 0x1C, 0x00,
+    m.Song(kTable, 0, kBase, 0x60, {{0, 0x00}, {1, 0x40}, {3, 0x20}, {4, 0x28}}, Revision::kDungeonDiceMonsters);
+    m.PutBytes(kBase + 0x00, {0x00, 0xF0, 0x53, 0x00, 0xE8, 0x20, 0x04, 0x82, 0x00, 0xE8, 0x21, 0x0C, 0xF8, 0x06, 0xFD});
+    m.PutBytes(kBase + 0x20, {0x00, 0xE4, 0x48, 0x01, 0xFD});
+    m.PutBytes(kBase + 0x28, {0x00, 0xBC, 0x01, 0x00, 0xA6, 0x02, 0x04, 0xF9, 0x08, 0xF2, 0x30, 0x04, 0x99, 0x1C, 0x00,
                            0xF2, 0x22, 0x04, 0xFD});
-    m.Bytes(kBase + 0x40, {0x02, 0xFA, 0x00, 0x7F, 0x02, 0xE7, 0x10, 0x12, 0xFE});
-    m.Bytes(kBase + 0x60, {0x00, 0xFD});
-    m.Bytes(kMap, {0x00, 0x05, 0x07});
+    m.PutBytes(kBase + 0x40, {0x02, 0xFA, 0x00, 0x7F, 0x02, 0xE7, 0x10, 0x12, 0xFE});
+    m.PutBytes(kBase + 0x60, {0x00, 0xFD});
+    m.PutBytes(kMap, {0x00, 0x05, 0x07});
     for (uint32_t p = 0; p < 0x200; p++)
     {
         m.Put16(kPeriods + 2 * p, uint16_t(0x4000 - p));
@@ -2228,9 +2079,9 @@ void TestDungeonDiceSequencer()
     calls[2] = uint8_t(calls.size());
     calls[3] = uint8_t(calls.size() >> 8);
     calls.insert(calls.end(), {0x03, 0xE5, 0x24, 0x06});
-    DungeonDiceSong(m, kTable, 1, kBase1, 0x260, {{0, 0x00}});
-    m.Bytes(kBase1, calls);
-    m.Bytes(kBase1 + 0x260, {0x00, 0xFD});
+    m.Song(kTable, 1, kBase1, 0x260, {{0, 0x00}}, Revision::kDungeonDiceMonsters);
+    m.PutBytes(kBase1, calls);
+    m.PutBytes(kBase1 + 0x260, {0x00, 0xFD});
 
     const Rom rom = m.ToRom();
     DriverInfo info = SongsAt(kTable);
@@ -2316,7 +2167,7 @@ void CodeWithLiterals(Image& m, uint32_t at, std::vector<uint16_t> code,
         literal += 4;
     }
 
-    m.Halfwords(at, code);
+    m.PutHalfwords(at, code);
 }
 
 // The tables of DungeonDiceImage().
@@ -2337,7 +2188,7 @@ constexpr uint32_t kDdmWaveVolumes = kRomBase + 0x3900;
 Image DungeonDiceImage()
 {
     Image m(0x4000);
-    m.Halfwords(kRomBase + 0x800, CommandReader(0x2DFE, 0x2DFC));
+    m.PutHalfwords(kRomBase + 0x800, CommandReader(0x2DFE, 0x2DFC));
     CodeWithLiterals(m, kRomBase + 0x1000, {0x00A0, 0x1900, 0x0080, 0x4900, 0x1841, 0x884C, 0x0420, 0x880D, 0x4328},
                      {{3, kDdmTable}});
     CodeWithLiterals(m, kRomBase + 0x1040, {0x00D1, 0x4800, 0x1808, 0x6805, 0x6841}, {{1, kDdmSamples}});
@@ -2350,13 +2201,13 @@ Image DungeonDiceImage()
                      {{0, kDdmWaveVolumes}});
     CodeWithLiterals(m, kRomBase + 0x11C0, {0x109B, 0x4800, 0x4900, 0x1A40}, {{1, kDdmFreq + 2 * 1164}, {2, kDdmFreq}});
 
-    DungeonDiceSong(m, kDdmTable, 0, kDdmBase, 0x60, {{0, 0x00}, {2, 0x10}, {3, 0x20}, {4, 0x30}});
-    m.Bytes(kDdmBase + 0x00, {0x00, 0xF0, 0x53, 0x00, 0x82, 0x00, 0xE8, 0x20, 0x10, 0x80, 0x00, 0xFC, 0x00, 0xFD});
-    m.Bytes(kDdmBase + 0x10, {0x00, 0x70, 0x00, 0xE9, 0x20, 0x08, 0x71, 0x08, 0xFC, 0x00, 0xFD});
-    m.Bytes(kDdmBase + 0x20, {0x00, 0xE8, 0x4A, 0x04, 0xFC, 0x00, 0xFD});
-    m.Bytes(kDdmBase + 0x30,
+    m.Song(kDdmTable, 0, kDdmBase, 0x60, {{0, 0x00}, {2, 0x10}, {3, 0x20}, {4, 0x30}}, Revision::kDungeonDiceMonsters);
+    m.PutBytes(kDdmBase + 0x00, {0x00, 0xF0, 0x53, 0x00, 0x82, 0x00, 0xE8, 0x20, 0x10, 0x80, 0x00, 0xFC, 0x00, 0xFD});
+    m.PutBytes(kDdmBase + 0x10, {0x00, 0x70, 0x00, 0xE9, 0x20, 0x08, 0x71, 0x08, 0xFC, 0x00, 0xFD});
+    m.PutBytes(kDdmBase + 0x20, {0x00, 0xE8, 0x4A, 0x04, 0xFC, 0x00, 0xFD});
+    m.PutBytes(kDdmBase + 0x30,
             {0x00, 0xB8, 0x05, 0x08, 0x03, 0x00, 0x9A, 0x1C, 0x08, 0xF2, 0x30, 0x08, 0xFC, 0x00, 0xFD});
-    m.Bytes(kDdmBase + 0x60, {0x00, 0xFD});
+    m.PutBytes(kDdmBase + 0x60, {0x00, 0xFD});
 
     // Sample 3: 64 points of a sawtooth at a period of 1677, with map entry 5 naming it. Pitch 24 * 16 + 1 has the
     // sample's period, and the pitches of notes 28 and 29 the periods 4 and 5 semitones up.
@@ -2364,9 +2215,9 @@ Image DungeonDiceImage()
     m.Put32(kDdmSamples + 8 * 3 + 4, (4u << 20) | 1677);
     for (uint32_t i = 0; i < 64; i++)
     {
-        m.d[kDdmSamples + 0x100 - kRomBase + i] = uint8_t(i * 4);
+        m.Put8(kDdmSamples + 0x100 + i, uint8_t(i * 4));
     }
-    m.d[kDdmMap + 5 - kRomBase] = 3;
+    m.Put8(kDdmMap + 5, 3);
     m.Put16(kDdmPeriods + 2 * (24 * 16 + 1), 1677);
     m.Put16(kDdmPeriods + 2 * (28 * 16 + 1), 1331);
     m.Put16(kDdmPeriods + 2 * (29 * 16 + 1), 1256);
@@ -2389,8 +2240,8 @@ Image DungeonDiceImage()
     // Waves 0 and 1, a square and a sawtooth, and the volume codes: 25%, 50%, 75% and 100% from volumes 1, 3, 6 and 9.
     for (uint32_t i = 0; i < 16; i++)
     {
-        m.d[kDdmWaves - kRomBase + i] = i < 8 ? 0xFF : 0x00;
-        m.d[kDdmWaves - kRomBase + 16 + i] = uint8_t(i * 0x11);
+        m.Put8(kDdmWaves + i, i < 8 ? 0xFF : 0x00);
+        m.Put8(kDdmWaves + 16 + i, uint8_t(i * 0x11));
     }
     constexpr uint16_t kCodes[16] = {0x0000, 0x6000, 0x6000, 0x4000, 0x4000, 0x4000, 0x8000, 0x8000,
                                      0x8000, 0x2000, 0x2000, 0x2000, 0x2000, 0x2000, 0x2000, 0x2000};
@@ -2414,10 +2265,10 @@ void TestDungeonDiceLoopDelay()
         constexpr uint32_t kBase = kRomBase + 0x200;
         constexpr uint32_t kMap = kRomBase + 0x600;
         constexpr uint32_t kPeriods = kRomBase + 0x800;
-        DungeonDiceSong(m, kTable, 0, kBase, 0x60, {{1, 0x40}});
-        m.Bytes(kBase + 0x40, {0x02, 0xFA, wait, 0x7F, 0x02, 0xE7, 0x10, 0x12, 0xFE});
-        m.Bytes(kBase + 0x60, {0x00, 0xFD});
-        m.Bytes(kMap, {0x00, 0x05, 0x07});
+        m.Song(kTable, 0, kBase, 0x60, {{1, 0x40}}, Revision::kDungeonDiceMonsters);
+        m.PutBytes(kBase + 0x40, {0x02, 0xFA, wait, 0x7F, 0x02, 0xE7, 0x10, 0x12, 0xFE});
+        m.PutBytes(kBase + 0x60, {0x00, 0xFD});
+        m.PutBytes(kMap, {0x00, 0x05, 0x07});
         for (uint32_t p = 0; p < 0x200; p++)
         {
             m.Put16(kPeriods + 2 * p, uint16_t(0x4000 - p));
@@ -2471,7 +2322,7 @@ void TestDungeonDiceDetection()
 void TestDungeonDiceNoFrequencyTable()
 {
     Image m = DungeonDiceImage();
-    m.Halfwords(kRomBase + 0x1080, {0, 0, 0, 0, 0, 0});
+    m.PutHalfwords(kRomBase + 0x1080, {0, 0, 0, 0, 0, 0});
     const Rom rom = m.ToRom();
     DriverInfo info;
     std::string error;
@@ -2515,11 +2366,11 @@ void TestDungeonDiceConversion()
     const fs::path dir = TempPath("dungeon_dice");
     std::error_code ec;
     fs::create_directories(dir, ec);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.frame_timing = true;
     opt.out_dir = Utf8(dir);
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     // Each track's note-ons (frame, key, program), bends (frame, value) and pans after the first, which centres it.
     std::map<std::string, std::vector<std::array<int, 3>>> notes;
@@ -2582,17 +2433,17 @@ void TestDetectionFromCode()
     constexpr uint32_t kPlaySong = kRomBase + 0x800;
     constexpr uint32_t kNoteStart = kRomBase + 0x840;
 
-    m.Halfwords(kPlaySong, kPlaySongCode);
+    m.PutHalfwords(kPlaySong, kPlaySongCode);
     m.Put32(kPlaySong + 0x18, kTable);
-    m.Halfwords(kNoteStart, kNoteStartCode);
+    m.PutHalfwords(kNoteStart, kNoteStartCode);
     m.Put32(kNoteStart + 0x14, kSamples);
 
     m.Song(kTable, 0, kRomBase + 0x16C, 0, {});
-    m.Bytes(kRomBase + 0x16C, {0x00, 0xA7, 0x00, 0x01, 0xA7, 0x01, 0x01, 0xA7, 0x02, 0x01, 0xFE});
+    m.PutBytes(kRomBase + 0x16C, {0x00, 0xA7, 0x00, 0x01, 0xA7, 0x01, 0x01, 0xA7, 0x02, 0x01, 0xFE});
     m.Song(kTable, 1, kRomBase + 0x180, 0, {});
-    m.Bytes(kRomBase + 0x180, {0x00, 0xF4, 0x00, 0xFD});
+    m.PutBytes(kRomBase + 0x180, {0x00, 0xF4, 0x00, 0xFD});
     m.Song(kTable, 2, kRomBase + 0x190, 0, {});
-    m.Bytes(kRomBase + 0x190, {0x00, 0xE0, 0x00, 0xFD});
+    m.PutBytes(kRomBase + 0x190, {0x00, 0xE0, 0x00, 0xFD});
 
     for (uint32_t s = 0; s < 3; s++)
     {
@@ -2641,7 +2492,7 @@ void TestDetectionFromCode()
 
     // When song 0 only rests, the table the code loads is still taken, although none of the songs counted plays a note.
     // With no samples played, no sample table is needed.
-    m.Bytes(kRomBase + 0x16C, {0x00, 0xE0, 0x00, 0xFD});
+    m.PutBytes(kRomBase + 0x16C, {0x00, 0xE0, 0x00, 0xFD});
 
     const bool found_resting = DetectDriver(m.ToRom(), rate_only, info, err);
 
@@ -2652,12 +2503,12 @@ void TestDetectionFromCode()
 
     // When song 0 uses F4 too, there's no song to go by. The error says the code was found, and a table at 0xA00 that
     // the data scan would find, laid out like ScanRom's, isn't taken instead.
-    m.Bytes(kRomBase + 0x16C, {0x00, 0xF4, 0x00, 0xFD});
+    m.PutBytes(kRomBase + 0x16C, {0x00, 0xF4, 0x00, 0xFD});
     m.Song(kRomBase + 0xA00, 0, kRomBase + 0xA48, 17, {{4, 0}, {0, 8}});
-    m.Bytes(kRomBase + 0xA48, {0x00, 0xA8, 0x10, 0x00, 0x0A, 0xE0, 0x05, 0xFE, 0x00, 0x81, 0x00, 0xD3, 0x18, 0x04, 0xE0,
+    m.PutBytes(kRomBase + 0xA48, {0x00, 0xA8, 0x10, 0x00, 0x0A, 0xE0, 0x05, 0xFE, 0x00, 0x81, 0x00, 0xD3, 0x18, 0x04, 0xE0,
                                0x00, 0xFE, 0x00, 0xFD});
     m.Song(kRomBase + 0xA00, 1, kRomBase + 0xA5B, 8, {{5, 0}});
-    m.Bytes(kRomBase + 0xA5B, {0x00, 0xA3, 0x01, 0x08, 0xE0, 0x00, 0xFF, 0x00, 0x00, 0xFD});
+    m.PutBytes(kRomBase + 0xA5B, {0x00, 0xA3, 0x01, 0x08, 0xE0, 0x00, 0xFF, 0x00, 0x00, 0xFD});
 
     SEQLIB_CHECK(!DetectDriver(m.ToRom(), rate_only, info, err));
     SEQLIB_CHECK(err ==
@@ -2672,13 +2523,13 @@ void TestSampleTableChoice()
     Image m(0x1000);
     constexpr uint32_t kTable = kRomBase + 0x100;
     m.Song(kTable, 0, kRomBase + 0x200, 0, {});
-    m.Bytes(kRomBase + 0x200, {0x00, 0xA7, 0x00, 0x01, 0xA7, 0x01, 0x01, 0xA7, 0x02, 0x01, 0xFE});
+    m.PutBytes(kRomBase + 0x200, {0x00, 0xA7, 0x00, 0x01, 0xA7, 0x01, 0x01, 0xA7, 0x02, 0x01, 0xFE});
 
     for (uint32_t copy = 0; copy < 2; copy++)
     {
         const uint32_t code = kRomBase + 0x800 + 0x40 * copy;
         const uint32_t samples = kRomBase + 0x400 + 0x200 * copy;
-        m.Halfwords(code, kNoteStartCode);
+        m.PutHalfwords(code, kNoteStartCode);
         m.Put32(code + 0x14, samples);
 
         for (uint32_t s = 0; s < 3; s++)
@@ -2707,8 +2558,8 @@ void TestSampleTableChoice()
 
     // Without the second copy of the code, and with a song that only plays samples 0 and 1, half of the samples in the
     // first table read, which is enough.
-    m.Halfwords(kRomBase + 0x840, std::vector<uint16_t>(kNoteStartCode.size(), 0));
-    m.Bytes(kRomBase + 0x200, {0x00, 0xA7, 0x00, 0x01, 0xA7, 0x01, 0x01, 0xFE});
+    m.PutHalfwords(kRomBase + 0x840, std::vector<uint16_t>(kNoteStartCode.size(), 0));
+    m.PutBytes(kRomBase + 0x200, {0x00, 0xA7, 0x00, 0x01, 0xA7, 0x01, 0x01, 0xFE});
 
     const bool found_half = DetectDriver(m.ToRom(), ov, info, err);
 
@@ -2779,8 +2630,8 @@ void TestMusic()
     SEQLIB_CHECK(by_hand && by_hand->SongCount() == 3);
     SEQLIB_CHECK(by_hand && by_hand->HasSong(0) && by_hand->HasSong(1) && !by_hand->HasSong(2));
     SEQLIB_CHECK(by_hand && by_hand->InspectSong(0, ConvertSettings()).tracks == 3);
-    SEQLIB_CHECK(by_hand && by_hand->InspectSong(0, three_loops).seconds == 45 * kFrameSeconds);
-    SEQLIB_CHECK(by_hand && by_hand->InspectSong(0, three_loops).loop_end == 15 * kFrameSeconds);
+    SEQLIB_CHECK(by_hand && by_hand->InspectSong(0, three_loops).seconds == FrameSeconds(45));
+    SEQLIB_CHECK(by_hand && by_hand->InspectSong(0, three_loops).loop_end == FrameSeconds(15));
     SEQLIB_CHECK(!rare && rare_error == "no Rare sound driver found (try --song-table)");
 
     // Only the song table's entries can be traced: song 2 is past the scan image's two, and so is song 1 << 30, whose

@@ -2,6 +2,7 @@
 
 #include "test_util.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -23,6 +24,14 @@ std::filesystem::path TempPath(const std::string& name)
     return g_temp / PathFromUtf8(name);
 }
 
+ConvertSettings TempSettings(const std::string& base_name)
+{
+    ConvertSettings settings;
+    settings.out_dir = Utf8(g_temp);
+    settings.base_name = base_name;
+    return settings;
+}
+
 std::FILE* OpenTempFile(const std::string& name)
 {
     // MSVC warns that std::fopen is unsafe, so it gets fopen_s, which does the same here.
@@ -40,12 +49,90 @@ std::FILE* OpenTempFile(const std::string& name)
     return f;
 }
 
+CartImage::CartImage(size_t size) : bytes_(size, 0)
+{
+}
+
+void CartImage::Put8(uint32_t a, uint8_t v)
+{
+    bytes_[a - kRomBase] = v;
+}
+
+void CartImage::Put16(uint32_t a, uint16_t v)
+{
+    Put8(a, uint8_t(v));
+    Put8(a + 1, uint8_t(v >> 8));
+}
+
+void CartImage::Put32(uint32_t a, uint32_t v)
+{
+    Put16(a, uint16_t(v));
+    Put16(a + 2, uint16_t(v >> 16));
+}
+
+void CartImage::PutBytes(uint32_t a, const std::vector<uint8_t>& bytes)
+{
+    std::copy(bytes.begin(), bytes.end(), bytes_.begin() + (a - kRomBase));
+}
+
+void CartImage::PutHalfwords(uint32_t a, const std::vector<uint16_t>& halfwords)
+{
+    for (size_t i = 0; i < halfwords.size(); i++)
+    {
+        Put16(a + 2 * uint32_t(i), halfwords[i]);
+    }
+}
+
+void CartImage::PutBl(uint32_t a, uint32_t target)
+{
+    const uint32_t offset = target - (a + 4);
+    Put16(a, uint16_t(0xF000 | ((offset >> 12) & 0x7FF)));
+    Put16(a + 2, uint16_t(0xF800 | ((offset >> 1) & 0x7FF)));
+}
+
+void CartImage::Resize(size_t size)
+{
+    bytes_.resize(size, 0);
+}
+
+uint8_t CartImage::Get8(uint32_t a) const
+{
+    return bytes_[a - kRomBase];
+}
+
+uint16_t CartImage::Get16(uint32_t a) const
+{
+    return Le16(&bytes_[a - kRomBase]);
+}
+
+Rom CartImage::ToRom() const
+{
+    Rom r;
+    r.Assign(bytes_);
+
+    return r;
+}
+
 std::vector<uint8_t> ReadAll(const std::string& path)
 {
     std::vector<uint8_t> data;
     ReadFile(path, data);
 
     return data;
+}
+
+long long LastWrite(const std::vector<RegisterWrite>& writes, uint32_t address)
+{
+    long long value = -1;
+    for (const RegisterWrite& w : writes)
+    {
+        if (w.address == address)
+        {
+            value = w.value;
+        }
+    }
+
+    return value;
 }
 
 MidiEvents ReadMidi(const std::string& path)

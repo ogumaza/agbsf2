@@ -37,12 +37,12 @@ constexpr uint32_t kLinear[] = {1096155136, 1097144902, 1098135561, 1099127114, 
 // The start of krapPlay(), which starts a module: push {r4-r7, lr}, then its arguments and the test of the jingle mode.
 constexpr const char* kPlayPattern = "B5F0 4657 464E 4645 B4E0 1C0F 4680 4692 1C38 2204 4010 2800";
 
-// The note on of processRow() for a module with instruments: ldr r1, =instruments ... ldr r7, =samples.
+// The note on of the row's routine for a module with instruments: ldr r1, =instruments ... ldr r7, =samples.
 constexpr const char* kTablesPattern = "0407 49xx 0BBA 588F 0071 616F 3902 5A78 4Fxx 0082 58B8 6128";
 constexpr int kInstrumentsIndex = 1;
 constexpr int kSamplesIndex = 8;
 
-// The timers' setup in dsInit(): the ldr of timer 0's reload value, which gives the mixer's rate.
+// The timers' setup in kragInit(): the ldr of timer 0's reload value. The value gives the mixer's rate.
 constexpr const char* kTimerPattern = "48xx 49xx 4Bxx 8008 3102 48xx 800B 3906 8008";
 constexpr int kTimerIndex = 5;
 
@@ -147,13 +147,6 @@ std::string VersionText(const Rom& rom, uint32_t at)
     return text;
 }
 
-// Returns the address of the first match of `pattern`, or 0.
-uint32_t FindFirst(const Rom& rom, const char* pattern)
-{
-    const std::vector<uint32_t> hits = FindThumb(rom, ParseThumbPattern(pattern));
-    return hits.empty() ? 0 : hits[0];
-}
-
 // Returns true if a pattern's header is one the player can read: a row count, and an index of every 4th row's data that
 // starts at the data and doesn't go back.
 bool PlausiblePattern(const Rom& rom, uint32_t at)
@@ -191,13 +184,13 @@ std::vector<uint32_t> ScanModules(const Rom& rom)
     for (uint32_t at = kRomBase; rom.Contains(at, kModulePatterns + 4) && found.size() < kMaxModules; at += 4)
     {
         // The cheap checks first: the channels, the orders and the speed.
-        const uint8_t channels = rom.U8(at);
-        const uint8_t orders = rom.U8(at + 1);
-        if (channels == 0 || channels > 32 || orders == 0 || rom.U8(at + 2) >= orders)
+        const uint8_t channels = rom.U8(at + kModuleChannels);
+        const uint8_t orders = rom.U8(at + kModuleOrderCount);
+        if (channels == 0 || channels > 32 || orders == 0 || rom.U8(at + kModuleRestart) >= orders)
         {
             continue;
         }
-        if (rom.U8(at + 0x164) == 0 || rom.U8(at + 0x165) < 0x20)
+        if (rom.U8(at + kModuleSpeed) == 0 || rom.U8(at + kModuleTempo) < 0x20)
         {
             continue;
         }
@@ -240,6 +233,202 @@ void FindModuleTable(const Rom& rom, const std::vector<uint32_t>& modules, uint3
     }
 }
 
+// Reads the tables that the player's code at `table_code` names, and finds the player's other tables. Returns false and
+// sets `error` if one isn't in the ROM.
+bool ReadTables(const Rom& rom, uint32_t table_code, DriverInfo& info, std::string& error)
+{
+    info.instruments = ThumbLiteral(rom, table_code + 2 * kInstrumentsIndex);
+    info.samples = ThumbLiteral(rom, table_code + 2 * kSamplesIndex);
+
+    // The player's tables.
+    info.sine = FindTable(rom, kSine);
+    info.ramp = FindTable(rom, kRamp);
+    info.square = FindTable(rom, kSquare);
+    info.random = FindTable(rom, kRandom);
+    info.periods = FindTable(rom, kPeriods);
+    info.fine_tunes = FindTable(rom, kFineTunes);
+    info.linear = FindTable(rom, kLinear);
+    const RomTable tables[] = {
+        {info.sine, 128, "vibrato's sine"},
+        {info.ramp, 128, "vibrato's ramp"},
+        {info.square, 128, "vibrato's square"},
+        {info.random, 128, "vibrato's random wave"},
+        {info.periods, 240, "table of periods"},
+        {info.fine_tunes, 128, "table of fine tunes"},
+        {info.linear, 3072, "table of linear frequencies"},
+        {info.samples, 4, "table of samples"},
+    };
+    if (const char* missing = MissingTable(rom, tables))
+    {
+        error = std::string("found Krawall, but not its ") + missing;
+        return false;
+    }
+
+    return true;
+}
+
+// Reads the mixer's rate and the samples it mixes a frame, which the build of the library sets. Returns false and sets
+// `error` if the code that sets them isn't found.
+bool ReadMixRate(const Rom& rom, DriverInfo& info, std::string& error)
+{
+    const uint32_t timer = FindFirstThumb(rom, kTimerPattern);
+    const uint32_t reload = timer ? ThumbLiteral(rom, timer + 2 * kTimerIndex) & 0xFFFF : 0;
+    const uint32_t frame = FindFirstThumb(rom, kFramePattern);
+    if (!reload || !frame)
+    {
+        error = "found Krawall, but not its mixer's rate";
+        return false;
+    }
+    info.mix_rate = int((1u << 24) / (0x10000 - reload));
+    info.frame_samples = (rom.U16(frame + 2 * kFrameIndex) & 0xFF) << 1;
+    if (info.mix_rate != kModelRate)
+    {
+        info.warnings.push_back("the mixer runs at " + std::to_string(info.mix_rate) +
+                                " Hz, but the model plays notes "
+                                "and ticks as the library does at " +
+                                std::to_string(kModelRate) + " Hz");
+    }
+
+    return true;
+}
+
+// Reads the game's settings for stereo and the mixer's quality, and its master volume.
+void ReadGameSettings(const Rom& rom, DriverInfo& info)
+{
+    const uint32_t init = FindFirstThumb(rom, kInitPattern);
+    const uint32_t quality = FindFirstThumb(rom, kQualityPattern);
+    const int stereo = init ? CallArgument(rom, init) : -1;
+    const int mode = quality ? CallArgument(rom, quality) : -1;
+    info.stereo = stereo != 0;
+    info.quality = uint8_t(std::max(mode, 0));
+    if (stereo < 0)
+    {
+        info.warnings.push_back("found no call to kragInit(), so the mixer is taken to be stereo");
+    }
+
+    // The game's master volume, from its call to kramSetMasterVol() rather than kragInit()'s.
+    const uint32_t master = FindFirstThumb(rom, kMasterPattern);
+    const int64_t master_volume = master ? CallLiteral(rom, master, init ? init + kInitMasterCall : 0) : -1;
+    if (master_volume >= 0)
+    {
+        info.master_volume = uint32_t(master_volume);
+    }
+}
+
+// Lists the modules: from the given table, or the headers that a scan of the ROM finds. A count given for the modules
+// applies to a given table and to the game's table that the scan finds. The count leaves out the modules that the
+// table doesn't list. Returns the table that the list comes from, or 0 for a list from the scan.
+uint32_t ListModules(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info)
+{
+    std::vector<uint32_t> found;
+    uint32_t table = overrides.module_table;
+    if (!table)
+    {
+        found = ScanModules(rom);
+        FindModuleTable(rom, found, info.module_table, info.table_count);
+        table = overrides.module_count > 0 ? info.module_table : 0;
+    }
+
+    if (table)
+    {
+        const int count = overrides.module_count > 0 ? overrides.module_count : int(kMaxModules);
+        for (int i = 0; i < count && rom.Contains(table + 4 * uint32_t(i), 4); i++)
+        {
+            const uint32_t at = rom.U32(table + 4 * uint32_t(i));
+            ModuleInfo module;
+            if (!ReadModule(rom, at, module))
+            {
+                if (overrides.module_count > 0)
+                {
+                    info.warnings.push_back("entry " + std::to_string(i) + " of the module table, " + Hex(at) +
+                                            ", isn't a module the player can read");
+                }
+                else
+                {
+                    break;
+                }
+            }
+            info.modules.push_back(at);
+        }
+
+        return table;
+    }
+
+    // The modules in the order of the game's table, and then any that it doesn't list, in the ROM's order. Without a
+    // table, a count given for the modules keeps that many of them.
+    for (int i = 0; i < info.table_count; i++)
+    {
+        info.modules.push_back(rom.U32(info.module_table + 4 * uint32_t(i)));
+    }
+    for (uint32_t at : found)
+    {
+        if (std::find(info.modules.begin(), info.modules.end(), at) == info.modules.end())
+        {
+            info.modules.push_back(at);
+        }
+    }
+    if (overrides.module_count > 0 && info.modules.size() > size_t(overrides.module_count))
+    {
+        info.modules.resize(size_t(overrides.module_count));
+    }
+
+    return 0;
+}
+
+// Logs what detection found, with the modules that come from `table`, or from a scan if it's 0.
+void LogDetection(const Rom& rom, uint32_t table, DriverInfo& info)
+{
+    char text[160];
+    if (info.version)
+    {
+        info.log.push_back("version: " + VersionText(rom, info.version));
+    }
+    std::snprintf(text, sizeof text, "krapPlay(): %s, samples: %s, instruments: %s", Hex(info.play).c_str(),
+                  Hex(info.samples).c_str(), Hex(info.instruments).c_str());
+    info.log.push_back(text);
+    std::snprintf(text, sizeof text, "mixer: %d Hz, %d samples a frame, %s, quality %u, master volume 0x%X",
+                  info.mix_rate, info.frame_samples, info.stereo ? "stereo" : "mono", unsigned(info.quality),
+                  unsigned(info.master_volume));
+    info.log.push_back(text);
+    if (info.table_count)
+    {
+        std::snprintf(text, sizeof text, "module table: %s (%d)", Hex(info.module_table).c_str(), info.table_count);
+        info.log.push_back(text);
+    }
+    const size_t unlisted = info.modules.size() - std::min(info.modules.size(), size_t(info.table_count));
+    if (!table && unlisted)
+    {
+        info.log.push_back(std::to_string(unlisted) + (unlisted == 1 ? " module" : " modules") +
+                           (info.table_count ? " that the table doesn't list" : ", which no table lists"));
+    }
+}
+
+// Lists the songs. A module without markers converts as a whole. One with markers converts song by song, each in the
+// player's song mode.
+void ListSongs(const Rom& rom, DriverInfo& info)
+{
+    for (uint32_t at : info.modules)
+    {
+        ModuleInfo module;
+        const int songs = ReadModule(rom, at, module) ? SongsInModule(module) : 0;
+        if (songs == 0)
+        {
+            info.songs.push_back({at, -1});
+            continue;
+        }
+
+        for (int s = 0; s < songs; s++)
+        {
+            info.songs.push_back({at, s});
+        }
+
+        char text[160];
+        std::snprintf(text, sizeof text, "the module at %s separates %d %s with +++", Hex(at).c_str(), songs,
+                      songs == 1 ? "song" : "songs");
+        info.log.push_back(text);
+    }
+}
+
 } // namespace
 
 bool ReadModule(const Rom& rom, uint32_t address, ModuleInfo& module)
@@ -251,30 +440,31 @@ bool ReadModule(const Rom& rom, uint32_t address, ModuleInfo& module)
     }
 
     module.address = address;
-    module.channels = rom.U8(address);
-    module.order_count = rom.U8(address + 1);
-    module.restart = rom.U8(address + 2);
+    module.channels = rom.U8(address + kModuleChannels);
+    module.order_count = rom.U8(address + kModuleOrderCount);
+    module.restart = rom.U8(address + kModuleRestart);
     for (uint32_t i = 0; i < 256; i++)
     {
-        module.orders[i] = rom.U8(address + 3 + i);
+        module.orders[i] = rom.U8(address + kModuleOrders + i);
     }
     for (uint32_t i = 0; i < 32; i++)
     {
-        module.channel_pan[i] = rom.S8(address + 0x103 + i);
+        module.channel_pan[i] = rom.S8(address + kModuleChannelPans + i);
     }
     for (uint32_t i = 0; i < 64; i++)
     {
-        module.song_starts[i] = rom.U8(address + 0x123 + i);
+        module.song_starts[i] = rom.U8(address + kModuleSongStarts + i);
     }
-    module.global_volume = rom.U8(address + 0x163);
-    module.speed = rom.U8(address + 0x164);
-    module.tempo = rom.U8(address + 0x165);
-    const uint8_t flags[3] = {rom.U8(address + 0x166), rom.U8(address + 0x167), rom.U8(address + 0x168)};
+    module.global_volume = rom.U8(address + kModuleGlobalVolume);
+    module.speed = rom.U8(address + kModuleSpeed);
+    module.tempo = rom.U8(address + kModuleTempo);
+    const uint8_t flags[3] = {rom.U8(address + kModuleFlags), rom.U8(address + kModuleFlags + 1),
+                              rom.U8(address + kModuleFlags + 2)};
     module.instruments = flags[0] != 0;
     module.linear = flags[1] != 0;
     module.fast_slides = flags[2] != 0;
-    module.volume_opt = rom.U8(address + 0x169);
-    module.amiga_limits = rom.U8(address + 0x16A);
+    module.volume_opt = rom.U8(address + kModuleFlags + 3);
+    module.amiga_limits = rom.U8(address + kModuleFlags + 4);
 
     // The header's flags are bytes of 0 or 1, and the pans are within the player's range.
     if (module.channels == 0 || module.channels > 32 || module.order_count == 0 || module.speed == 0)
@@ -324,6 +514,31 @@ bool ReadModule(const Rom& rom, uint32_t address, ModuleInfo& module)
     return true;
 }
 
+RowEntry ReadEntry(const Rom& rom, uint8_t flags, uint32_t& at)
+{
+    // The note is in the first byte's top 7 bits. The second byte holds the instrument's low 8 bits, and the first
+    // byte's low bit holds its 9th.
+    RowEntry entry;
+    entry.channel = flags & kEntryChannel;
+    if (flags & kEntryNote)
+    {
+        const uint8_t b0 = rom.U8(at++);
+        entry.instrument = uint16_t(rom.U8(at++) | ((b0 & 1) << 8));
+        entry.note = uint8_t(b0 >> 1);
+    }
+    if (flags & kEntryVolume)
+    {
+        entry.volume = rom.U8(at++);
+    }
+    if (flags & kEntryEffect)
+    {
+        entry.effect = rom.U8(at++);
+        entry.effect_op = rom.U8(at++);
+    }
+
+    return entry;
+}
+
 bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info, std::string& error)
 {
     info = DriverInfo();
@@ -333,8 +548,8 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
     // library's version string, which names the build.
     const std::string kVersion = kVersionText;
     info.version = FindBytes(rom, std::vector<uint8_t>(kVersion.begin(), kVersion.end()), 1);
-    info.play = FindFirst(rom, kPlayPattern);
-    const uint32_t table_code = FindFirst(rom, kTablesPattern);
+    info.play = FindFirstThumb(rom, kPlayPattern);
+    const uint32_t table_code = FindFirstThumb(rom, kTablesPattern);
     if (!info.play || !table_code)
     {
         if (info.version)
@@ -345,189 +560,26 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
         return false;
     }
 
-    info.instruments = ThumbLiteral(rom, table_code + 2 * kInstrumentsIndex);
-    info.samples = ThumbLiteral(rom, table_code + 2 * kSamplesIndex);
-
-    // The player's tables.
-    info.sine = FindTable(rom, kSine);
-    info.ramp = FindTable(rom, kRamp);
-    info.square = FindTable(rom, kSquare);
-    info.random = FindTable(rom, kRandom);
-    info.periods = FindTable(rom, kPeriods);
-    info.fine_tunes = FindTable(rom, kFineTunes);
-    info.linear = FindTable(rom, kLinear);
-    const struct
+    if (!ReadTables(rom, table_code, info, error) || !ReadMixRate(rom, info, error))
     {
-        uint32_t address;
-        uint32_t size;
-        const char* name;
-    } tables[] = {
-        {info.sine, 128, "vibrato's sine"},
-        {info.ramp, 128, "vibrato's ramp"},
-        {info.square, 128, "vibrato's square"},
-        {info.random, 128, "vibrato's random wave"},
-        {info.periods, 240, "table of periods"},
-        {info.fine_tunes, 128, "table of fine tunes"},
-        {info.linear, 3072, "table of linear frequencies"},
-        {info.samples, 4, "table of samples"},
-    };
-    for (const auto& t : tables)
-    {
-        if (!rom.Contains(t.address, t.size))
-        {
-            error = std::string("found Krawall, but not its ") + t.name;
-            return false;
-        }
-    }
-
-    // The mixer's rate and the samples it mixes a frame, which the build of the library sets.
-    const uint32_t timer = FindFirst(rom, kTimerPattern);
-    const uint32_t reload = timer ? ThumbLiteral(rom, timer + 2 * kTimerIndex) & 0xFFFF : 0;
-    const uint32_t frame = FindFirst(rom, kFramePattern);
-    if (!reload || !frame)
-    {
-        error = "found Krawall, but not its mixer's rate";
         return false;
     }
-    info.mix_rate = int((1u << 24) / (0x10000 - reload));
-    info.frame_samples = (rom.U16(frame + 2 * kFrameIndex) & 0xFF) << 1;
-    if (info.mix_rate != kModelRate)
-    {
-        info.warnings.push_back("the mixer runs at " + std::to_string(info.mix_rate) +
-                                " Hz, but the model plays notes "
-                                "and ticks as the library does at " +
-                                std::to_string(kModelRate) + " Hz");
-    }
+    ReadGameSettings(rom, info);
 
-    // The game's settings for stereo and the mixer's quality.
-    const uint32_t init = FindFirst(rom, kInitPattern);
-    const uint32_t quality = FindFirst(rom, kQualityPattern);
-    const int stereo = init ? CallArgument(rom, init) : -1;
-    const int mode = quality ? CallArgument(rom, quality) : -1;
-    info.stereo = stereo != 0;
-    info.quality = uint8_t(std::max(mode, 0));
-    if (stereo < 0)
-    {
-        info.warnings.push_back("found no call to kragInit(), so the mixer is taken to be stereo");
-    }
-
-    // The game's master volume, from its call to kramSetMasterVol() rather than kragInit()'s.
-    const uint32_t master = FindFirst(rom, kMasterPattern);
-    const int64_t master_volume = master ? CallLiteral(rom, master, init ? init + kInitMasterCall : 0) : -1;
-    if (master_volume >= 0)
-    {
-        info.master_volume = uint32_t(master_volume);
-    }
-
-    // The modules: from the given table, or the headers that a scan of the ROM finds. A count given for the modules
-    // applies to a given table and to the game's table that the scan finds. The count leaves out the modules that the
-    // table doesn't list.
-    std::vector<uint32_t> found;
-    uint32_t table = overrides.module_table;
-    if (!table)
-    {
-        found = ScanModules(rom);
-        FindModuleTable(rom, found, info.module_table, info.table_count);
-        table = overrides.module_count > 0 ? info.module_table : 0;
-    }
-
-    if (table)
-    {
-        const int count = overrides.module_count > 0 ? overrides.module_count : int(kMaxModules);
-        for (int i = 0; i < count && rom.Contains(table + 4 * uint32_t(i), 4); i++)
-        {
-            const uint32_t at = rom.U32(table + 4 * uint32_t(i));
-            ModuleInfo module;
-            if (!ReadModule(rom, at, module))
-            {
-                if (overrides.module_count > 0)
-                {
-                    info.warnings.push_back("entry " + std::to_string(i) + " of the module table, " + Hex(at) +
-                                            ", isn't a module the player can read");
-                }
-                else
-                {
-                    break;
-                }
-            }
-            info.modules.push_back(at);
-        }
-    }
-    else
-    {
-        // The modules in the order of the game's table, and then any that it doesn't list, in the ROM's order. Without
-        // a table, a count given for the modules keeps that many of them.
-        for (int i = 0; i < info.table_count; i++)
-        {
-            info.modules.push_back(rom.U32(info.module_table + 4 * uint32_t(i)));
-        }
-        for (uint32_t at : found)
-        {
-            if (std::find(info.modules.begin(), info.modules.end(), at) == info.modules.end())
-            {
-                info.modules.push_back(at);
-            }
-        }
-        if (overrides.module_count > 0 && info.modules.size() > size_t(overrides.module_count))
-        {
-            info.modules.resize(size_t(overrides.module_count));
-        }
-    }
+    const uint32_t table = ListModules(rom, overrides, info);
     if (info.modules.empty())
     {
         error = "found Krawall, but no modules";
         return false;
     }
 
-    char text[160];
-    if (info.version)
-    {
-        info.log.push_back("version: " + VersionText(rom, info.version));
-    }
-    std::snprintf(text, sizeof text, "krapPlay(): %s, samples: %s, instruments: %s", Hex(info.play).c_str(),
-                  Hex(info.samples).c_str(), Hex(info.instruments).c_str());
-    info.log.push_back(text);
-    std::snprintf(text, sizeof text, "mixer: %d Hz, %d samples a frame, %s, quality %u, master volume 0x%X",
-                  info.mix_rate, info.frame_samples, info.stereo ? "stereo" : "mono", unsigned(info.quality),
-                  unsigned(info.master_volume));
-    info.log.push_back(text);
-    if (info.table_count)
-    {
-        std::snprintf(text, sizeof text, "module table: %s (%d)", Hex(info.module_table).c_str(), info.table_count);
-        info.log.push_back(text);
-    }
-    const size_t unlisted = info.modules.size() - std::min(info.modules.size(), size_t(info.table_count));
-    if (!table && unlisted)
-    {
-        info.log.push_back(std::to_string(unlisted) + (unlisted == 1 ? " module" : " modules") +
-                           (info.table_count ? " that the table doesn't list" : ", which no table lists"));
-    }
-
-    // A module without markers converts as a whole. One with markers converts song by song, each in the player's song
-    // mode.
-    for (uint32_t at : info.modules)
-    {
-        ModuleInfo module;
-        const int songs = ReadModule(rom, at, module) ? SongCount(module) : 0;
-        if (songs == 0)
-        {
-            info.songs.push_back({at, -1});
-            continue;
-        }
-
-        for (int s = 0; s < songs; s++)
-        {
-            info.songs.push_back({at, s});
-        }
-        std::snprintf(text, sizeof text, "the module at %s separates %d %s with +++", Hex(at).c_str(), songs,
-                      songs == 1 ? "song" : "songs");
-        info.log.push_back(text);
-    }
+    LogDetection(rom, table, info);
+    ListSongs(rom, info);
 
     return true;
 }
 
-int SongCount(const ModuleInfo& module)
+int SongsInModule(const ModuleInfo& module)
 {
     int songs = 0;
     bool markers = false;

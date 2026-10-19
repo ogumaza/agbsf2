@@ -37,11 +37,11 @@ from pathlib import Path
 
 from unicorn import UC_HOOK_CODE
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for conversion.py and gbarom.py, in tools/
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for conversion.py, gbarom.py and traces.py, in tools/
 import conversion
 import driver_emu
-from compare_trace import parse_range
 from gbarom import ROM_BASE, load_rom
+from traces import parse_range
 
 FRAME_RATE = 16777216 / 280896
 TRACK_VOLUME = 18  # a track's volume, in its MusicPlayerTrack

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <optional>
@@ -23,6 +24,9 @@ namespace
 
 // A GSF file's PSF version.
 constexpr uint8_t kGsfVersion = 0x22;
+
+// A cartridge's address space: the most ROM that a game can have.
+constexpr size_t kMaxRomSize = 0x2000000;
 
 // Returns true if `file` starts with the signature of a ZIP, 7-Zip, RAR or gzip archive.
 bool IsArchive(const std::vector<uint8_t>& file)
@@ -51,6 +55,36 @@ std::optional<std::string> Decompress(const uint8_t* data, size_t size, uint32_t
     }
 
     return std::nullopt;
+}
+
+// Returns the path of the library `name` that a _lib tag of the GSF file at `path` gives: a file beside it. Where the
+// folder has no file of the tag's name, one whose name differs only in case takes its place. Windows and macOS find
+// that file anyway.
+std::string LibraryPath(const std::string& path, const std::string& name)
+{
+    const std::filesystem::path exact = PathFromUtf8(path).parent_path() / PathFromUtf8(name);
+    std::error_code ec;
+    if (std::filesystem::exists(exact, ec))
+    {
+        return Utf8(exact);
+    }
+
+    const std::filesystem::path folder = exact.parent_path().empty() ? std::filesystem::path(".") : exact.parent_path();
+    const std::string wanted = Utf8(exact.filename());
+    const auto same = [](char a, char b)
+    {
+        return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+    };
+    for (std::filesystem::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec))
+    {
+        const std::string found = Utf8(it->path().filename());
+        if (found.size() == wanted.size() && std::equal(found.begin(), found.end(), wanted.begin(), same))
+        {
+            return Utf8(it->path());
+        }
+    }
+
+    return Utf8(exact);
 }
 
 } // namespace
@@ -100,9 +134,9 @@ bool Rom::Load(const std::string& path, std::string& error)
             return false;
         }
 
-        if (file.size() > 0x2000000)
+        if (file.size() > kMaxRomSize)
         {
-            file.resize(0x2000000);
+            file.resize(kMaxRomSize);
         }
 
         data_ = std::move(file);
@@ -156,45 +190,16 @@ bool Rom::LoadGsf(const std::string& path, int depth, std::string& error)
         return it != psf.tags.end() ? it->second : std::string();
     };
 
-    // A _lib tag names a file beside this one. Where the folder has no file of the tag's name, one whose name differs
-    // only in case takes its place. Windows and macOS find that file anyway.
-    auto lib_path = [&](const std::string& name)
-    {
-        const std::filesystem::path exact = PathFromUtf8(path).parent_path() / PathFromUtf8(name);
-        std::error_code ec;
-        if (std::filesystem::exists(exact, ec))
-        {
-            return Utf8(exact);
-        }
-
-        const std::filesystem::path folder =
-            exact.parent_path().empty() ? std::filesystem::path(".") : exact.parent_path();
-        const std::string wanted = Utf8(exact.filename());
-        const auto same = [](char a, char b)
-        {
-            return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
-        };
-        for (std::filesystem::directory_iterator it(folder, ec), end; !ec && it != end; it.increment(ec))
-        {
-            const std::string found = Utf8(it->path().filename());
-            if (found.size() == wanted.size() && std::equal(found.begin(), found.end(), wanted.begin(), same))
-            {
-                return Utf8(it->path());
-            }
-        }
-
-        return Utf8(exact);
-    };
-
     // As the PSF format specifies, _lib is loaded first, then the file's program on top of it, then _lib2, _lib3 and so
     // on up to the first one missing, each on top of the last.
     if (const std::string lib = tag_value("_lib"); !lib.empty())
     {
+        const std::string lib_path = LibraryPath(path, lib);
         if (depth == 0)
         {
-            library_ = lib_path(lib);
+            library_ = lib_path;
         }
-        if (!LoadGsf(lib_path(lib), depth + 1, error))
+        if (!LoadGsf(lib_path, depth + 1, error))
         {
             return false;
         }
@@ -223,7 +228,7 @@ bool Rom::LoadGsf(const std::string& path, int depth, std::string& error)
             break;
         }
 
-        if (!LoadGsf(lib_path(lib), depth + 1, error))
+        if (!LoadGsf(LibraryPath(path, lib), depth + 1, error))
         {
             return false;
         }
@@ -254,7 +259,7 @@ bool Rom::ApplyGsfProgram(const std::vector<uint8_t>& program, std::string& erro
     }
 
     const uint32_t rom_offset = offset & 0x01FFFFFF;
-    if (uint64_t(rom_offset) + size > 0x2000000)
+    if (uint64_t(rom_offset) + size > kMaxRomSize)
     {
         error = "GSF program doesn't fit in the cartridge address space";
         return false;
@@ -297,6 +302,32 @@ std::string Rom::GameCode() const
     }
 
     return s;
+}
+
+std::string HexBytes(const Rom& rom, uint32_t address, uint32_t count)
+{
+    std::string text;
+    for (uint32_t i = 0; i < count; i++)
+    {
+        char hex[4];
+        std::snprintf(hex, sizeof hex, "%02X ", rom.U8(address + i));
+        text += hex;
+    }
+
+    return text;
+}
+
+const char* MissingTable(const Rom& rom, std::span<const RomTable> tables)
+{
+    for (const RomTable& t : tables)
+    {
+        if (!rom.Contains(t.address, t.size))
+        {
+            return t.name;
+        }
+    }
+
+    return nullptr;
 }
 
 } // namespace agbsf2

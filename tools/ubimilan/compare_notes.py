@@ -26,26 +26,26 @@ The PSG's notes that sound, from the driver's writes to NR12, NR22, NR32 and NR4
 channels 1 to 3 and on channel 11's keys up to 11, frame for frame.
 """
 import argparse
-import re
 import struct
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for gbarom.py and conversion.py, in tools/
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for conversion.py, gbarom.py and traces.py, in tools/
 import conversion
 import driver_emu
+import traces
 from gbarom import ROM_BASE, load_rom
 
 FRAME_RATE = 16777216 / 280896
 MAX_SHIFT = 1.65  # frames that an event on the beat can be from the driver's frame, with a margin for the MIDI's ticks
 MIRROR = 0x0A000000
-KIT_CHANNEL = 10  # the MIDI channel of the driver's channel 9, MIDI's channel 11, counted from 0
+KIT_MIDI_CHANNEL = 10  # the MIDI channel of the driver's channel 9, MIDI's channel 11, counted from 0
 KIT_BANK = 9
 POINTS_COMPARED = 256  # points of each sample compared with the SoundFont's
 NR31 = 0x04000072
-PSG_CHANNELS = {0x04000062: 0, 0x04000068: 1, NR31: 2, 0x04000078: KIT_CHANNEL}  # the MIDI channel of each register
+# The MIDI channel of each register.
+PSG_CHANNELS = {0x04000062: 0, 0x04000068: 1, NR31: 2, 0x04000078: KIT_MIDI_CHANNEL}
 
 
 def read_midi(path):
@@ -206,7 +206,7 @@ def check_song(rom, song, framed, frames_limit):
     presets = read_sf2(framed.with_suffix('.sf2'))
     frames = min(frames_limit, int(round(end)) + 1)
     notes, psg = driver_notes(rom, song, frames)
-    kit = sorted((n for n in midi_notes if n['channel'] == KIT_CHANNEL and n['key'] > 11), key=lambda n: n['on'])
+    kit = sorted((n for n in midi_notes if n['channel'] == KIT_MIDI_CHANNEL and n['key'] > 11), key=lambda n: n['on'])
     rate = round(FRAME_RATE * 280896 / (16 * (0x10000 - driver_emu.addresses_for(rom).timer_reload)) * 8)
 
     mirrored = sum(1 for n in notes if n['data'] >= MIRROR)
@@ -242,10 +242,10 @@ def check_song(rom, song, framed, frames_limit):
 
     # Each PSG channel's notes that sound start on the frames of the driver's writes.
     for address, channel in PSG_CHANNELS.items():
-        name = 'the noise' if channel == KIT_CHANNEL else 'PSG channel %d' % channel
+        name = 'the noise' if channel == KIT_MIDI_CHANNEL else 'PSG channel %d' % channel
         driver_frames = sorted(f for f, a in psg if a == address and f < end - 0.5)
         midi_frames = sorted(n['on'] for n in midi_notes
-                             if n['channel'] == channel and (channel != KIT_CHANNEL or n['key'] <= 11))
+                             if n['channel'] == channel and (channel != KIT_MIDI_CHANNEL or n['key'] <= 11))
         if len(driver_frames) != len(midi_frames):
             problems.append('the driver starts %d notes that sound on %s, the MIDI file has %d' %
                             (len(driver_frames), name, len(midi_frames)))
@@ -254,20 +254,6 @@ def check_song(rom, song, framed, frames_limit):
             if abs(m - d) > 0.5:
                 problems.append('frame %d: a note of %s starts on frame %.2f in the MIDI file' % (d, name, m))
     return problems, len(expected), mirrored
-
-
-def listed_songs(tool, rom_path):
-    text = subprocess.run([tool, '--driver', 'ubimilan', '--info', rom_path], capture_output=True, encoding='utf-8',
-                          check=True).stdout
-    return [int(n) for n in re.findall(r'^\s+(\d+)\s+0x[0-9A-F]{8}', text, re.MULTILINE)]
-
-
-def parse_range(text):
-    songs = []
-    for part in text.split(','):
-        a, _, b = part.partition('-')
-        songs += list(range(int(a), int(b or a) + 1))
-    return songs
 
 
 def main():
@@ -283,8 +269,8 @@ def main():
     midis = dict(conversion.midi_files(a.folder, 'ubimilan'))
     if not midis:
         raise SystemExit('found no MIDI files to check in %s' % a.folder)
-    songs = sorted(set(parse_range(a.songs))) if a.songs else sorted(midis)
-    listed = set(listed_songs(a.agbsf2, a.rom))
+    songs = sorted(set(traces.parse_range(a.songs))) if a.songs else sorted(midis)
+    listed = {n for n, _ in traces.listed(a.agbsf2, 'ubimilan', a.rom)}
     failed = total = 0
     with tempfile.TemporaryDirectory() as folder:
         on_frames = conversion.frame_timed(a.agbsf2, a.rom, 'ubimilan', folder, a.songs)

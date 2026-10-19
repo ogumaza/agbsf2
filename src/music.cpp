@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "files.h"
 #include "program.h"
 
 namespace agbsf2
@@ -19,19 +20,24 @@ namespace
 
 using Open = std::unique_ptr<Music> (*)(const Rom&, const Overrides&, std::string&);
 
-// The drivers in the order detection looks for them. Rare's, Quintet's, Nintendo R&D2's, Brownie Brown's and Ubisoft
-// Milan's drivers, MP2K and Krawall come first, since their detection uses code alone, where Konami's can fall back on
-// a data scan, which might mistake another driver's data for a song table. R&D2's comes before MP2K, since a game can
-// play most of its music with R&D2's driver and the rest with MP2K.
+// The drivers in the order detection looks for them, with the names that --driver takes. Rare's, Quintet's, Nintendo
+// R&D2's, Brownie Brown's and Ubisoft Milan's drivers, MP2K and Krawall come first, since their detection uses code
+// alone, where Konami's can fall back on a data scan, which might mistake another driver's data for a song table.
+// R&D2's comes before MP2K, since a game can play most of its music with R&D2's driver and the rest with MP2K.
 const struct
 {
     Driver driver;
+    const char* name;
     Open open;
 } kDrivers[] = {
-    {Driver::kRare, rare::OpenMusic},         {Driver::kQuintet, quintet::OpenMusic},
-    {Driver::kRd2, rd2::OpenMusic},           {Driver::kMp2k, mp2k::OpenMusic},
-    {Driver::kBrownie, brownie::OpenMusic},   {Driver::kKrawall, krawall::OpenMusic},
-    {Driver::kUbiMilan, ubimilan::OpenMusic}, {Driver::kKonami, konami::OpenMusic},
+    {Driver::kRare, "rare", rare::OpenMusic},
+    {Driver::kQuintet, "quintet", quintet::OpenMusic},
+    {Driver::kRd2, "rd2", rd2::OpenMusic},
+    {Driver::kMp2k, "mp2k", mp2k::OpenMusic},
+    {Driver::kBrownie, "brownie", brownie::OpenMusic},
+    {Driver::kKrawall, "krawall", krawall::OpenMusic},
+    {Driver::kUbiMilan, "ubimilan", ubimilan::OpenMusic},
+    {Driver::kKonami, "konami", konami::OpenMusic},
 };
 
 // Returns the error for a game in which detection finds none of the drivers that `driver` allows. Rare's driver and
@@ -107,6 +113,54 @@ std::vector<FoundMusic> FindMusic(const Rom& rom, const Overrides& overrides, bo
 
 } // namespace
 
+const char* DriverName(Driver driver)
+{
+    for (const auto& d : kDrivers)
+    {
+        if (d.driver == driver)
+        {
+            return d.name;
+        }
+    }
+
+    return "";
+}
+
+Driver DriverNamed(const std::string& name)
+{
+    for (const auto& d : kDrivers)
+    {
+        if (name == d.name)
+        {
+            return d.driver;
+        }
+    }
+
+    return Driver::kAny;
+}
+
+Music::Music(const std::string& name, const std::vector<std::string>& log, std::vector<std::string> warnings)
+    : warnings_(std::move(warnings))
+{
+    log_.push_back(name);
+    log_.insert(log_.end(), log.begin(), log.end());
+}
+
+const std::vector<std::string>& Music::Log() const
+{
+    return log_;
+}
+
+const std::vector<std::string>& Music::Warnings() const
+{
+    return warnings_;
+}
+
+bool Music::SupportsVoiceChannels() const
+{
+    return false;
+}
+
 std::string Music::FileNumber(int song) const
 {
     return SongNumber(song, 0);
@@ -138,6 +192,11 @@ std::string SongNumber(int song, int count)
     return std::string(size_t(std::max(0, digits - int(number.size()))), '0') + number;
 }
 
+std::string SongStem(const ConvertSettings& settings, const std::string& number)
+{
+    return Utf8(PathFromUtf8(settings.out_dir) / PathFromUtf8(SafeFileName(settings.base_name) + "_" + number));
+}
+
 uint64_t LoopLength(const std::vector<uint64_t>& lengths)
 {
     const uint64_t longest = *std::max_element(lengths.begin(), lengths.end());
@@ -155,6 +214,42 @@ uint64_t LoopLength(const std::vector<uint64_t>& lengths)
     }
 
     return length;
+}
+
+SongPlan PlanSong(const std::vector<TrackLayout>& tracks, int loops, bool second)
+{
+    SongPlan plan;
+    uint64_t longest_end = 0;
+    uint64_t last_command = 0;
+    std::vector<uint64_t> lengths;
+    for (const TrackLayout& layout : tracks)
+    {
+        if (layout.loops && layout.loop_end > layout.loop_start)
+        {
+            plan.loops = true;
+            plan.loop_start = std::max(plan.loop_start, layout.loop_start);
+            lengths.push_back(layout.loop_end - layout.loop_start);
+        }
+        else if (!layout.loops)
+        {
+            longest_end = std::max(longest_end, layout.end);
+            last_command = std::max(last_command, layout.last_command);
+        }
+    }
+
+    if (plan.loops)
+    {
+        const uint64_t length = LoopLength(lengths);
+        plan.loop_start = std::max(plan.loop_start, last_command) + (second ? length : 0);
+        plan.loop_end = plan.loop_start + length;
+        plan.end = plan.loop_start + uint64_t(loops) * length;
+    }
+    else
+    {
+        plan.end = longest_end;
+    }
+
+    return plan;
 }
 
 PassComparison::PassComparison(uint64_t start, uint64_t length) : start_(start), length_(length)

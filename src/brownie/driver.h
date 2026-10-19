@@ -13,10 +13,6 @@
 namespace agbsf2::brownie
 {
 
-// The CPU cycles in a frame, and a second's.
-constexpr uint64_t kFrameCycles = 280896;
-constexpr uint64_t kSecondCycles = 16777216;
-
 // User-supplied overrides for driver detection.
 struct DriverOverrides
 {
@@ -31,11 +27,66 @@ enum class Revision
     kMagicalVacation, // Magical Vacation: 12 channels, whose samples play on the FIFOs, a sample on each
 };
 
-// Returns the revision's name, as --info prints it.
-const char* RevisionName(Revision r);
+// The driver's sound channels: 0-3 play the music on the PSG's square 1, square 2, wave and noise channels, 4-7 play
+// sound effects on the same PSG channels, and the rest play samples. In the Sword of Mana revision, 8-12 play the
+// music's samples on the mixer's voices 0-4. In the Magical Vacation revision, 8 and 9 play the music's samples on FIFO
+// A and FIFO B, and 10 and 11 play sound effects' samples, taking the FIFO from 8 or 9. kChannelCount is the most that
+// a revision has.
+constexpr int kChannelCount = 13;
+constexpr int kFirstEffectChannel = 4;
+constexpr int kFirstSampleChannel = 8;
+constexpr int kFirstEffectSampleChannel = 10;
+constexpr int kWaveChannel = 2;
+constexpr int kNoiseChannel = 3;
 
-// Returns the number of channels that a revision's per-frame routine runs: 13, or 12 in the Magical Vacation revision.
-int ChannelCount(Revision r);
+// The Sword of Mana revision keeps a 14th record after the 13 channels. The per-frame routine doesn't run it. The
+// driver's routine that starts a sound starts it for a sound that lists channel 13, and E2, E3 and the end of a fade
+// out change its flags. ReadSong() rejects such a sound.
+constexpr int kRecordCount = 14;
+
+// The mixer's voices in the Sword of Mana revision: one for each sample channel. The mixer's mode 0 mixes voices 0 and
+// 1 only.
+constexpr int kVoiceCount = 5;
+constexpr int kMode0Voices = 2;
+
+// The FIFOs. In the Magical Vacation revision, each plays a sample: FIFO A at the rate of Timer 0, and FIFO B at the
+// rate of Timer 1.
+constexpr int kFifoCount = 2;
+
+// The numbers and names that differ between the revisions, apart from the size of the driver's variables and the
+// offsets of SOUNDCNT_L's copy and of the master level among them. sequencer.h keeps those beside the variables. Code
+// whose behaviour differs between the revisions tests the revision.
+struct RevisionLayout
+{
+    const char* name;   // the revision's name for --info
+    int channels;       // the channels that the per-frame routine runs
+    int records;        // the channel records that a sound can start
+    int voices;         // the mixer's voices, or the FIFOs
+    uint8_t queue_mask; // the mask that wraps the request queue's indexes: its size in bytes, less 1
+
+    // The sample channels' names, with null after the last sample channel.
+    const char* sample_names[kChannelCount - kFirstSampleChannel];
+};
+
+// Returns the layout of revision `r`.
+const RevisionLayout& LayoutOf(Revision r);
+
+// What a channel plays: one of the PSG's channels, or samples, through the mixer in the Sword of Mana revision or
+// straight through a FIFO in the Magical Vacation revision.
+enum class ChannelKind
+{
+    kSquare,
+    kWave,
+    kNoise,
+    kMixerSample,
+    kFifoSample,
+};
+
+// Returns what channel `c` of revision `r` plays.
+ChannelKind KindOf(Revision r, int c);
+
+// Returns the name of channel `c` of revision `r`, such as "effect square 1".
+const char* ChannelName(Revision r, int c);
 
 // The driver's tables in a ROM.
 struct DriverInfo
@@ -62,8 +113,8 @@ struct DriverInfo
     std::vector<std::string> warnings; // assumptions detection had to make
 };
 
-// Finds the driver in `rom`. Returns false and sets `error` if no sound could be found, or returns false with `error`
-// empty if the game shows no sign of the driver and no song table is given.
+// Finds the driver in `rom`. Returns false with `error` empty if the game shows no sign of the driver and no song table
+// is given. Returns false and sets `error` if one of the driver's tables wasn't found or the song table has no sounds.
 bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info, std::string& error);
 
 // A channel of a sound, as its entry in the song table lists it.
@@ -74,8 +125,22 @@ struct SongChannel
     uint32_t subroutines = 0; // a word a subroutine: the places that F6 calls and F8 jumps to
 };
 
+// Returns the address of sound `song`'s list of channels: the word at entry `song` of the song table. It doesn't test
+// that the entry is in the table.
+uint32_t SongAddress(const Rom& rom, const DriverInfo& info, int song);
+
 // Reads the channels of entry `song` of the song table. Returns false if the entry isn't in the ROM, names a channel
 // that the revision doesn't have, or doesn't end within its channels.
 bool ReadSong(const Rom& rom, const DriverInfo& info, int song, std::vector<SongChannel>& channels);
+
+// The tuning of the PSG's frequency table.
+struct Tuning
+{
+    int base = 0;  // the MIDI key that the driver's key 0 stands for
+    int cents = 0; // how far the table is out from equal temperament, from -50 to 49
+};
+
+// Returns the tuning of the PSG's frequency table: the median over the keys of the PSG's lowest four octaves.
+Tuning PsgTuning(const Rom& rom, const DriverInfo& info);
 
 } // namespace agbsf2::brownie

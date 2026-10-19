@@ -47,6 +47,19 @@ const char* RevisionName(Revision r);
 // voices, 10 in the Eternal Duelist revision, which has 6, and 8 in the Dungeon Dice Monsters revision, which has 4.
 int TrackCount(Revision r);
 
+// Returns true if revision `r` reads the Rave Master revision's commands. The Rave Master and Eternal Duelist revisions
+// do. Their F3 carries no extra bytes on sample tracks, 00-7F do nothing, and 80-8F store a duty as it is.
+bool RaveMasterCommands(Revision r);
+
+// Returns true if revision `r` has the older revisions' output stage. The WCT 2004, Rave Master and Eternal Duelist
+// revisions share it, with a few differences. The Ultimate Masters and Dungeon Dice Monsters revisions each have
+// another.
+bool OlderOutputStage(Revision r);
+
+// Returns true if revision `r`'s track output records have pan. The Eternal Duelist and Dungeon Dice Monsters
+// revisions' records don't.
+bool RecordHasPan(Revision r);
+
 // The first note that the Dungeon Dice Monsters revision plays one entry of its PSG frequency table after the note
 // before it, where the table holds the noise channel's settings. The notes below it are 16 entries apart.
 constexpr int kDungeonDiceNoiseNote = 72;
@@ -138,8 +151,17 @@ inline uint8_t DutyByteFor(uint8_t opcode)
     return (opcode & 0x80) ? uint8_t((opcode & 0x3F) << 6) : uint8_t(opcode - 4);
 }
 
-// The square channels' duty cycles, selected by bits 6-7 of the duty byte.
-inline constexpr const char* kDutyNames[4] = {"12.5%", "25%", "50%", "75%"};
+// Returns the duty or wave command that `opcode` gives in an older revision. In the WCT 2004, Rave Master and Eternal
+// Duelist revisions, the duty and wave commands and the calls 90-9E give it by their low nibble: a duty of 0-3, or wave
+// nibble - 4. WCT 2004 shifts a duty into bits 6-7. In the Dungeon Dice Monsters revision, 00-6F give the duty byte
+// itself. From 70 up, a low nibble up to B gives a wave, and a larger one gives duty nibble & 3 in bits 6-7. F5's last
+// byte can be any byte.
+Command DutyOrWave(uint8_t opcode, Revision revision);
+
+// Returns true if call `opcode` sets the duty or the wave first. 90-9E do in the WCT 2004, Rave Master and Eternal
+// Duelist revisions, and F5 does in the Dungeon Dice Monsters revision. That setting counts as the call's first
+// command. 9F and F4 play 256 commands for a count of 0.
+bool CallSetsFirst(uint8_t opcode, Revision revision);
 
 // A song table entry: the start of the song's data, and the start of each track in it.
 struct SongHeader

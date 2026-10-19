@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <string>
 
+#include "psg.h"
+
 namespace agbsf2::konami
 {
 namespace
@@ -137,9 +139,9 @@ Command DecodeUltimateMasters(const Rom& rom, uint32_t addr, int track, Command 
 Command DecodeWct2004(const Rom& rom, uint32_t addr, int track, Revision revision, Command c)
 {
     const bool eternal_duelist = revision == Revision::kEternalDuelist;
-    const bool rave_master = revision == Revision::kRaveMaster || eternal_duelist;
+    const bool rave_master_commands = RaveMasterCommands(revision);
     const uint8_t op = c.opcode;
-    if (rave_master && (op <= 0x7F || (!eternal_duelist && op >= 0xF6 && op <= 0xFC)))
+    if (rave_master_commands && (op <= 0x7F || (!eternal_duelist && op >= 0xF6 && op <= 0xFC)))
     {
         c.op = Op::kNop;
         return c;
@@ -180,7 +182,7 @@ Command DecodeWct2004(const Rom& rom, uint32_t addr, int track, Revision revisio
         case 0xF3:
             c.op = Op::kLoopPoint;
             c.value = 0;
-            c.length = IsPsgTrack(track) || rave_master ? 1 : 3;
+            c.length = IsPsgTrack(track) || rave_master_commands ? 1 : 3;
             break;
 
         case 0xF4:
@@ -249,19 +251,15 @@ Command DecodeWct2004(const Rom& rom, uint32_t addr, int track, Revision revisio
     else if (op >= 0x90)
     {
         c.op = Op::kCall;
-        c.value = rom.U8(addr + 1) | (rom.U8(addr + 2) << 8);
+        c.value = rom.U16(addr + 1);
         c.count = rom.U8(addr + 3);
         c.length = 4;
     }
-    else if ((op & 15) <= 3)
-    {
-        c.op = Op::kDuty;
-        c.value = rave_master ? op & 15 : (op & 15) << 6;
-    }
     else
     {
-        c.op = Op::kWave;
-        c.value = (op & 15) - 4;
+        const Command set = DutyOrWave(op, revision);
+        c.op = set.op;
+        c.value = set.value;
     }
 
     return c;
@@ -317,7 +315,7 @@ Command DecodeDungeonDice(const Rom& rom, uint32_t addr, Command c)
         case 0xF5:
         case 0xF4:
             c.op = Op::kCall;
-            c.value = rom.U8(addr + 1) | (rom.U8(addr + 2) << 8);
+            c.value = rom.U16(addr + 1);
             c.count = rom.U8(addr + 3);
             c.length = 4;
             break;
@@ -368,16 +366,13 @@ Command DecodeDungeonDice(const Rom& rom, uint32_t addr, Command c)
         c.op = Op::kVibrato;
         c.value = nibble;
     }
-    else if (op >= 0x70 && nibble <= 11)
-    {
-        c.op = Op::kWave;
-        c.value = nibble;
-    }
     else
     {
-        // 7C-7F set a duty of 0-3, and 00-6F store their own value as the duty byte, or a sample track's sample.
-        c.op = Op::kDuty;
-        c.value = op >= 0x70 ? (nibble & 3) << 6 : op;
+        // 70-7B load a wave and 7C-7F set a duty of 0-3. 00-6F store the opcode itself as the duty byte. On a sample
+        // track that's the sample.
+        const Command set = DutyOrWave(op, Revision::kDungeonDiceMonsters);
+        c.op = set.op;
+        c.value = set.value;
     }
 
     return c;
@@ -417,6 +412,21 @@ int TrackCount(Revision r)
     }
 }
 
+bool RaveMasterCommands(Revision r)
+{
+    return r == Revision::kRaveMaster || r == Revision::kEternalDuelist;
+}
+
+bool OlderOutputStage(Revision r)
+{
+    return r == Revision::kWct2004 || r == Revision::kRaveMaster || r == Revision::kEternalDuelist;
+}
+
+bool RecordHasPan(Revision r)
+{
+    return r != Revision::kEternalDuelist && r != Revision::kDungeonDiceMonsters;
+}
+
 uint32_t SongEntrySize(Revision r)
 {
     return 4 + 2 * uint32_t(TrackCount(r));
@@ -446,7 +456,7 @@ uint32_t ReadDelay(const Rom& rom, uint32_t addr, Revision revision, uint32_t& d
         return 2;
     }
 
-    delay = rom.U8(addr + 1) | (uint32_t(rom.U8(addr + 2)) << 8);
+    delay = rom.U16(addr + 1);
 
     return 3;
 }
@@ -472,6 +482,28 @@ Command DecodeCommand(const Rom& rom, uint32_t addr, int track, Revision revisio
     default:
         return DecodeWct2004(rom, addr, track, revision, c);
     }
+}
+
+Command DutyOrWave(uint8_t opcode, Revision revision)
+{
+    const int nibble = opcode & 15;
+    Command c;
+    if (revision == Revision::kDungeonDiceMonsters)
+    {
+        c.op = opcode > 0x6F && nibble <= 11 ? Op::kWave : Op::kDuty;
+        c.value = opcode <= 0x6F ? opcode : nibble <= 11 ? nibble : (nibble & 3) << 6;
+        return c;
+    }
+
+    c.op = nibble <= 3 ? Op::kDuty : Op::kWave;
+    c.value = nibble > 3 ? nibble - 4 : RaveMasterCommands(revision) ? nibble : nibble << 6;
+
+    return c;
+}
+
+bool CallSetsFirst(uint8_t opcode, Revision revision)
+{
+    return revision == Revision::kDungeonDiceMonsters ? opcode == 0xF5 : opcode != 0x9F;
 }
 
 bool ReadSongHeader(const Rom& rom, uint32_t song_table, int song, Revision revision, SongHeader& out)
@@ -549,9 +581,7 @@ bool WalkTrack(const Rom& rom, const SongHeader& song, int track, Revision revis
             {
                 // 90-9E and F5 count setting the duty or the wave as the call's first command. A count of 0 plays none
                 // of the fragment. 9F and F4 play 256 commands for 0.
-                const bool sets_first =
-                    revision == Revision::kDungeonDiceMonsters ? c.opcode == 0xF5 : c.opcode != 0x9F;
-                const int count = c.count == 0 && !sets_first ? 256 : c.count;
+                const int count = c.count == 0 && !CallSetsFirst(c.opcode, revision) ? 256 : c.count;
                 // A call of no commands only sets the duty or the wave. Inside another call, it also ends that call's
                 // count. The driver does the same.
                 if (!follow_calls || count == 0)
@@ -752,20 +782,15 @@ std::string Describe(const Command& c, int track, Revision revision)
 
     case Op::kCall:
         {
-            const int nibble = c.opcode & 15;
             std::string action;
-            if (dungeon_dice)
+            if (CallSetsFirst(c.opcode, revision) && dungeon_dice)
             {
-                action = c.opcode == 0xF5 ? ", first the next byte's command" : "";
+                action = ", first the next byte's command";
             }
-            else if (nibble < 15)
+            else if (CallSetsFirst(c.opcode, revision))
             {
                 // 90-9E set the duty byte or the wave as 80-8E do, and are described the same way, in one line.
-                Command set;
-                set.op = nibble < 4 ? Op::kDuty : Op::kWave;
-                const bool as_it_is = revision == Revision::kRaveMaster || revision == Revision::kEternalDuelist;
-                set.value = nibble >= 4 ? nibble - 4 : as_it_is ? nibble : nibble << 6;
-                std::string what = Describe(set, track, revision);
+                std::string what = Describe(DutyOrWave(c.opcode, revision), track, revision);
                 what.erase(std::unique(what.begin(), what.end(), [](char a, char b) { return a == ' ' && b == ' '; }),
                            what.end());
                 action = ", " + what;

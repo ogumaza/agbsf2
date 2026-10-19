@@ -30,7 +30,8 @@ enum class Driver
     kUbiMilan,
 };
 
-// Settings that override detection, from the command line. 0 means detect.
+// Settings that override detection, from the command line. A value of 0, or kAny for the driver, leaves it to
+// detection.
 struct Overrides
 {
     Driver driver = Driver::kAny;
@@ -51,7 +52,7 @@ struct ConvertSettings
     std::string base_name = "song";
 };
 
-// A song's length, loop points, track count and conversion result.
+// A song's length, loop points, track count and conversion result. Only InspectSong() gives the song's address.
 struct SongReport
 {
     bool ok = false;        // converted, or skipped for playing no notes
@@ -66,17 +67,18 @@ struct SongReport
     std::vector<std::string> warnings;
 };
 
-// Access to a game's songs through its sound driver.
+// Access to a game's songs through its sound driver. Each driver's class passes the driver's name and what detection
+// found to the constructor.
 class Music
 {
 public:
     virtual ~Music() = default;
 
     // Returns what detection found, as --info prints it, starting with the driver's name.
-    virtual const std::vector<std::string>& Log() const = 0;
+    const std::vector<std::string>& Log() const;
 
     // Returns the problems that detection found or the assumptions it made.
-    virtual const std::vector<std::string>& Warnings() const = 0;
+    const std::vector<std::string>& Warnings() const;
 
     // Returns the number of entries in the game's song table.
     virtual int SongCount() const = 0;
@@ -91,9 +93,9 @@ public:
     // SoundFont instead of one of its own.
     virtual SongReport ConvertSong(int song, const ConvertSettings& settings) = 0;
 
-    // Returns true if ConvertSong() can give each of the driver's sound channels a MIDI channel, as
-    // ConvertSettings::voice_channels asks.
-    virtual bool SupportsVoiceChannels() const = 0;
+    // Returns true if ConvertSong() can give each of the driver's sound channels a MIDI channel for
+    // ConvertSettings::voice_channels. Only MP2K's conversion can.
+    virtual bool SupportsVoiceChannels() const;
 
     // Starts a shared SoundFont for all subsequent calls to ConvertSong().
     virtual void ShareSoundfont() = 0;
@@ -104,13 +106,23 @@ public:
     // Writes a text listing of every command of a song. Returns false and sets `error` if it can't.
     virtual bool DumpSong(int song, const std::string& path, std::string& error) const = 0;
 
-    // Returns a song's number as its files' names give it: two digits, or more for a song from 100 on.
+    // Returns a song's number as its files' names give it: two digits, or more for a song from 100 on. A driver can
+    // give every number the width of its largest song number.
     virtual std::string FileNumber(int song) const;
 
     // Writes the state of the driver model to `out` after each of the first `frames` frames of a song, in the format of
     // the driver's tools/*/driver_emu.py trace, and adds the song's problems to `warnings`. Returns false if the song
     // can't be played.
     virtual bool Trace(int song, long long frames, std::FILE* out, std::vector<std::string>& warnings) const = 0;
+
+protected:
+    // Starts the log with `name`, the driver's name. `log`, what detection found, comes after it. `warnings` are
+    // detection's warnings.
+    Music(const std::string& name, const std::vector<std::string>& log, std::vector<std::string> warnings);
+
+private:
+    std::vector<std::string> log_;
+    std::vector<std::string> warnings_;
 };
 
 // A sound driver that a game has, as OpenAllMusic() finds it.
@@ -119,6 +131,12 @@ struct FoundMusic
     Driver driver = Driver::kAny;
     std::unique_ptr<Music> music;
 };
+
+// Returns the name that --driver takes for a driver, such as "mp2k", or an empty one for kAny.
+const char* DriverName(Driver driver);
+
+// Returns the driver that --driver calls `name`, or kAny if no driver has that name.
+Driver DriverNamed(const std::string& name);
 
 // Finds the sound driver of the game in `rom`, which has to outlive the result, and reads its tables. Returns null and
 // sets `error` if the game has none of the drivers, or the tables of the first one it finds can't be read.
@@ -134,6 +152,11 @@ std::vector<FoundMusic> OpenAllMusic(const Rom& rom, const Overrides& overrides,
 // Returns a song's number for file names and titles: at least two digits, and as many as the largest of `count` songs'.
 std::string SongNumber(int song, int count);
 
+// Returns the path of a song's files without their extensions. The files go in the folder in `settings`. Their names
+// start with the base name in `settings`, an underscore and `number`. SafeFileName() makes the base name safe for a
+// file name.
+std::string SongStem(const ConvertSettings& settings, const std::string& number);
+
 // The most times as long as the longest of its tracks' loops that a song's loop can be.
 constexpr uint64_t kMaxLoopFactor = 8;
 
@@ -141,6 +164,33 @@ constexpr uint64_t kMaxLoopFactor = 8;
 // that each of them divides, so that every track is back where its loop started, or the longest of them if that would
 // be more than kMaxLoopFactor times as long.
 uint64_t LoopLength(const std::vector<uint64_t>& lengths);
+
+// A track's loop and end in its driver's ticks, read from its commands without timing them. Each driver's ScanTrack()
+// says which command counts as the last command of a track without a loop.
+struct TrackLayout
+{
+    bool loops = false;
+    uint64_t loop_start = 0;   // the tick that the loop starts at, the first time through
+    uint64_t loop_end = 0;     // the tick at which the track goes back to the loop's start
+    uint64_t end = 0;          // the end of a track without a loop
+    uint64_t last_command = 0; // the tick by which a track without a loop has played its last command
+};
+
+// The stretch of a song that a conversion covers: its loop, and the tick at which the MIDI file ends.
+struct SongPlan
+{
+    bool loops = false;
+    uint64_t loop_start = 0; // the latest of the looping tracks' loop starts and the other tracks' last commands
+    uint64_t loop_end = 0;   // the loop start plus the length LoopLength() gives for the tracks' loops
+    uint64_t end = 0;
+};
+
+// Plans a conversion from the layouts of a song's tracks: looping songs play `loops` passes; other songs run until the
+// last track ends. Tracks can have different loop points and lengths. The overall loop starts once all looping tracks
+// have entered their loops and all other tracks have played their last command. It ends when all looping tracks return
+// to their loop starts, subject to the length limit in LoopLength(). With `second`, the loop starts at the song's
+// second pass through it, and the song plays the first pass before it.
+SongPlan PlanSong(const std::vector<TrackLayout>& tracks, int loops, bool second);
 
 // Collects the notes that start in a song's first two passes through its loop, to tell whether a player that loops on
 // the markers can repeat the first. A driver can carry a setting, such as a pan, a level, a program or the tempo, from

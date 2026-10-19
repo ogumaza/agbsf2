@@ -47,4 +47,11 @@ inline bool WriteFile(const std::string& path, const std::vector<uint8_t>& data,
     return true;
 }
 
+// Writes `text` to the file at `path`, replacing it. The text goes out byte for byte. Its lines then end in LF on every
+// platform. Returns false and sets `error` on failure.
+inline bool WriteTextFile(const std::string& path, const std::string& text, std::string& error)
+{
+    return WriteFile(path, std::vector<uint8_t>(text.begin(), text.end()), error);
+}
+
 } // namespace agbsf2

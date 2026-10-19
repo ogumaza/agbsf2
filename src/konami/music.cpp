@@ -15,7 +15,6 @@
 #include "konami/seqformat.h"
 #include "konami/sequencer.h"
 #include "konami/soundfont.h"
-#include "program.h"
 #include "sf2.h"
 
 namespace agbsf2::konami
@@ -27,20 +26,9 @@ class KonamiMusic : public Music
 {
 public:
     // Keeps a reference to `rom`, which has to outlive this.
-    KonamiMusic(const Rom& rom, DriverInfo info) : rom_(rom), info_(std::move(info))
+    KonamiMusic(const Rom& rom, DriverInfo info)
+        : Music("Konami's sound driver", info.log, info.warnings), rom_(rom), info_(std::move(info))
     {
-        log_.push_back("Konami's sound driver");
-        log_.insert(log_.end(), info_.log.begin(), info_.log.end());
-    }
-
-    const std::vector<std::string>& Log() const override
-    {
-        return log_;
-    }
-
-    const std::vector<std::string>& Warnings() const override
-    {
-        return info_.warnings;
     }
 
     int SongCount() const override
@@ -57,7 +45,7 @@ public:
     // Calculates the song's duration, loop points and note-playing tracks using the conversion settings.
     SongReport InspectSong(int song, const ConvertSettings& settings) const override
     {
-        SongReport r = Report(konami::InspectSong(rom_, info_, song, OptionsFor(settings)));
+        SongReport r = konami::InspectSong(rom_, info_, song, settings);
         SongHeader h;
         ReadSongHeader(rom_, info_.song_table, song, info_.revision, h);
         r.address = h.base;
@@ -67,12 +55,7 @@ public:
 
     SongReport ConvertSong(int song, const ConvertSettings& settings) override
     {
-        return Report(konami::ConvertSong(rom_, info_, song, OptionsFor(settings), shared_.get()));
-    }
-
-    bool SupportsVoiceChannels() const override
-    {
-        return false;
+        return konami::ConvertSong(rom_, info_, song, settings, shared_.get());
     }
 
     // SongBanks gives each song's presets their bank and programs in the shared SoundFont.
@@ -84,8 +67,7 @@ public:
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
         Sf2File& f = shared_->File();
-        f.name = rom_.Title();
-        f.comment = "Instruments for " + rom_.Title() + " (bank = song number), extracted by " + kProgramName;
+        f.SetTitle(rom_.Title(), " (bank = song number)");
 
         return f.Write(path, error);
     }
@@ -114,9 +96,8 @@ public:
             return false;
         }
 
-        const bool older = info_.revision != Revision::kUltimateMasters;
-        const bool no_pan =
-            info_.revision == Revision::kEternalDuelist || info_.revision == Revision::kDungeonDiceMonsters;
+        const bool older = OlderOutputStage(info_.revision);
+        const bool has_pan = RecordHasPan(info_.revision);
         const int tracks = TrackCount(info_.revision);
         for (long long f = 0; f < frames && !seq.Stopped(); f++)
         {
@@ -124,8 +105,8 @@ public:
             for (int t = 0; t < tracks; t++)
             {
                 const TrackOutput& r = records[t];
-                const int pan1 = no_pan ? 0 : older ? r.pan : r.pan_r;
-                const int pan2 = no_pan ? 0 : older ? r.pan_start : r.pan_l;
+                const int pan1 = !has_pan ? 0 : older ? r.pan : r.pan_r;
+                const int pan2 = !has_pan ? 0 : older ? r.pan_start : r.pan_l;
                 std::fprintf(out, "%lld %d %d %d %d %d %d %d %d %d\n", f, t, r.pitch, r.b2, r.vol, r.trig, r.flags,
                              r.key, pan1, pan2);
             }
@@ -137,43 +118,8 @@ public:
     }
 
 private:
-    // Returns the conversion options for the settings.
-    static ConvertOptions OptionsFor(const ConvertSettings& settings)
-    {
-        ConvertOptions opt;
-        opt.loops = settings.loops;
-        opt.track_mask = uint16_t(settings.track_mask);
-        opt.frame_timing = settings.frame_timing;
-        opt.out_dir = settings.out_dir;
-        opt.base_name = settings.base_name;
-
-        return opt;
-    }
-
-    // Returns a song's summary as a report.
-    static SongReport Report(const SongSummary& sum)
-    {
-        SongReport r;
-        r.ok = sum.ok;
-        r.silent = sum.silent;
-        r.seconds = sum.frames * kFrameSeconds;
-        if (sum.loop_end_frame >= 0)
-        {
-            r.loop_start = sum.loop_start_frame * kFrameSeconds;
-            r.loop_end = sum.loop_end_frame * kFrameSeconds;
-        }
-        r.tracks = sum.tracks;
-        r.bpm = sum.bpm;
-        r.midi_path = sum.midi_path;
-        r.sf2_path = sum.sf2_path;
-        r.warnings = sum.warnings;
-
-        return r;
-    }
-
     const Rom& rom_;
     DriverInfo info_;
-    std::vector<std::string> log_;
     std::unique_ptr<SoundfontBuilder> shared_;
 };
 

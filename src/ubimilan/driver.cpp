@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "gba.h"
 #include "thumb.h"
 
 namespace agbsf2::ubimilan
@@ -18,7 +19,7 @@ namespace agbsf2::ubimilan
 namespace
 {
 
-// The sequencer's per-frame step: if the track plays and its countdown is 0, it takes the next segment that an end
+// The sequencer's per-frame step: if the track plays and its countdown is 0, it takes the next sequence that an end
 // command left it, or reads the next command.
 constexpr const char* kStepCode =
     "B530 1C04 68E0 2800 D0xx 8820 1C25 3514 2800 D1xx 6920 2800 D0xx 2000 6120 68A2 "
@@ -162,40 +163,14 @@ void FindPsgTables(const Rom& rom, DriverInfo& info)
     }
 }
 
-} // namespace
-
-double OutputRate(const DriverInfo& info)
+// Reads the sound bank at `song_table`, or the one that FindBank() finds if that's 0: two counts, then the offsets of
+// its tables of the game's sound events, of resources and of kits. Logs it. Returns false and sets `error` if the bank
+// or its tables aren't in the ROM.
+bool ReadBank(const Rom& rom, uint32_t song_table, DriverInfo& info, std::string& error)
 {
-    return double(kSecondCycles) / double(0x10000 - info.timer_reload);
-}
-
-double PointRate(const DriverInfo& info)
-{
-    return OutputRate(info) / 2;
-}
-
-bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info, std::string& error)
-{
-    info = DriverInfo();
-    error.clear();
-
-    info.step_routine = FindOnly(rom, kStepCode);
-    if (!info.step_routine && !overrides.song_table)
+    if (song_table)
     {
-        return false;
-    }
-
-    char line[160];
-    if (info.step_routine)
-    {
-        std::snprintf(line, sizeof line, "sequencer step: 0x%08X", unsigned(info.step_routine));
-        info.log.push_back(line);
-    }
-
-    // The sound bank: two counts, then the offsets of its tables of pieces of sound, resources and kits.
-    if (overrides.song_table)
-    {
-        info.bank = overrides.song_table;
+        info.bank = song_table;
     }
     else if (const std::optional<uint32_t> bank = FindBank(rom))
     {
@@ -216,11 +191,19 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
         error = "the sound bank's tables aren't in the ROM";
         return false;
     }
+
+    char line[160];
     std::snprintf(line, sizeof line, "sound bank: 0x%08X, %d resources at 0x%08X, kits at 0x%08X", unsigned(info.bank),
                   info.resource_count, unsigned(info.resource_table), unsigned(info.kit_table));
     info.log.push_back(line);
 
-    // The pieces of music, which are the songs.
+    return true;
+}
+
+// Finds the songs. They're the pieces of music: the bank's resources of kind 0, in order. If `song_count` is above 0,
+// no more than `song_count` are kept. Logs their count. Returns false and sets `error` if there are none.
+bool FindSongs(const Rom& rom, int song_count, DriverInfo& info, std::string& error)
+{
     for (int id = 0; id < info.resource_count; id++)
     {
         const uint32_t address = ResourceAddress(rom, info, id);
@@ -229,24 +212,33 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
             info.songs.push_back(id);
         }
     }
-    if (overrides.song_count > 0 && size_t(overrides.song_count) < info.songs.size())
+    if (song_count > 0 && size_t(song_count) < info.songs.size())
     {
-        info.songs.resize(size_t(overrides.song_count));
+        info.songs.resize(size_t(song_count));
     }
     if (info.songs.empty())
     {
         error = "the sound bank has no music";
         return false;
     }
+
+    char line[160];
     std::snprintf(line, sizeof line, "music: %d pieces", int(info.songs.size()));
     info.log.push_back(line);
 
-    // The driver's init gives channel 9 the kit of the first entry in the kit table.
+    return true;
+}
+
+// Finds the kit that the driver's init gives channel 9: the one that the kit table's first entry names. Logs it, or
+// adds a warning if the bank has none.
+void FindKit(const Rom& rom, DriverInfo& info)
+{
     const uint16_t kit_id = rom.U16(info.kit_table);
-    const uint32_t kit = kit_id != 0x8000 ? ResourceAddress(rom, info, kit_id) : 0;
+    const uint32_t kit = kit_id != kNoResource ? ResourceAddress(rom, info, kit_id) : 0;
     if (kit && rom.U8(kit) == kKit && rom.Contains(kit + 4, 256))
     {
         info.kit = kit + 4;
+        char line[160];
         std::snprintf(line, sizeof line, "channel 9's kit: resource %d at 0x%08X", int(kit_id), unsigned(kit));
         info.log.push_back(line);
     }
@@ -254,10 +246,12 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
     {
         info.warnings.push_back("the sound bank has no kit, so channel 9's notes play nothing");
     }
+}
 
-    FindPsgTables(rom, info);
-
-    // The mixer's rate, from Timer 0.
+// Finds the mixer's rate from Timer 0's reload, or takes Tomb Raider's with a warning if the sound init isn't found.
+// Logs it.
+void FindMixerRate(const Rom& rom, DriverInfo& info)
+{
     if (const std::optional<uint32_t> reload = FindReload(rom))
     {
         info.timer_reload = *reload;
@@ -267,9 +261,57 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
         info.timer_reload = kDefaultReload;
         info.warnings.push_back("the sound init wasn't found, so the mixer is taken to run as in Tomb Raider");
     }
+
+    char line[160];
     std::snprintf(line, sizeof line, "mixer: %.1f Hz output, each voice at %.1f Hz (Timer 0 reload 0x%04X)",
                   OutputRate(info), PointRate(info), unsigned(info.timer_reload));
     info.log.push_back(line);
+}
+
+} // namespace
+
+uint32_t OutputCycles(const DriverInfo& info)
+{
+    return 0x10000 - info.timer_reload;
+}
+
+double OutputRate(const DriverInfo& info)
+{
+    return double(kSecondCycles) / double(OutputCycles(info));
+}
+
+double PointRate(const DriverInfo& info)
+{
+    return OutputRate(info) / 2;
+}
+
+bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info, std::string& error)
+{
+    info = DriverInfo();
+    error.clear();
+
+    info.step_routine = FindOnly(rom, kStepCode);
+    if (!info.step_routine && !overrides.song_table)
+    {
+        return false;
+    }
+
+    if (info.step_routine)
+    {
+        char line[160];
+        std::snprintf(line, sizeof line, "sequencer step: 0x%08X", unsigned(info.step_routine));
+        info.log.push_back(line);
+    }
+
+    // The sound bank and its songs, then what plays them: the kit, the PSG and the mixer. Each step logs what it finds.
+    if (!ReadBank(rom, overrides.song_table, info, error) || !FindSongs(rom, overrides.song_count, info, error))
+    {
+        return false;
+    }
+
+    FindKit(rom, info);
+    FindPsgTables(rom, info);
+    FindMixerRate(rom, info);
 
     return true;
 }
@@ -309,7 +351,7 @@ bool ReadMusic(const Rom& rom, const DriverInfo& info, int song, MusicPiece& pie
 
     for (int i = 0; i < count; i++)
     {
-        piece.segments.push_back(rom.U16(piece.address + 8 + 2 * uint32_t(i)));
+        piece.sequences.push_back(rom.U16(piece.address + 8 + 2 * uint32_t(i)));
     }
 
     return true;

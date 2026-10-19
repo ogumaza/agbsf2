@@ -32,7 +32,6 @@ namespace
 {
 
 using test::FullBendRange;
-using test::g_temp;
 using test::Le16;
 using test::Le32;
 using test::MidiEvents;
@@ -41,6 +40,7 @@ using test::ReadMidi;
 using test::ReadSf2;
 using test::Sf2Records;
 using test::TempPath;
+using test::TempSettings;
 
 // Addresses of the synthetic driver's components in a test cartridge.
 constexpr uint32_t kInit = kRomBase + 0x100;     // the init routine (Thumb)
@@ -57,12 +57,12 @@ constexpr uint32_t kData = kRomBase + 0x1100; // storage for tunes, instruments 
 
 // A cartridge image being put together: a synthetic copy of the driver's code patterns that detection reads, and tunes,
 // instruments and samples placed one after another.
-class Cart
+class Cart : public test::CartImage
 {
 public:
     // Makes a cartridge whose driver reads the given format, with `slots` note slots for each channel. Without `code`,
     // it has no driver code, only the tune table.
-    explicit Cart(Format format, int slots = 6, bool code = true) : d_(0x40000, 0), next_(kData)
+    explicit Cart(Format format, int slots = 6, bool code = true) : CartImage(0x40000), next_(kData)
     {
         if (code)
         {
@@ -70,29 +70,12 @@ public:
         }
     }
 
-    void Put8(uint32_t a, uint8_t v)
-    {
-        d_[a - kRomBase] = v;
-    }
-
-    void Put16(uint32_t a, uint16_t v)
-    {
-        Put8(a, uint8_t(v));
-        Put8(a + 1, uint8_t(v >> 8));
-    }
-
-    void Put32(uint32_t a, uint32_t v)
-    {
-        Put16(a, uint16_t(v));
-        Put16(a + 2, uint16_t(v >> 16));
-    }
-
     // Places `bytes` at the next free address, aligned to `align`. Returns the address.
     uint32_t Place(const std::vector<uint8_t>& bytes, uint32_t align = 4)
     {
         next_ = (next_ + align - 1) & ~(align - 1);
         const uint32_t at = next_;
-        std::copy(bytes.begin(), bytes.end(), d_.begin() + (at - kRomBase));
+        PutBytes(at, bytes);
         next_ += uint32_t(bytes.size());
 
         return at;
@@ -210,14 +193,6 @@ public:
         }
     }
 
-    Rom ToRom() const
-    {
-        Rom r;
-        r.Assign(d_);
-
-        return r;
-    }
-
 private:
     uint32_t Instrument(const std::vector<uint32_t>& words)
     {
@@ -322,7 +297,6 @@ private:
         }
     }
 
-    std::vector<uint8_t> d_;
     uint32_t next_;
     uint32_t tunes_ = 0;
 };
@@ -671,15 +645,13 @@ void TestDroppedWarning()
     cart.Tune({crowded.End(), Track(kFormat).Program(3, 0).On(3, 60, 100).Wait(48).Off(3, 60).End()}, bank);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "dropped";
+    ConvertSettings opt = TempSettings("dropped");
 
-    const SongSummary all = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport all = ConvertSong(rom, info, 0, opt, nullptr);
     opt.track_mask = 1 << 1;
-    const SongSummary second = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport second = ConvertSong(rom, info, 0, opt, nullptr);
 
-    auto warns = [](const SongSummary& s)
+    auto warns = [](const SongReport& s)
     {
         return std::any_of(s.warnings.begin(), s.warnings.end(),
                            [](const std::string& w) { return w.find("found no available slot") != std::string::npos; });
@@ -724,7 +696,7 @@ void TestEnvelope()
     Instrument inst;
     SEQLIB_CHECK(ReadInstrument(rom, sample, inst));
 
-    const Sf2Envelope env = EnvelopeFor(info, inst);
+    const VolumeEnvelope env = EnvelopeFor(info, inst);
 
     SEQLIB_CHECK_EQ(env.attack, -12000);
     SEQLIB_CHECK_EQ(env.decay, -12000);
@@ -741,7 +713,7 @@ void TestEnvelope()
 
     inst.sustain = 40;
 
-    const Sf2Envelope sustained = EnvelopeFor(info, inst);
+    const VolumeEnvelope sustained = EnvelopeFor(info, inst);
 
     const double kLevel = (51 * 256 + 183) / 32768.0;
     SEQLIB_CHECK_EQ(sustained.sustain, int(std::lround(-200 * std::log10(kLevel))));
@@ -993,11 +965,9 @@ void TestLoops()
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
 
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "loops";
+    ConvertSettings opt = TempSettings("loops");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(r.ok && !r.silent);
     const MidiEvents m = ReadMidi(r.midi_path);
@@ -1054,11 +1024,9 @@ void TestLoopBend()
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
 
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "loop_bend";
+    ConvertSettings opt = TempSettings("loop_bend");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     using Events = std::vector<seqlib::midi::Event>;
     const Events kBends = {{0, {0xE1, 0x00, 0x40}},
@@ -1112,11 +1080,9 @@ void TestLoopStarts()
               bank);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "loop_starts";
+    ConvertSettings opt = TempSettings("loop_starts");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     // The loop goes from 0.5 s to 1.5 s of song time, which the GBA plays a little slower, and the tune ends at 2.5 s.
     SEQLIB_CHECK(r.ok && !r.silent);
@@ -1154,11 +1120,9 @@ void TestLoopLengths()
               bank);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "loop_lengths";
+    ConvertSettings opt = TempSettings("loop_lengths");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     // The GBA plays song time a little slower.
     SEQLIB_CHECK(r.ok && !r.silent);
@@ -1190,11 +1154,9 @@ void TestTrackWithoutLoop()
               bank);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "without_loop";
+    ConvertSettings opt = TempSettings("without_loop");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     // At 960 ticks a second of song time, which the GBA plays a little slower.
     SEQLIB_CHECK(r.ok && !r.silent);
@@ -1224,12 +1186,10 @@ void TestHourLimit()
               bank);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "hour";
+    ConvertSettings opt = TempSettings("hour");
     opt.loops = 100;
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     const auto cut_off = [](const std::string& w)
     {
@@ -1276,12 +1236,10 @@ void TestFrameTiming()
               bank);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "frame_timing";
+    ConvertSettings opt = TempSettings("frame_timing");
     opt.frame_timing = true;
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     // The loop ends at the start of frame 62, so that it holds the first pass's first note but not the second's, nor
     // the grace note on the same frame. The grace note lasts a tick, and the note after it starts as it ends. The
@@ -1346,11 +1304,9 @@ void TestConversion()
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
 
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "convert";
+    ConvertSettings opt = TempSettings("convert");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(r.ok && !r.silent);
     SEQLIB_CHECK_EQ(r.tracks, 3);
@@ -1479,12 +1435,10 @@ void TestTwoTempoTracks()
 
     for (bool frame_timing : {false, true})
     {
-        ConvertOptions opt;
-        opt.out_dir = Utf8(g_temp);
-        opt.base_name = frame_timing ? "two_tempos_frames" : "two_tempos";
+        ConvertSettings opt = TempSettings(frame_timing ? "two_tempos_frames" : "two_tempos");
         opt.frame_timing = frame_timing;
 
-        const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+        const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
         SEQLIB_CHECK(r.ok && !r.silent);
         SEQLIB_CHECK(std::fabs(r.seconds - (98 * 0.5 + 382 * 0.25) / 480 * kTempoScale) < 1e-9);
@@ -1532,11 +1486,9 @@ void TestEnvelopeConversion()
               bank);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "envelope";
+    ConvertSettings opt = TempSettings("envelope");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     // Bank 1 from the first note's tick, and bank 0 from the second's.
     SEQLIB_CHECK(r.ok && !r.silent);
@@ -1571,7 +1523,7 @@ void TestEnvelopeConversion()
 
     Instrument inst;
     ReadInstrument(rom, sample, inst);
-    const Sf2Envelope want = EnvelopeFor(info, inst, {.attack = 3, .decay = 4, .sustain = 64, .release = 2});
+    const VolumeEnvelope want = EnvelopeFor(info, inst, {.attack = 3, .decay = 4, .sustain = 64, .release = 2});
     const auto zone = sf.ZoneGens(Le16(variant + 20) + 1);
     SEQLIB_CHECK_EQ(int16_t(zone.at(sf2::kAttackVolEnv)), want.attack);
     SEQLIB_CHECK_EQ(int16_t(zone.at(sf2::kDecayVolEnv)), want.decay);
@@ -1614,12 +1566,10 @@ void TestEnvelopePastEnd()
 
     for (bool frame_timing : {false, true})
     {
-        ConvertOptions opt;
-        opt.out_dir = Utf8(g_temp);
-        opt.base_name = frame_timing ? "past_end_frames" : "past_end";
+        ConvertSettings opt = TempSettings(frame_timing ? "past_end_frames" : "past_end");
         opt.frame_timing = frame_timing;
 
-        const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+        const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
         SEQLIB_CHECK(r.ok && !r.silent);
         const Sf2Records sf = ReadSf2(r.sf2_path);
@@ -1644,11 +1594,9 @@ void TestEnvelopeAtEnd()
               bank);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "envelope_at_end";
+    ConvertSettings opt = TempSettings("envelope_at_end");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(r.ok && !r.silent);
     const Sf2Records sf = ReadSf2(r.sf2_path);
@@ -1727,11 +1675,9 @@ void TestPrograms()
               bank);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "programs";
+    ConvertSettings opt = TempSettings("programs");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     // The file holds track 1's note on before its program change, and track 3's note after track 2's change.
     SEQLIB_CHECK(r.ok && !r.silent);
@@ -1793,14 +1739,10 @@ void TestSharedDrumBank()
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
     SoundfontBuilder shared(rom, info, 2);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "drum_bank";
+    ConvertSettings opt = TempSettings("drum_bank");
 
-    opt.bank = 0;
-    const SongSummary a = ConvertSong(rom, info, 0, opt, &shared);
-    opt.bank = 1;
-    const SongSummary b = ConvertSong(rom, info, 1, opt, &shared);
+    const SongReport a = ConvertSong(rom, info, 0, opt, &shared, 0);
+    const SongReport b = ConvertSong(rom, info, 1, opt, &shared, 1);
 
     std::map<std::pair<int, int>, int> presets;
     for (const sf2::Preset& p : shared.File().presets)
@@ -1808,7 +1750,7 @@ void TestSharedDrumBank()
         presets[{p.bank, p.program}] = PresetInstrument(p);
     }
 
-    auto warns = [](const SongSummary& s)
+    auto warns = [](const SongReport& s)
     {
         return std::any_of(s.warnings.begin(), s.warnings.end(),
                            [](const std::string& w) { return w.find("channel 10's program 127") == 0; });
@@ -1833,11 +1775,9 @@ void TestSharedKey()
         bank);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "shared_key";
+    ConvertSettings opt = TempSettings("shared_key");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     // A player takes track 1's events of a tick before track 2's, so track 2's note ends a tick before track 1's
     // starts. Track 1's note lasts until track 2's note off.
@@ -1865,14 +1805,25 @@ void TestSharedKey()
     SEQLIB_CHECK(notes(m.tracks[2]) == kTrack2);
 }
 
-// Returns the key pressures of a MIDI file on channel `ch`, as (tick, key, pressure).
-std::vector<std::tuple<uint32_t, int, int>> KeyPressures(const MidiEvents& m, int ch)
+// Key pressures of a MIDI file, as (tick, key, pressure).
+using Pressures = std::vector<std::tuple<uint32_t, int, int>>;
+
+// Returns the key pressures of a MIDI file on channel `ch` in the order that a player meets them.
+Pressures KeyPressuresInOrder(const MidiEvents& m, int ch)
 {
-    std::vector<std::tuple<uint32_t, int, int>> out;
+    Pressures out;
     for (const auto& e : m.Find(uint8_t(0xA0 | ch)))
     {
         out.push_back({uint32_t(e.tick), e.bytes[1], e.bytes[2]});
     }
+
+    return out;
+}
+
+// Returns the key pressures of a MIDI file on channel `ch`, sorted.
+Pressures KeyPressures(const MidiEvents& m, int ch)
+{
+    Pressures out = KeyPressuresInOrder(m, ch);
     std::sort(out.begin(), out.end());
 
     return out;
@@ -1903,7 +1854,8 @@ bool MutesNotes(const Sf2Records& sf)
 
 // The notes of TestVoiceLimit's older revision. The ninth note, key 72 on channel 1, starts muted, and plays from the
 // frame in which the first note is released, at tick 47. That note is muted from that frame. The SoundFont's instrument
-// mutes a note while its key's pressure is high.
+// mutes a note while its key's pressure is high. The file starts with pressure 0 for the keys that play before it gives
+// them a pressure: all but key 72. Those come before key 72's pressure at tick 0.
 void TestKeyPressures()
 {
     const Format kFormat = Format::kChannelByte;
@@ -1919,17 +1871,15 @@ void TestKeyPressures()
     cart.Tune({Track(kFormat).Tempo(500000).Wait(960).End(), notes.End()}, bank);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "key_pressures";
+    ConvertSettings opt = TempSettings("key_pressures");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(r.ok && !r.silent);
     const MidiEvents m = ReadMidi(r.midi_path);
-    using Pressures = std::vector<std::tuple<uint32_t, int, int>>;
-    SEQLIB_CHECK(KeyPressures(m, 0) == Pressures({{47, 60, 127}}));
-    SEQLIB_CHECK(KeyPressures(m, 1) == Pressures({{0, 72, 127}, {47, 72, 0}}));
+    const Pressures kChannel0 = {{0, 60, 0}, {0, 61, 0}, {0, 62, 0}, {0, 63, 0}, {0, 64, 0}, {0, 65, 0}, {47, 60, 127}};
+    SEQLIB_CHECK(KeyPressures(m, 0) == kChannel0);
+    SEQLIB_CHECK(KeyPressuresInOrder(m, 1) == Pressures({{0, 70, 0}, {0, 71, 0}, {0, 72, 127}, {47, 72, 0}}));
     SEQLIB_CHECK(MutesNotes(ReadSf2(r.sf2_path)));
 }
 
@@ -1963,16 +1913,13 @@ void TestPressureTiming()
 
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "pressure_timing";
+    ConvertSettings opt = TempSettings("pressure_timing");
 
-    const SongSummary late = ConvertSong(rom, info, 0, opt, nullptr);
-    const SongSummary shared = ConvertSong(rom, info, 1, opt, nullptr);
+    const SongReport late = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport shared = ConvertSong(rom, info, 1, opt, nullptr);
 
     SEQLIB_CHECK(late.ok && shared.ok);
     const MidiEvents m = ReadMidi(late.midi_path);
-    using Pressures = std::vector<std::tuple<uint32_t, int, int>>;
     SEQLIB_CHECK(KeyPressures(m, 3) == Pressures({{32, 90, 127}}));
     SEQLIB_REQUIRE_EQ(m.Find(0x93).size(), 1);
     SEQLIB_CHECK_EQ(m.Find(0x93)[0].tick, 32);
@@ -1985,7 +1932,8 @@ void TestPressureTiming()
 // A loop starts with key 90 on channel 3 alone, and later plays it with nine other notes. The mixer then leaves out
 // key 91 and the released key 90. Key 90 plays again from the frame that starts the next pass, at tick 287, before the
 // loop's end. Key 91 stays muted. A player that jumps back would keep it muted. The file therefore gives its pressure
-// from the loop's start, 0, again there.
+// from the loop's start, 0, again there. Key 90 plays before the file gives it a pressure. The file starts with
+// pressure 0 for it too.
 void TestLoopPressures()
 {
     const Format kFormat = Format::kChannelByte;
@@ -2011,16 +1959,44 @@ void TestLoopPressures()
 
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "loop_pressures";
+    ConvertSettings opt = TempSettings("loop_pressures");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(r.ok && !r.silent);
-    using Pressures = std::vector<std::tuple<uint32_t, int, int>>;
-    const Pressures kPressures = {{0, 91, 0}, {95, 90, 127}, {95, 91, 127}, {287, 90, 0}, {383, 90, 127}, {575, 90, 0}};
+    const Pressures kPressures = {{0, 90, 0},   {0, 91, 0},     {95, 90, 127}, {95, 91, 127},
+                                  {287, 90, 0}, {383, 90, 127}, {575, 90, 0}};
     SEQLIB_CHECK(KeyPressures(ReadMidi(r.midi_path), 3) == kPressures);
+}
+
+// A tune that the mixer leaves no note out of gets no key pressures with a SoundFont of its own. With the shared
+// SoundFont of --single-sf2, which another tune's mutes can give the modulator, the file starts with pressure 0 for
+// each key that it plays.
+void TestStartPressures()
+{
+    const Format kFormat = Format::kChannelByte;
+    Cart cart(kFormat);
+    const auto bank = cart.Bank({{0, cart.Sample(Saw(), 32, 11025, 60, {99, 99, 99, 50})}});
+    Track notes(kFormat);
+    notes.Program(0, 0).Program(2, 0).On(0, 60, 100).On(2, 64, 100).Wait(48).Off(0, 60).On(0, 62, 100).Wait(48);
+    notes.Off(0, 62).Off(2, 64);
+    cart.Tune({Track(kFormat).Tempo(500000).Wait(96).End(), notes.End()}, bank);
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+    SoundfontBuilder shared(rom, info, 1);
+    ConvertSettings own = TempSettings("start_pressures_own");
+    ConvertSettings in_set = own;
+    in_set.base_name = "start_pressures_set";
+
+    const SongReport alone = ConvertSong(rom, info, 0, own, nullptr);
+    const SongReport set = ConvertSong(rom, info, 0, in_set, &shared);
+
+    SEQLIB_CHECK(alone.ok && set.ok);
+    const MidiEvents a = ReadMidi(alone.midi_path);
+    const MidiEvents s = ReadMidi(set.midi_path);
+    SEQLIB_CHECK(KeyPressures(a, 0).empty() && KeyPressures(a, 2).empty());
+    SEQLIB_CHECK(KeyPressuresInOrder(s, 0) == Pressures({{0, 60, 0}, {0, 62, 0}}));
+    SEQLIB_CHECK(KeyPressuresInOrder(s, 2) == Pressures({{0, 64, 0}}));
 }
 
 void TestTrackChoice()
@@ -2035,12 +2011,10 @@ void TestTrackChoice()
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
 
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "tracks";
+    ConvertSettings opt = TempSettings("tracks");
     opt.track_mask = 1 << 1;
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(r.ok && !r.silent && r.tracks == 1);
     const MidiEvents m = ReadMidi(r.midi_path);
@@ -2158,6 +2132,7 @@ void RunTests()
     TestKeyPressures();
     TestPressureTiming();
     TestLoopPressures();
+    TestStartPressures();
     TestSharedDrumBank();
     TestTrackChoice();
     TestDump();

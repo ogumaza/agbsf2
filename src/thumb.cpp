@@ -8,6 +8,8 @@
 #include <string_view>
 #include <vector>
 
+#include "xsflib/bytes.h"
+
 namespace agbsf2
 {
 namespace
@@ -706,7 +708,7 @@ std::vector<uint32_t> FindThumb(const Rom& rom, const std::vector<ThumbPattern>&
     for (size_t i = 0; i + 2 * n <= rom.Size(); i += 2)
     {
         size_t k = 0;
-        while (k < n && ((data[i + 2 * k] | data[i + 2 * k + 1] << 8) & pattern[k].mask) == pattern[k].value)
+        while (k < n && (xsflib::LoadLe16(data + i + 2 * k) & pattern[k].mask) == pattern[k].value)
         {
             k++;
         }
@@ -717,6 +719,12 @@ std::vector<uint32_t> FindThumb(const Rom& rom, const std::vector<ThumbPattern>&
     }
 
     return hits;
+}
+
+uint32_t FindFirstThumb(const Rom& rom, std::string_view text)
+{
+    const std::vector<uint32_t> hits = FindThumb(rom, ParseThumbPattern(text));
+    return hits.empty() ? 0 : hits[0];
 }
 
 uint32_t ThumbLiteral(const Rom& rom, uint32_t at)

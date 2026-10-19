@@ -32,6 +32,7 @@ namespace
 {
 
 using test::FullBendRange;
+using test::LastWrite;
 using test::Le16;
 using test::Le32;
 using test::MidiEvents;
@@ -40,6 +41,7 @@ using test::ReadMidi;
 using test::ReadSf2;
 using test::Sf2Records;
 using test::TempPath;
+using test::TempSettings;
 
 // Addresses in a test cartridge: the driver's code that detection reads, the game's file lookup and the code that
 // passes the files to the driver, the driver's tables, and the game's files.
@@ -138,10 +140,10 @@ std::vector<uint8_t> Song(std::vector<std::vector<uint8_t>> channels)
 
 // A cartridge image being put together: a synthetic copy of the code patterns that detection reads, for revision
 // `revision`, the driver's tables and the game's files.
-class Cart
+class Cart : public test::CartImage
 {
 public:
-    explicit Cart(Revision revision, bool code = true) : d_(0x10000, 0), revision_(revision)
+    explicit Cart(Revision revision, bool code = true) : CartImage(0x10000), revision_(revision)
     {
         WriteTables();
         if (code)
@@ -155,23 +157,6 @@ public:
             Put8(FileAddress(kWaveFile) + 2 + i, uint8_t((2 * i) << 4 | (2 * i + 1)));
             Put8(FileAddress(kWaveFile) + 18 + i, i < 8 ? 0xFF : 0x00);
         }
-    }
-
-    void Put8(uint32_t a, uint8_t v)
-    {
-        d_[a - kRomBase] = v;
-    }
-
-    void Put16(uint32_t a, uint16_t v)
-    {
-        Put8(a, uint8_t(v));
-        Put8(a + 1, uint8_t(v >> 8));
-    }
-
-    void Put32(uint32_t a, uint32_t v)
-    {
-        Put16(a, uint16_t(v));
-        Put16(a + 2, uint16_t(v >> 16));
     }
 
     // Writes the songs into the music file, one after another.
@@ -228,14 +213,6 @@ public:
         return data;
     }
 
-    Rom ToRom() const
-    {
-        Rom r;
-        r.Assign(d_);
-
-        return r;
-    }
-
 private:
     // Writes `pattern`'s halfwords at `at`, with its ldr at halfword `ldr` (if any) loading `literal` from a pool after
     // it. Returns the next free word.
@@ -254,7 +231,7 @@ private:
         if (ldr >= 0)
         {
             const uint32_t ins = at + 2 * uint32_t(ldr);
-            const uint16_t op = uint16_t(d_[ins - kRomBase + 1] << 8);
+            const uint16_t op = uint16_t(Get8(ins + 1) << 8);
             Put16(ins, uint16_t(op | ((pool - ((ins + 4) & ~3u)) / 4)));
             Put32(pool, literal);
         }
@@ -274,21 +251,13 @@ private:
         return at + 12;
     }
 
-    // Writes a bl from `at` to `target`.
-    void Bl(uint32_t at, uint32_t target)
-    {
-        const int32_t offset = int32_t(target) - int32_t(at + 4);
-        Put16(at, uint16_t(0xF000 | ((offset >> 12) & 0x7FF)));
-        Put16(at + 2, uint16_t(0xF800 | ((offset >> 1) & 0x7FF)));
-    }
-
     // Writes the game's code that looks file `file` up and passes it to `routine`, at `at`. Returns the next free word.
     uint32_t PassFile(uint32_t at, int file, uint32_t routine)
     {
         Put16(at, 0x2000);
         Put16(at + 2, uint16_t(0x2100 | file));
-        Bl(at + 4, kLookup);
-        Bl(at + 8, routine);
+        PutBl(at + 4, kLookup);
+        PutBl(at + 8, routine);
 
         return at + 12;
     }
@@ -367,7 +336,7 @@ private:
             sample_setters[bank] = at;
             Put16(at, 0xB500);
             Put16(at + 2, uint16_t(0x2100 | bank));
-            Bl(at + 4, loader);
+            PutBl(at + 4, loader);
             Put16(at + 8, 0xBC01);
             Put16(at + 10, 0x4700);
             at += 12;
@@ -392,7 +361,6 @@ private:
         PassFile(at, kMusicFile, kPlay);
     }
 
-    std::vector<uint8_t> d_;
     Revision revision_;
 };
 
@@ -420,21 +388,6 @@ std::vector<std::vector<RegisterWrite>> Writes(const Rom& rom, const DriverInfo&
     return out;
 }
 
-// Returns the value of the last write to `address` in `writes`, or -1 if there was none.
-long long LastWrite(const std::vector<RegisterWrite>& writes, uint32_t address)
-{
-    long long value = -1;
-    for (const RegisterWrite& w : writes)
-    {
-        if (w.address == address)
-        {
-            value = w.value;
-        }
-    }
-
-    return value;
-}
-
 // Returns a saw wave of `length` signed bytes.
 std::vector<int8_t> Saw(size_t length)
 {
@@ -445,6 +398,21 @@ std::vector<int8_t> Saw(size_t length)
     }
 
     return pcm;
+}
+
+// Returns the tick of the last marker in `midi` whose text is `name`, or `missing` if there's none.
+uint32_t MarkerTick(const MidiEvents& midi, const std::string& name, uint32_t missing)
+{
+    uint32_t found = missing;
+    for (const auto& [tick, bytes] : midi.Find(0xFF))
+    {
+        if (bytes.size() > 3 && bytes[1] == 0x06 && std::string(bytes.begin() + 3, bytes.end()) == name)
+        {
+            found = uint32_t(tick);
+        }
+    }
+
+    return found;
 }
 
 void TestDetection()
@@ -468,7 +436,7 @@ void TestDetection()
     SEQLIB_CHECK_EQ(info.macros[1], 0);
     SEQLIB_CHECK_EQ(info.samples[0], FileAddress(kSampleFile));
     SEQLIB_CHECK_EQ(info.samples[1], 0);
-    SEQLIB_CHECK_EQ(info.songs, FileAddress(kMusicFile));
+    SEQLIB_CHECK_EQ(info.music_file, FileAddress(kMusicFile));
     SEQLIB_REQUIRE_EQ(info.song_addresses.size(), 2);
     SEQLIB_REQUIRE_EQ(info.sample_addresses[0].size(), 2);
     SEQLIB_CHECK(info.warnings.empty());
@@ -585,13 +553,13 @@ void TestTiming()
     SEQLIB_CHECK(frames.size() >= 4 && frames[1] == 39 && frames[2] == 78 && frames[3] == 117);
 
     // The MIDI file follows: a frame at tempo 90 is 90 ticks, and each note after a loop starts its frame.
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.loops = 4;
     opt.track_mask = 1;
     opt.out_dir = Utf8(test::g_temp);
     opt.base_name = "timing";
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     const MidiEvents midi = ReadMidi(sum.midi_path);
     std::vector<uint32_t> ons;
@@ -614,11 +582,9 @@ void TestHold()
     cart.Songs({Song({Channel().Bytes({0x7F, 90, 0x5E, 15, 0xDF, 0, 8, 64}).Note(0, 3).Bytes({0xBF}).End()})});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "hold";
+    ConvertSettings opt = TempSettings("hold");
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     const MidiEvents midi = ReadMidi(sum.midi_path);
     SEQLIB_CHECK(sum.ok && sum.seconds > 0.65 && sum.seconds < 0.67 && sum.loop_start < 0);
@@ -635,11 +601,9 @@ void TestCommandGuard()
                       Channel().Note(0, 3).Bytes({0xD6, 0xD6, 0xAF, 0x00, 0xD7, 0xFF, 0xD7, 0xFF}).End()})});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "guard";
+    ConvertSettings opt = TempSettings("guard");
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     const auto has = [&sum](const std::string& text)
     {
@@ -663,11 +627,9 @@ void TestWaveSwitch()
     cart.Songs({Song({{0xFF}, {0xFF}, Channel().Bytes({0xDA, 0x00, 0xDA, 0x81, 0x5E, 3, 0xEA, 10}).Note(0, 2).End()})});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "wave_switch";
+    ConvertSettings opt = TempSettings("wave_switch");
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     // The instrument's zones after its global zone.
     const Sf2Records sf2 = ReadSf2(sum.sf2_path);
@@ -701,11 +663,9 @@ void TestLoopStarts()
                       Channel().Bytes({0x7F, 90, 0x5E, 15}).Note(2, 3).Bytes({0xBF}).Note(0, 3).Note(4, 3).End()})});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "loop_starts";
+    ConvertSettings opt = TempSettings("loop_starts");
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     const double length = sum.loop_end - sum.loop_start;
     SEQLIB_CHECK(sum.ok && sum.loop_start > 0);
@@ -730,11 +690,9 @@ void TestLoopAfterTempoChange()
                       Channel().Bytes({0x5E, 15, 0xBF}).Note(0, 3).Note(2, 3).Note(4, 3).Note(5, 3).End()})});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "loop_tempo";
+    ConvertSettings opt = TempSettings("loop_tempo");
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     const double length = sum.loop_end - sum.loop_start;
     SEQLIB_CHECK(sum.ok && sum.loop_start > length);
@@ -753,11 +711,9 @@ void TestLoopLengths()
                       Channel().Bytes({0x7F, 90, 0x5E, 15}).Note(7, 3).Note(9, 3).End()})});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "loop_lengths";
+    ConvertSettings opt = TempSettings("loop_lengths");
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     const double note = sum.loop_start / 2;
     SEQLIB_CHECK(sum.ok && sum.loop_start > 0);
@@ -782,23 +738,13 @@ void TestLoopAtSecondPass()
                               .End()})});
         const Rom rom = cart.ToRom();
         const DriverInfo info = Detect(rom);
-        ConvertOptions opt;
-        opt.out_dir = Utf8(test::g_temp);
-        opt.base_name = moves ? "second_pass" : "first_pass";
+        ConvertSettings opt = TempSettings(moves ? "second_pass" : "first_pass");
 
-        const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+        const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
         // The keys of the notes from the loop's start on.
         const MidiEvents midi = ReadMidi(sum.midi_path);
-        uint32_t loop_start = ~0u;
-        for (const auto& [tick, bytes] : midi.Find(0xFF))
-        {
-            if (bytes.size() > 3 && bytes[1] == 0x06 && std::string(bytes.begin() + 3, bytes.end()) == "loopStart")
-            {
-                loop_start = uint32_t(tick);
-            }
-        }
-
+        const uint32_t loop_start = MarkerTick(midi, "loopStart", ~0u);
         std::vector<int> keys;
         for (const auto& [tick, bytes] : midi.Find(0x90))
         {
@@ -832,28 +778,14 @@ void TestLoopSeam()
                Channel().Bytes({0x5E, 15, 0x4F, 3}).Rest(5).Rest(10).Bytes({0xBF}).Note(7, 3).Note(11, 3).End()})});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "loop_seam";
+    ConvertSettings opt = TempSettings("loop_seam");
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     // Each square's notes from the loop's start to its end.
     const MidiEvents midi = ReadMidi(sum.midi_path);
-    uint32_t loop_start = ~0u, loop_end = 0;
-    for (const auto& [tick, bytes] : midi.Find(0xFF))
-    {
-        const std::string text = bytes.size() > 3 ? std::string(bytes.begin() + 3, bytes.end()) : "";
-        if (bytes[1] == 0x06 && text == "loopStart")
-        {
-            loop_start = uint32_t(tick);
-        }
-        else if (bytes[1] == 0x06 && text == "loopEnd")
-        {
-            loop_end = uint32_t(tick);
-        }
-    }
-
+    const uint32_t loop_start = MarkerTick(midi, "loopStart", ~0u);
+    const uint32_t loop_end = MarkerTick(midi, "loopEnd", 0);
     std::array<int, 2> notes = {};
     for (const int c : {0, 1})
     {
@@ -888,22 +820,12 @@ void TestLoopSettingsAgain()
                           .End()})});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "loop_again";
+    ConvertSettings opt = TempSettings("loop_again");
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     const MidiEvents midi = ReadMidi(sum.midi_path);
-    uint32_t loop_start = ~0u;
-    for (const auto& [tick, bytes] : midi.Find(0xFF))
-    {
-        if (bytes.size() > 3 && bytes[1] == 0x06 && std::string(bytes.begin() + 3, bytes.end()) == "loopStart")
-        {
-            loop_start = uint32_t(tick);
-        }
-    }
-
+    const uint32_t loop_start = MarkerTick(midi, "loopStart", ~0u);
     std::vector<std::pair<uint32_t, int>> levels;
     for (const auto& [tick, bytes] : midi.Find(0xB0))
     {
@@ -928,12 +850,10 @@ void TestHourLimit()
     cart.Songs({Song({Channel().Bytes({0x7F, 6, 0x5E, 15, 0xBF}).Note(0, 0).End()})});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "hour";
+    ConvertSettings opt = TempSettings("hour");
     opt.loops = 100;
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     const auto cut_off = [](const std::string& w)
     {
@@ -1066,11 +986,9 @@ void TestNoiseDrums()
         {{0xFF}, {0xFF}, {0xFF}, Channel().Bytes({0x5E, 15, 0xD2, 100, 0, 0, 3, 1}).Note(12, 3).Note(12, 3).End()})});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "noise";
+    ConvertSettings opt = TempSettings("noise");
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     const Sf2Records sf2 = ReadSf2(sum.sf2_path);
     const MidiEvents midi = ReadMidi(sum.midi_path);
@@ -1138,11 +1056,9 @@ void TestConversion()
                           .End()})});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "conversion";
+    ConvertSettings opt = TempSettings("conversion");
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     const MidiEvents midi = ReadMidi(sum.midi_path);
     const auto tempos = midi.Find(0xFF);

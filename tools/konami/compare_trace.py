@@ -21,9 +21,10 @@ from pathlib import Path
 
 from unicorn import UcError
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for gbarom.py, in tools/
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for gbarom.py and traces.py, in tools/
 from driver_emu import DriverEmulator
 from gbarom import load_rom
+from traces import parse_range
 
 
 def driver_records(rom, song, frames):
@@ -48,14 +49,6 @@ def agbsf2_records(tool, rom_path, song, frames):
             out.append([None] * 16)
         out[v[0]][v[1]] = tuple(v[2:])
     return out
-
-
-def parse_range(text):
-    songs = []
-    for part in text.split(','):
-        a, _, b = part.partition('-')
-        songs += list(range(int(a), int(b or a) + 1))
-    return songs
 
 
 def main():

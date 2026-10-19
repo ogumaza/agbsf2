@@ -19,14 +19,9 @@ std::optional<BankProgram> SongBanks::Next()
     // The song's bank first, from program 0.
     if (song_ >= 0 && song_ < kBanks)
     {
-        auto& programs = taken_[size_t(song_)];
-        for (int p = 0; p < kPrograms; p++)
+        if (const std::optional<BankProgram> slot = Take(song_))
         {
-            if (!programs.test(size_t(p)))
-            {
-                programs.set(size_t(p));
-                return BankProgram{song_, p};
-            }
+            return slot;
         }
     }
 
@@ -38,14 +33,24 @@ std::optional<BankProgram> SongBanks::Next()
             continue;
         }
 
-        auto& programs = taken_[size_t(b)];
-        for (int p = 0; p < kPrograms; p++)
+        if (const std::optional<BankProgram> slot = Take(b))
         {
-            if (!programs.test(size_t(p)))
-            {
-                programs.set(size_t(p));
-                return BankProgram{b, p};
-            }
+            return slot;
+        }
+    }
+
+    return std::nullopt;
+}
+
+std::optional<BankProgram> SongBanks::Take(int bank)
+{
+    auto& programs = taken_[size_t(bank)];
+    for (int p = 0; p < kPrograms; p++)
+    {
+        if (!programs.test(size_t(p)))
+        {
+            programs.set(size_t(p));
+            return BankProgram{bank, p};
         }
     }
 

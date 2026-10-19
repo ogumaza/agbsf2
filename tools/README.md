@@ -23,6 +23,7 @@ These scripts in `tools/` serve more than one driver:
 | `gbadis.py` | recursive-descent Thumb/ARM disassembler that resolves literal pools, marks code a GSF rip has zeroed out, and can read code at the address the game copies it to |
 | `psg_model.py` | Game Boy APU model that renders a driver's PSG register writes to audio |
 | `conversion.py` | finds a driver's MIDI files in a folder of `agbsf2`'s output, and compares a conversion on the song's beat with one made with `--frame-timing`; used by the `compare_notes.py` scripts |
+| `traces.py` | runs `agbsf2 --trace` and compares that trace with the one that the emulated driver prints, line by line; used by the `compare_trace.py` scripts. The `compare_notes.py` scripts use its parser for `--songs` |
 
 A conversion includes songs from every driver found in the game. Files from
 drivers other than the first include the driver's name. The `compare_trace.py`
@@ -94,12 +95,7 @@ makes the driver easy to isolate:
    routine's command dispatch gave the byte code, and the output stage showed
    how each track's record reaches the PSG registers and the DirectSound
    voices. The mixer was found as ARM code copied to IWRAM.
-3. **Model and compare.** The sequencer was reimplemented from that reading. It
-   was then compared, record for record, with the driver running in
-   `driver_emu.py`, until the two matched, loops included.
-4. **Check the audio.** The converted MIDI and SoundFonts were rendered and
-   compared with the driver's mixer output, and with `psg_model.py`, for
-   timing, pitch and level.
+3. **Model.** The sequencer was reimplemented from that reading.
 
 `driver_emu.py` picks the routine addresses by the ROM's game code. Those of
 Yu-Gi-Oh! Ultimate Masters Edition: World Championship Tournament 2006 (`BY6J`,
@@ -207,13 +203,8 @@ code to IWRAM with a sequence that's the same in every revision (see
    `--copy` it read the ARM code at the address the init copies it to. The
    sequencer's command table gave the byte code, and the mixer showed how each
    note's level and pitch are worked out.
-3. **Model and compare.** The sequencer, the envelopes and the mixer's choice
-   of voices were reimplemented from that reading. They were then compared,
-   slot for slot, with the driver running in `driver_emu.py`, until the two
-   matched, loops included.
-4. **Check the conversion.** The converted MIDI files and SoundFonts were
-   checked note by note with `compare_notes.py`, and rendered and compared with
-   the driver's mixer output for timing, pitch and level.
+3. **Model.** The sequencer, the envelopes and the mixer's choice of voices were
+   reimplemented from that reading.
 
 `driver_emu.py` picks the routine and RAM addresses by the ROM's game code.
 Those of *Donkey Kong Country* (`A5NE`), *Sabre Wulf* (`AWUE`), *It's Mr.
@@ -234,6 +225,9 @@ the patterns in `docs/rare.md`, and add them to `GAMES`:
 * `channel_volume`, the channels' controller 7 values, comes from the
   controller handler, and so does `envelope_settings` in a revision with
   controllers 20-23: the 4 bytes for each channel that they set.
+* In a revision with a music volume, `music_volume` is the word that holds it.
+  After each request, the script sets it to the volume at which `agbsf2` plays
+  the game's tunes.
 * `slots_per_channel` and `fx_count` give the note slots each channel has and
   the number of sound effect records, if they aren't 6 and 5. The table at the
   start of `docs/rare.md` gives them for each checked game.
@@ -305,13 +299,7 @@ routines call into. From there:
 2. **Disassemble.** `gbadis.py` was run from those entry points. The note
    reader's command table gave the byte code, and the output stage showed how
    the channels' register image reaches the hardware.
-3. **Model and compare.** The driver was reimplemented from that reading, and
-   compared, write for write, with the driver running in `driver_emu.py`,
-   until the two matched, loops included. The J revision was then worked out
-   by comparing each of its routines with the A revision's.
-4. **Check the conversion.** The converted MIDI files and SoundFonts were
-   checked frame by frame with `compare_notes.py`, and rendered and compared
-   with the driver's output for timing, pitch and level.
+3. **Model.** The driver was reimplemented from that reading.
 
 `driver_emu.py` picks the addresses by the ROM's game code. Those of *Super
 Robot Taisen A* (`ASRJ`), *D* (`A6SJ`), *R* (`AJ9J`) and *J* (`B6JJ`) are
@@ -388,12 +376,7 @@ copies to IWRAM. From there:
 2. **Disassemble.** `gbadis.py` was run from those entry points. The track
    reader's command table gave the byte code, and the voice routines showed
    how the mixer and PSG play each voice.
-3. **Model and compare.** The driver was reimplemented from that reading, and
-   compared voice for voice with the driver running in `driver_emu.py`, until
-   the two matched, loops included.
-4. **Check the conversion.** The converted MIDI files and SoundFonts were
-   checked note by note with `compare_notes.py`, and track by track against
-   the driver's renders for timing and level.
+3. **Model.** The driver was reimplemented from that reading.
 
 `driver_emu.py` picks the addresses by the ROM's game code. The addresses of
 three games are built in: *The Legend of Zelda: A Link to the Past & Four
@@ -505,12 +488,9 @@ that `agbsf2` finds them by are in `docs/mp2k.md`:
    `m4aSoundVSync` restarts the sound DMA each frame. Where the compiler swaps
    the registers, it's compiled from C: `push {lr}`, then loads of the address
    at `0x03007FF0` and of the structure's ID.
-2. **Model and compare.** The sequencer, the choice of channels, the
-   envelopes and the mixer's progress through each sample were reimplemented
-   from the driver's code. They were then compared, channel for channel, with
-   the driver running in `driver_emu.py`, until the two matched.
-3. **Check the conversion.** The converted MIDI files and SoundFonts were
-   checked note by note with `compare_notes.py`.
+2. **Model.** The sequencer, the choice of channels, the envelopes and the
+   mixer's progress through each sample were reimplemented from the driver's
+   code.
 
 `driver_emu.py` picks the routine addresses by the ROM's game code. Those of
 *Pokémon Emerald* (`BPEE`), *The Legend of Zelda: A Link to the Past & Four
@@ -615,13 +595,8 @@ The driver is ARM code, with its mixer copied to IWRAM:
    mixer, with an `A` before each address for ARM code, and with `--copy` it
    read the mixer's code at its address in IWRAM. The command table gave the
    byte code, and the mixer showed how the voices move through their samples.
-3. **Model and compare.** The per-frame routine, the fades, the queue and the
-   mixer's progress through each sample were reimplemented from that reading,
-   and compared with the driver running in `driver_emu.py`, until the two
-   matched, the routine's `r5` included, which `ED` writes to a register.
-4. **Check the conversion.** The converted MIDI files and SoundFonts were
-   checked frame by frame with `compare_notes.py`, and rendered and compared
-   with the driver's output.
+3. **Model.** The per-frame routine, the fades, the queue and the mixer's
+   progress through each sample were reimplemented from that reading.
 
 The *Magical Vacation* revision turned up when the patterns that detection
 reads were searched for in the game: all of them matched but the per-frame
@@ -726,14 +701,8 @@ The player is Thumb code in ROM, and the mixer is ARM code in IWRAM:
 2. **Disassemble.** `gbadis.py` was run from `krapPlay()` and the player's
    tick, and with `--copy` from the worker and the mixer's routines at their
    addresses in IWRAM. The tables of effects gave each effect's routines.
-3. **Model and compare.** The player, the effects and the mixer's progress
-   through each sample were reimplemented from that reading, and compared with
-   the game's code running in `driver_emu.py`, until every byte of the records
-   matched, then checked with `test_song.py`'s modules for the parts that the
-   game's modules may not use.
-4. **Check the conversion.** The converted MIDI files and SoundFonts were
-   checked tick by tick with `compare_notes.py`, and rendered and compared with
-   the game's output.
+3. **Model.** The player, the effects and the mixer's progress through each
+   sample were reimplemented from that reading.
 
 `driver_emu.py` picks the addresses by the ROM's game code. Those of *Digimon
 Racing* (`BDGE`) are built in. For another game with the same build, add an
@@ -754,9 +723,9 @@ entry to `GAMES` with:
   the mixer's channels, the master volumes, the sound timer's step and count,
   the music's volume and the count of plays.
 
-`test_song.py` also needs, in its `GAMES`, the game's table of samples and its
-count, and the player's literals that give the tables of samples and
-instruments.
+`test_song.py` also needs, in its `GAMES`, the address of the game's table of
+samples and the player's literals that give the tables of samples and
+instruments. The script counts the table's samples.
 
 ## Ubisoft Milan's driver
 
@@ -807,13 +776,9 @@ The engine is Thumb code in ROM, and its mixer ARM code in IWRAM:
 2. **Disassemble.** `gbadis.py` was run from those routines, and from the mixer
    as ARM code at its address in the ROM. The sound init's float gave Timer 0's
    reload.
-3. **Model and compare.** The track, the pieces' lists, the kit's voices, the
-   mixer's progress through each sample and the PSG's notes were reimplemented
-   from that reading, and compared with the game's code running in
-   `driver_emu.py`, until every frame of every piece matched.
-4. **Check the conversion.** The converted MIDI files and SoundFonts were
-   checked note by note with `compare_notes.py`, and rendered and compared with
-   the mixer's output.
+3. **Model.** The track, the pieces' lists, the kit's voices, the mixer's
+   progress through each sample and the PSG's notes were reimplemented from that
+   reading.
 
 `driver_emu.py` picks the addresses by the ROM's game code. Those of *Tomb
 Raider: The Prophecy* (`AL9P`) are built in. For another game, add an entry to

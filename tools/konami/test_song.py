@@ -44,10 +44,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for gbarom.py
 from gbarom import ROM_BASE, load_rom
 
 
-def test_tracks(rave_master):
-    """Returns 16 test tracks for WCT 2004 or 12 for Rave Master, using samples 9, 10 and 11.
-    Rave Master uses 80-8F for duty and wave commands. Its F3 has no extra bytes, and echo opcodes and 00-7F do
+def call_fragment(head, calls, tail, fragment, places):
+    """Returns the track head + calls + tail + fragment. The fragment's offset in the track goes into `calls` as a
+    little-endian halfword at each index in `places`."""
+    offset = len(head) + len(calls) + len(tail)
+    calls = list(calls)
+    for i in places:
+        calls[i], calls[i + 1] = offset & 0xFF, offset >> 8
+    return head + calls + tail + fragment
+
+
+def test_tracks(revision):
+    """Returns 16 test tracks for the WCT 2004 revision or 12 for the Rave Master revision. They play samples 9, 10 and
+    11. Rave Master uses 80-8F for duty and wave commands. Its F3 has no extra bytes, and echo opcodes and 00-7F do
     nothing."""
+    rave_master = revision == 'Rave Master'
     duty = 0x80 if rave_master else 0x00
     tracks = [[0x00, 0xFD] for _ in range(12 if rave_master else 16)]
     tracks[0] = [0x00, 0xF4, 0x20, 0x00, 0xF5, 0x10, 0x00, 0xF1, 0x30, 0x00, 0xF0, 0x8F, 0x00,
@@ -68,10 +79,7 @@ def test_tracks(rave_master):
         [0xFA, 0x01, 0x00, 0xF6, 0x05, 0x00, 0xFB, 0x00, 0xFC, 0x00]
     tail = nothing + [0xB9, 0x0B, 0xFE, 0x10, 0xFD]
     fragment = [0x03, 0xA6, 0x09, 0x04, 0xC4, 0x06, 0xF2, 0x60, 0x07]
-    offset = len(head) + len(calls) + len(tail)
-    for i in (1, 6):
-        calls[i], calls[i + 1] = offset & 0xFF, offset >> 8
-    tracks[4] = head + calls + tail + fragment
+    tracks[4] = call_fragment(head, calls, tail, fragment, (1, 6))
 
     loop_point = [0xF3] if rave_master else [0xF3, 0x00, 0x00]
     tracks[5] = [0x00] + loop_point + [0x00, 0xA8, 0x0A, 0x30, 0xC3, 0xE1, 0x00, 0xFE]
@@ -101,10 +109,7 @@ def eternal_duelist_tracks():
     calls = [0x93, 0, 0, 0x02, 0x10, 0x9F, 0, 0, 0x01, 0x08]
     tail = [0xB9, 0x0B, 0xFE, 0x10, 0xF4, 0x10, 0x08, 0xFC, 0x00, 0x01] + [0x07, 0x01] * 253 + [0xFD]
     fragment = [0x03, 0xA6, 0x0A, 0x04, 0xC4, 0x06, 0xF2, 0x60, 0x07]
-    offset = len(head) + len(calls) + len(tail)
-    for i in (1, 6):
-        calls[i], calls[i + 1] = offset & 0xFF, offset >> 8
-    tracks[4] = head + calls + tail + fragment
+    tracks[4] = call_fragment(head, calls, tail, fragment, (1, 6))
 
     tracks[5] = [0x00, 0xF3, 0x00, 0xA8, 0x0A, 0x20, 0xF0, 0x5A, 0x20, 0xA8, 0x0B, 0xF2, 0x10, 0xFE]
     tracks[6] = [0x00, 0xAC, 0x0B, 0x40, 0xF1, 0x20, 0x10, 0xBA, 0x0A, 0x05, 0x10, 0xF1, 0x00, 0x08, 0xB9, 0x0A, 0x02,
@@ -136,10 +141,7 @@ def dungeon_dice_tracks():
     calls = [0xF4, 0, 0, 0x02, 0x04, 0xF6, 0x00, 0xF5, 0, 0, 0x01, 0x10]
     tail = [0xE9, 0x22, 0x04] + [0x07, 0x01] * 255 + [0xFD]
     fragment = [0x04, 0xEA, 0x24, 0x06, 0xFC, 0x02]
-    offset = len(head) + len(calls) + len(tail)
-    for i in (1, 8):
-        calls[i], calls[i + 1] = offset & 0xFF, offset >> 8
-    tracks[1] = head + calls + tail + fragment
+    tracks[1] = call_fragment(head, calls, tail, fragment, (1, 8))
 
     # The wave channel loads wave 1 while a note plays, which restarts it at frequency 0, and plays legato notes at the
     # four volume codes. A duty byte and 05 don't change the wave, and F5's last byte, 72, loads wave 2 and waits 114
@@ -194,7 +196,7 @@ def main():
     elif revision == 'Eternal Duelist':
         tracks = eternal_duelist_tracks()
     else:
-        tracks = test_tracks(revision == 'Rave Master')
+        tracks = test_tracks(revision)
     for track in tracks:
         offsets.append(len(data))
         data += bytes(track)

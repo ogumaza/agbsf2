@@ -10,30 +10,17 @@
 #include <string>
 #include <vector>
 
+#include "gba.h"
 #include "quintet/driver.h"
+#include "quintet/song.h"
 #include "rom.h"
 
 namespace agbsf2::quintet
 {
 
-// The number of channels in a song.
-constexpr int kChannels = 6;
-
-// The channels of a song, one for each of the GBA's sound channels.
-constexpr int kSquare1 = 0;
-constexpr int kSquare2 = 1;
-constexpr int kWave = 2;
-constexpr int kNoise = 3;
-constexpr int kPcmA = 4; // DirectSound FIFO A
-constexpr int kPcmB = 5; // DirectSound FIFO B
-
-// A write to a hardware register.
-struct RegisterWrite
-{
-    uint32_t address = 0;
-    uint8_t size = 0; // in bytes
-    uint32_t value = 0;
-};
+// The frames that a channel's effects have run, in Channel::envelope_time, bend_time and lfo_time, after a rest: the
+// effects wait for the next note.
+constexpr uint16_t kAfterRest = 0xFFFF;
 
 // The driver's record of a channel. The comments give each field's offset in the A revision's record. The J revision's
 // has the two bank flags at 0x0C and 0x0D, and the fields from the transposes to the tempo 2 bytes on and the rest 4
@@ -81,14 +68,14 @@ struct Channel
     uint8_t wave_high = 0x80;                  // 0x39: the wave in bank 1, with bit 7 set
     uint8_t length_on = 0;                     // 0x3A: the sound length is enabled
     uint8_t envelope_on = 0;                   // 0x3B: D2's volume envelope
-    uint16_t envelope_time = 0;                // 0x3C: frames since the note started, 0xFFFF after a rest
+    uint16_t envelope_time = 0;                // 0x3C: frames since the note started, kAfterRest after a rest
     std::array<uint8_t, 5> envelope = {};      // 0x3E: start, peak and end levels in %, attack and decay frames
     uint8_t bend_on = 0;                       // 0x43: E2's pitch envelope
     uint16_t bend_time = 0;                    // 0x44
     std::array<int8_t, 5> bend = {};           // 0x46: start, middle and end offsets, then the two times
     uint8_t lfo_on = 0;                        // 0x4B: DF's LFO
     uint8_t lfo_shape = 0;                     // 0x4C: EC and ED; bit 7 inverts it
-    uint16_t lfo_time = 0;                     // 0x4E: 0xFFFF after a rest
+    uint16_t lfo_time = 0;                     // 0x4E: kAfterRest after a rest
     uint16_t lfo_delay = 0;                    // 0x50
     uint16_t lfo_period = 0;                   // 0x52
     uint16_t lfo_depth = 0;                    // 0x54
@@ -110,8 +97,8 @@ struct Channel
 // The driver's record of a FIFO's sample.
 struct Fifo
 {
-    uint32_t data = 0;          // 0x00: the byte the next start plays from
-    uint32_t start = 0;         // 0x04: the sample's data
+    uint32_t next_start = 0;    // 0x00: the byte the next start plays from
+    uint32_t sample = 0;        // 0x04: the sample's data
     uint32_t loop = 0;          // 0x08: the byte it loops back to, or 0 if it doesn't loop
     uint32_t end = 0;           // 0x0C: the bytes it plays before it stops (or loops)
     uint32_t length = 0;        // 0x10: the sample's bytes, less 64, less 0.6%
@@ -127,7 +114,7 @@ struct Event
     enum Kind : uint8_t
     {
         kNote,      // a note at `index`
-        kRepeat,    // note 12: the channel plays again at its pitch, or a PCM channel plays its sample at its own rate
+        kPlayAgain, // note 12: the channel plays its pitch again, or a PCM channel its sample at the sample's rate
         kRest,      // note 13
         kLoopPoint, // BF
         kLoop,      // FF, back to the loop point
@@ -143,10 +130,37 @@ struct Event
     uint32_t frame = 0; // the frame it happened in
 };
 
+// The sound registers that the driver's register image holds, in order: SOUND1CNT_L to SOUNDCNT_H.
+inline constexpr uint32_t kImageRegisters[12] = {0x04000060, 0x04000062, 0x04000064, 0x04000068,
+                                                 0x0400006C, 0x04000070, 0x04000072, 0x04000074,
+                                                 0x04000078, 0x0400007C, 0x04000080, 0x04000082};
+
+// The indexes of the image's halfwords. Hardware::registers holds the halfwords in the same order.
+constexpr int kNr10 = 0;       // SOUND1CNT_L
+constexpr int kNr11 = 1;       // SOUND1CNT_H: NR11 and NR12
+constexpr int kNr13 = 2;       // SOUND1CNT_X: NR13 and NR14
+constexpr int kNr21 = 3;       // SOUND2CNT_L: NR21 and NR22
+constexpr int kNr23 = 4;       // SOUND2CNT_H: NR23 and NR24
+constexpr int kNr30 = 5;       // SOUND3CNT_L
+constexpr int kNr31 = 6;       // SOUND3CNT_H: NR31 and NR32
+constexpr int kNr33 = 7;       // SOUND3CNT_X: NR33 and NR34
+constexpr int kNr41 = 8;       // SOUND4CNT_L: NR41 and NR42
+constexpr int kNr43 = 9;       // SOUND4CNT_H: NR43 and NR44
+constexpr int kNr50 = 10;      // SOUNDCNT_L: NR50 and NR51
+constexpr int kSoundcntH = 11; // SOUNDCNT_H: the PSG's share of the mix, and the FIFOs' volumes and outputs
+
+// Each PSG channel's halfwords: the one with its length and envelope (on the wave channel, its length and volume), and
+// the one with its frequency (on the noise channel, its clock) and the bit that restarts it.
+inline constexpr int kPsgEnvelope[4] = {kNr11, kNr21, kNr31, kNr41};
+inline constexpr int kPsgControl[4] = {kNr13, kNr23, kNr33, kNr43};
+
+// The bit of a PSG channel's control halfword that restarts the channel: bit 7 of NR14, NR24, NR34 or NR44.
+constexpr uint16_t kRestart = 0x8000;
+
 // The sound hardware after a frame, as the driver has left it.
 struct Hardware
 {
-    std::array<uint16_t, 12> registers = {};              // SOUND1CNT_L to SOUNDCNT_H, as last written
+    std::array<uint16_t, 12> registers = {};              // the last values written to the registers of kImageRegisters
     uint8_t restarted = 0;                                // bit c: PSG channel c was restarted in the frame
     std::array<std::array<uint8_t, 16>, 2> wave_ram = {}; // the wave RAM's two banks
 };
@@ -249,6 +263,18 @@ private:
     void NextRandom();
     void Reseed();
 
+    // Follows FF on channel `c`: back to the loop point, a hold at the loop point itself, or the channel's end if it
+    // has no loop point. Returns false if the channel reads nothing more in this frame.
+    bool FollowEnd(int c);
+
+    // Starts note `note` on channel `c`: the pitch and the level, and on a PCM channel the sample's start or stop. Note
+    // 12 plays again. Note 13 rests. A note after D4 slides from the note before.
+    void StartNote(int c, int note);
+
+    // Returns the ticks that a note of length index `length` lasts with its dot and the notes that D4 ties to it. Moves
+    // the channel past the dot and the ties.
+    uint16_t NoteTicks(Channel& ch, int note, int length);
+
     // Writes a hardware register, as the driver does.
     void Write(uint32_t address, int size, uint32_t value);
 
@@ -259,6 +285,7 @@ private:
 
     const Rom& rom_;
     const DriverInfo& info_;
+    const RevisionTraits& traits_;
     bool valid_ = false;
     std::array<Channel, kChannels> channels_;
     std::array<Fifo, 2> fifos_;

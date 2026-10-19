@@ -6,12 +6,13 @@
     compare_notes.py ROM AGBSF2 FOLDER [--songs 0-20]
 
 FOLDER holds agbsf2's conversion of ROM: NAME_NN.mid and NAME_NN.sf2 for each module, or NAME_krawall_NN.mid and
-NAME_krawall_NN.sf2 if another driver was detected first. For each module listed by `AGBSF2 --info`, the script
-runs the game's code under driver_emu.py for the reported duration. After every player tick, it reads each module
-channel's mixer channel, provided it still belongs to that channel's last note and is playing. It records the sample,
-position, step and levels on both sides, along with position changes made by kramSetPos() for retriggers or offsets. A
-note starts when the mixer channel starts a sample or changes its position. It ends when the sample stops or the next
-note starts. The MIDI file and SoundFont must match:
+NAME_krawall_NN.sf2 if another driver was detected first. For each module listed by `AGBSF2 --info`, the script runs the
+game's code under driver_emu.py for as long as the module's MIDI file lasts. A module without a MIDI file runs for the
+length that --info reports. After every player tick, it reads each module channel's mixer channel, provided it still
+belongs to that channel's last note and is playing. It records the sample, position, step and levels on both sides,
+along with position changes made by kramSetPos() for retriggers or offsets. A note starts when the mixer channel starts
+a sample or changes its position. It ends when the sample stops or the next note starts. The MIDI file and SoundFont
+must match:
 
   - each note on the channel's MIDI channel, starting and ending within a millisecond of the driver's ticks, the MIDI
     file starting on the module's first tick;
@@ -35,11 +36,11 @@ from pathlib import Path
 from unicorn import UC_HOOK_CODE
 from unicorn.arm_const import UC_ARM_REG_FP, UC_ARM_REG_R0, UC_ARM_REG_R1
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for conversion.py and gbarom.py, in tools/
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for conversion.py, gbarom.py and traces.py, in tools/
 import conversion
 import driver_emu
-from compare_trace import parse_range
 from gbarom import ROM_BASE, load_rom
+from traces import parse_range
 
 TIME_TOLERANCE = 0.001   # seconds that an event can be from the driver's tick, for the MIDI tempos' rounding
 PITCH_TOLERANCE_CENTS = 5

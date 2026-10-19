@@ -18,6 +18,9 @@ namespace
 // The most commands DumpSong() lists for a channel.
 constexpr int kMaxListedCommands = 20000;
 
+// A song header's bytes: the song's length, and the offset of each channel's data.
+constexpr uint32_t kHeaderSize = 2 + 2 * kChannels;
+
 // The deepest repeat the driver keeps.
 constexpr size_t kMaxRepeatDepth = 8;
 
@@ -39,7 +42,7 @@ bool ReadSongHeader(const Rom& rom, uint32_t address, SongHeader& header)
     header = SongHeader();
     header.address = address;
     header.length = rom.U16(address) & ~1u;
-    if (header.length < 14 || !rom.Contains(address, header.length))
+    if (header.length < kHeaderSize || !rom.Contains(address, header.length))
     {
         return false;
     }
@@ -47,7 +50,7 @@ bool ReadSongHeader(const Rom& rom, uint32_t address, SongHeader& header)
     for (uint32_t c = 0; c < header.channels.size(); c++)
     {
         const uint32_t offset = rom.U16(address + 2 + 2 * c);
-        if (offset < 14 || offset >= header.length)
+        if (offset < kHeaderSize || offset >= header.length)
         {
             return false;
         }
@@ -64,7 +67,7 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
     const uint8_t b = rom.U8(address);
     const int arg = rom.U8(address + 1);
     const int sarg = int8_t(arg);
-    const bool pcm = channel >= 4;
+    const bool pcm = channel >= kPcmA;
 
     // A note: the low nibble is the pitch, 12 to play again or 13 to rest, and the high nibble picks the length.
     const int pitch = b & 15;
@@ -73,7 +76,7 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
     {
         const int value = rom.U8(info.length_table + uint32_t(length));
         cmd.note = true;
-        cmd.ticks = value ? uint32_t(384 / value) : 0;
+        cmd.ticks = value ? uint32_t(kWholeNote / value) : 0;
         const std::string len = Format("%d ticks (1/%d)", int(cmd.ticks), value);
         if (pitch <= 11)
         {
@@ -166,7 +169,7 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
         cmd.text = "octave down";
         break;
     case 0x7F:
-        cmd.text = Format(channel == 0 ? "tempo %d, for every channel" : "tempo %d", arg);
+        cmd.text = Format(channel == kSquare1 ? "tempo %d, for every channel" : "tempo %d", arg);
         break;
     case 0x8E:
         cmd.text = Format("noise clock shift %d", arg);
@@ -237,9 +240,9 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
         cmd.text = Format("sample %d", arg);
         break;
     case 0xDE:
-        cmd.text = Format(
-            channel == 2 ? "wave bank %d for %d frames of a note, then %d" : "duty %d for %d frames of a note, then %d",
-            at(2), at(1), at(3));
+        cmd.text = Format(channel == kWave ? "wave bank %d for %d frames of a note, then %d"
+                                           : "duty %d for %d frames of a note, then %d",
+                          at(2), at(1), at(3));
         break;
     case 0xDF:
         cmd.text = Format("LFO: after %d frames, a period of %d frames and a depth of %d", at(1), at(2), at(3));
@@ -266,7 +269,7 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
         cmd.text = Format("slides take %d frames", arg);
         break;
     case 0xE6:
-        cmd.text = Format("detune %d", int16_t(at(1) | at(2) << 8));
+        cmd.text = Format("detune %d", int16_t(rom.U16(address + 1)));
         break;
     case 0xE7:
         // A range of 0, 0 and 0 keeps the start of the last range that the FIFO played since DC or DD.
@@ -303,9 +306,9 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
         cmd.text = "transpose down";
         break;
     case 0xF0:
-        cmd.text = info.revision != Revision::kJ ? "nothing"
-                   : channel == 3                ? "switch to the other bank of noise macros"
-                                                 : "switch to the other bank of samples";
+        cmd.text = !TraitsOf(info.revision).banks ? "nothing"
+                   : channel == kNoise            ? "switch to the other bank of noise macros"
+                                                  : "switch to the other bank of samples";
         break;
     case 0xF1:
         cmd.text = Format("volume %+d", sarg);
@@ -339,8 +342,8 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
                   rom.Title().c_str(), rom.GameCode().c_str(), song, unsigned(h.address), unsigned(h.length));
     text += line;
 
-    static constexpr const char* kChannelNames[6] = {"square 1", "square 2", "wave", "noise", "PCM A", "PCM B"};
-    for (int c = 0; c < 6; c++)
+    static constexpr const char* kChannelNames[kChannels] = {"square 1", "square 2", "wave", "noise", "PCM A", "PCM B"};
+    for (int c = 0; c < kChannels; c++)
     {
         std::snprintf(line, sizeof line, "\n; ---- channel %d (%s) at 0x%08X ----\n", c, kChannelNames[c],
                       unsigned(h.channels[size_t(c)]));
@@ -367,13 +370,7 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
                 cmd.text = tie ? "tie: the next note adds to this one" : "slide into the next note";
             }
 
-            std::string bytes;
-            for (uint32_t i = 0; i < cmd.size; i++)
-            {
-                char hex[4];
-                std::snprintf(hex, sizeof hex, "%02X ", rom.U8(address + i));
-                bytes += hex;
-            }
+            const std::string bytes = HexBytes(rom, address, cmd.size);
             std::snprintf(line, sizeof line, "0x%08X %8llu  %-18s %s\n", unsigned(address),
                           static_cast<unsigned long long>(tick), bytes.c_str(), cmd.text.c_str());
             text += line;
@@ -429,8 +426,7 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
         }
     }
 
-    std::vector<uint8_t> data(text.begin(), text.end());
-    return WriteFile(path, data, error);
+    return WriteTextFile(path, text, error);
 }
 
 } // namespace agbsf2::quintet

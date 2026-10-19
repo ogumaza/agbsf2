@@ -199,54 +199,112 @@ bool ParseList(const std::string& s, std::set<int>& values)
     return true;
 }
 
-// Returns 0 to go on, -1 if there's nothing more to do (after --help or --version), or the exit code.
-int ParseArgs(const std::vector<std::string>& args, Options& o)
+// Reads the value of the option at args[i] into `out`: the argument after it. Moves `i` on to the value. Returns false,
+// after a message, if the option comes last.
+bool NextValue(const std::vector<std::string>& args, size_t& i, const char* option, std::string& out)
+{
+    if (i + 1 >= args.size())
+    {
+        OptionError(std::string(option) + " needs a value");
+        return false;
+    }
+
+    out = args[++i];
+
+    return true;
+}
+
+// Adds the tracks of a --tracks list to the options. The first list replaces the default of every track, and each
+// later one adds its tracks to those before it. Returns false, after a message, for a bad list.
+bool AddTracks(const std::string& list, Options& o)
+{
+    // Krawall's modules have up to 20 channels, and the other drivers 16 tracks at most.
+    std::set<int> tracks;
+    if (!ParseList(list, tracks) || tracks.empty() || *tracks.rbegin() >= 20)
+    {
+        OptionError("bad track list (tracks are 0-19)");
+        return false;
+    }
+
+    if (!o.tracks_given)
+    {
+        o.convert.track_mask = 0;
+        o.tracks_given = true;
+    }
+    for (int t : tracks)
+    {
+        o.convert.track_mask |= 1u << t;
+    }
+
+    return true;
+}
+
+// Checks the options that depend on each other, once every argument is read. The overrides of Konami's tables also
+// pick its driver. Returns false, after a message, if the options don't fit together.
+bool CheckOptions(Options& o)
+{
+    if (o.inputs.empty())
+    {
+        Usage(stderr);
+        return false;
+    }
+    if (o.inputs.size() > 1 && (!o.name.empty() || o.trace_song >= 0))
+    {
+        OptionError("--name and --trace take a single input file");
+        return false;
+    }
+
+    // Only Konami's driver has a sample table and a mixer rate to override.
+    if (o.overrides.sample_table || o.overrides.mix_rate > 0)
+    {
+        if (o.overrides.driver != Driver::kAny && o.overrides.driver != Driver::kKonami)
+        {
+            OptionError("--sample-table and --mix-rate are for Konami's driver");
+            return false;
+        }
+
+        o.overrides.driver = Driver::kKonami;
+    }
+
+    return true;
+}
+
+// Reads the arguments into `o`. Returns the exit code when there's nothing more to do: after --help or --version, or
+// after a mistake in the options. Returns nothing to go on.
+std::optional<int> ParseArgs(const std::vector<std::string>& args, Options& o)
 {
     for (size_t i = 1; i < args.size(); i++)
     {
-        auto value = [&](const char* what, std::string& out)
-        {
-            if (i + 1 >= args.size())
-            {
-                OptionError(std::string(what) + " needs a value");
-                return false;
-            }
-
-            out = args[++i];
-
-            return true;
-        };
-
         const std::string& a = args[i];
         std::string v;
         long long n;
         if (a == "-h" || a == "--help")
         {
             Usage(stdout);
-            return -1;
+            return 0;
         }
         else if (a == "--version")
         {
             std::printf("%s %s\n", kProgramName, AGBSF2_VERSION);
-            return -1;
+            return 0;
         }
         else if (a == "-o" || a == "--output")
         {
-            if (!value("--output", o.out_dir))
+            if (!NextValue(args, i, "--output", o.out_dir))
             {
                 return 2;
             }
         }
         else if (a == "-n" || a == "--name")
         {
-            if (!value("--name", o.name))
+            if (!NextValue(args, i, "--name", o.name))
             {
                 return 2;
             }
         }
         else if (a == "-s" || a == "--songs")
         {
-            if (!value("--songs", v))
+            if (!NextValue(args, i, "--songs", v))
             {
                 return 2;
             }
@@ -258,7 +316,7 @@ int ParseArgs(const std::vector<std::string>& args, Options& o)
         }
         else if (a == "-l" || a == "--loops")
         {
-            if (!value("--loops", v))
+            if (!NextValue(args, i, "--loops", v))
             {
                 return 2;
             }
@@ -272,28 +330,9 @@ int ParseArgs(const std::vector<std::string>& args, Options& o)
         }
         else if (a == "-t" || a == "--tracks")
         {
-            if (!value("--tracks", v))
+            if (!NextValue(args, i, "--tracks", v) || !AddTracks(v, o))
             {
                 return 2;
-            }
-
-            // Krawall's modules have up to 20 channels, and the other drivers 16 tracks at most.
-            std::set<int> tracks;
-            if (!ParseList(v, tracks) || tracks.empty() || *tracks.rbegin() >= 20)
-            {
-                OptionError("bad track list (tracks are 0-19)");
-                return 2;
-            }
-
-            // Each -t adds its tracks to those of the ones before it.
-            if (!o.tracks_given)
-            {
-                o.convert.track_mask = 0;
-                o.tracks_given = true;
-            }
-            for (int t : tracks)
-            {
-                o.convert.track_mask |= 1u << t;
             }
         }
         else if (a == "--single-sf2")
@@ -318,44 +357,13 @@ int ParseArgs(const std::vector<std::string>& args, Options& o)
         }
         else if (a == "--driver")
         {
-            if (!value("--driver", v))
+            if (!NextValue(args, i, "--driver", v))
             {
                 return 2;
             }
 
-            if (v == "konami")
-            {
-                o.overrides.driver = Driver::kKonami;
-            }
-            else if (v == "rare")
-            {
-                o.overrides.driver = Driver::kRare;
-            }
-            else if (v == "quintet")
-            {
-                o.overrides.driver = Driver::kQuintet;
-            }
-            else if (v == "rd2")
-            {
-                o.overrides.driver = Driver::kRd2;
-            }
-            else if (v == "mp2k")
-            {
-                o.overrides.driver = Driver::kMp2k;
-            }
-            else if (v == "brownie")
-            {
-                o.overrides.driver = Driver::kBrownie;
-            }
-            else if (v == "krawall")
-            {
-                o.overrides.driver = Driver::kKrawall;
-            }
-            else if (v == "ubimilan")
-            {
-                o.overrides.driver = Driver::kUbiMilan;
-            }
-            else
+            o.overrides.driver = DriverNamed(v);
+            if (o.overrides.driver == Driver::kAny)
             {
                 OptionError("--driver needs konami, rare, quintet, rd2, brownie, ubimilan, krawall or mp2k");
                 return 2;
@@ -363,7 +371,7 @@ int ParseArgs(const std::vector<std::string>& args, Options& o)
         }
         else if (a == "--song-table" || a == "--sample-table")
         {
-            if (!value(a.c_str(), v))
+            if (!NextValue(args, i, a.c_str(), v))
             {
                 return 2;
             }
@@ -377,7 +385,7 @@ int ParseArgs(const std::vector<std::string>& args, Options& o)
         }
         else if (a == "--song-count")
         {
-            if (!value("--song-count", v))
+            if (!NextValue(args, i, "--song-count", v))
             {
                 return 2;
             }
@@ -391,7 +399,7 @@ int ParseArgs(const std::vector<std::string>& args, Options& o)
         }
         else if (a == "--mix-rate")
         {
-            if (!value("--mix-rate", v))
+            if (!NextValue(args, i, "--mix-rate", v))
             {
                 return 2;
             }
@@ -406,7 +414,7 @@ int ParseArgs(const std::vector<std::string>& args, Options& o)
         }
         else if (a == "--trace")
         {
-            if (!value("--trace", v))
+            if (!NextValue(args, i, "--trace", v))
             {
                 return 2;
             }
@@ -420,7 +428,7 @@ int ParseArgs(const std::vector<std::string>& args, Options& o)
         }
         else if (a == "--trace-frames")
         {
-            if (!value("--trace-frames", v))
+            if (!NextValue(args, i, "--trace-frames", v))
             {
                 return 2;
             }
@@ -445,56 +453,12 @@ int ParseArgs(const std::vector<std::string>& args, Options& o)
         }
     }
 
-    if (o.inputs.empty())
+    if (!CheckOptions(o))
     {
-        Usage(stderr);
-        return 2;
-    }
-    if (o.inputs.size() > 1 && (!o.name.empty() || o.trace_song >= 0))
-    {
-        OptionError("--name and --trace take a single input file");
         return 2;
     }
 
-    // Only Konami's driver has a sample table and a mixer rate to override.
-    if (o.overrides.sample_table || o.overrides.mix_rate > 0)
-    {
-        if (o.overrides.driver != Driver::kAny && o.overrides.driver != Driver::kKonami)
-        {
-            OptionError("--sample-table and --mix-rate are for Konami's driver");
-            return 2;
-        }
-
-        o.overrides.driver = Driver::kKonami;
-    }
-
-    return 0;
-}
-
-// Returns the name that --driver takes for a driver.
-const char* DriverName(Driver driver)
-{
-    switch (driver)
-    {
-    case Driver::kKonami:
-        return "konami";
-    case Driver::kRare:
-        return "rare";
-    case Driver::kQuintet:
-        return "quintet";
-    case Driver::kRd2:
-        return "rd2";
-    case Driver::kMp2k:
-        return "mp2k";
-    case Driver::kBrownie:
-        return "brownie";
-    case Driver::kKrawall:
-        return "krawall";
-    case Driver::kUbiMilan:
-        return "ubimilan";
-    default:
-        return "";
-    }
+    return std::nullopt;
 }
 
 // Returns a time as minutes and seconds, such as 1:35.23. It's rounded to hundredths before it's split, so that 59.999
@@ -618,6 +582,12 @@ struct Tally
     int failures = 0; // songs that failed, and files that couldn't be written
 };
 
+// Returns true if the options pick song `song` of `music`: --songs allows it, and the music has it.
+bool Picked(const Options& o, const Music& music, int song)
+{
+    return (o.songs.empty() || o.songs.count(song)) && music.HasSong(song);
+}
+
 // Converts the songs of one of a game's drivers to the files that `settings` names, and adds them to `tally`. Messages
 // put `song_label` before a song's number, and those on stderr start with `prefix`, apart from errors about the whole
 // file, which start with its name, `label`.
@@ -647,7 +617,7 @@ void ConvertSongs(Music& music, const ConvertSettings& settings, const std::stri
     std::string error;
     for (int s = 0; s < music.SongCount(); s++)
     {
-        if ((!o.songs.empty() && !o.songs.count(s)) || !music.HasSong(s))
+        if (!Picked(o, music, s))
         {
             continue;
         }
@@ -673,8 +643,7 @@ void ConvertSongs(Music& music, const ConvertSettings& settings, const std::stri
 
         if (o.dump)
         {
-            const std::string file = settings.base_name + "_" + music.FileNumber(s) + ".txt";
-            if (!music.DumpSong(s, Utf8(out_dir / PathFromUtf8(file)), error))
+            if (!music.DumpSong(s, SongStem(settings, music.FileNumber(s)) + ".txt", error))
             {
                 std::fprintf(stderr, "%s%s %d: %s\n", prefix.c_str(), song_label.c_str(), s, error.c_str());
                 tally.failures++;
@@ -697,6 +666,64 @@ void ConvertSongs(Music& music, const ConvertSettings& settings, const std::stri
     }
 }
 
+// Returns true if `source` is the same file as one of `files`. Links and differences in case then don't count.
+bool Listed(const std::vector<fs::path>& files, const fs::path& source)
+{
+    std::error_code ec;
+    return std::any_of(files.begin(), files.end(), [&](const fs::path& f) { return fs::equivalent(source, f, ec); });
+}
+
+// Returns the folder for a game's files: the one that --output names, or a folder called `name` beside the game. A
+// file without an extension would share its path with that folder. The folder then gets a suffix.
+fs::path OutputFolder(const fs::path& source, const std::string& name, const Options& o)
+{
+    if (!o.out_dir.empty())
+    {
+        return PathFromUtf8(o.out_dir);
+    }
+
+    fs::path out_dir = source.parent_path() / PathFromUtf8(name);
+    if (out_dir.lexically_normal() == source.lexically_normal())
+    {
+        out_dir += "_output";
+    }
+
+    return out_dir;
+}
+
+// Prints the line that names a game: its title, its code, and the number of its songs, or of its drivers if it has
+// more than one.
+void PrintGame(const std::string& label, const Rom& rom, const std::vector<FoundMusic>& drivers)
+{
+    std::printf("%s: %s (%s), ", label.c_str(), rom.Title().c_str(), rom.GameCode().c_str());
+    if (drivers.size() == 1)
+    {
+        const int songs = drivers.front().music->SongCount();
+        std::printf("%d song%s\n", songs, songs == 1 ? "" : "s");
+    }
+    else
+    {
+        std::printf("%d sound drivers\n", int(drivers.size()));
+    }
+}
+
+// Prints how many of a game's songs were converted, skipped and failed, and where the files went.
+void PrintTally(const Tally& tally, const fs::path& out_dir)
+{
+    std::printf("converted %d song%s", tally.converted, tally.converted == 1 ? "" : "s");
+    if (tally.silent)
+    {
+        std::printf(" (%d without notes skipped)", tally.silent);
+    }
+    if (tally.failures)
+    {
+        std::printf(", %d failed", tally.failures);
+    }
+
+    std::error_code ec;
+    std::printf("\noutput: %s\n", Utf8(fs::absolute(out_dir, ec).lexically_normal()).c_str());
+}
+
 // Converts one input file, which messages call `label`. `done` holds the ROM images already converted or listed in this
 // run, and `failed` those in which detection found no music it could read. A set of several mini-GSFs is then read
 // once.
@@ -715,28 +742,21 @@ int ConvertFile(const std::string& input, const std::string& label, const Option
     // Compare file identities so case differences and links don't cause duplicate conversions. A set's later mini-GSFs
     // skip detection, which can take seconds.
     const fs::path source = PathFromUtf8(rom.GsfLibrary().empty() ? input : rom.GsfLibrary());
-    std::error_code ec;
-    for (const fs::path& previous : done)
+    if (Listed(done, source))
     {
-        if (fs::equivalent(source, previous, ec))
+        if (!o.quiet)
         {
-            if (!o.quiet)
-            {
-                std::printf("%s: same music as %s, already %s\n", label.c_str(), Utf8(source.filename()).c_str(),
-                            o.info ? "listed" : "converted");
-            }
+            std::printf("%s: same music as %s, already %s\n", label.c_str(), Utf8(source.filename()).c_str(),
+                        o.info ? "listed" : "converted");
+        }
 
-            return 0;
-        }
+        return 0;
     }
-    for (const fs::path& previous : failed)
+    if (Listed(failed, source))
     {
-        if (fs::equivalent(source, previous, ec))
-        {
-            std::fprintf(stderr, "%s: same music as %s, which can't be converted\n", label.c_str(),
-                         Utf8(source.filename()).c_str());
-            return 1;
-        }
+        std::fprintf(stderr, "%s: same music as %s, which can't be converted\n", label.c_str(),
+                     Utf8(source.filename()).c_str());
+        return 1;
     }
 
     // A game can have more than one driver. The report covers each, and a conversion converts each one's songs, but
@@ -770,7 +790,7 @@ int ConvertFile(const std::string& input, const std::string& label, const Option
     {
         for (int s = 0; s < f.music->SongCount(); s++)
         {
-            if ((o.songs.empty() || o.songs.count(s)) && f.music->HasSong(s))
+            if (Picked(o, *f.music, s))
             {
                 return true;
             }
@@ -786,15 +806,9 @@ int ConvertFile(const std::string& input, const std::string& label, const Option
 
     done.push_back(source);
 
-    // The output goes in a folder named after the game, beside it. A file without an extension would share its path
-    // with that folder. The folder then gets a suffix.
     const std::string name = SafeFileName(o.name.empty() ? Utf8(source.stem()) : o.name);
-    fs::path out_dir = o.out_dir.empty() ? source.parent_path() / PathFromUtf8(name) : PathFromUtf8(o.out_dir);
-    if (o.out_dir.empty() && out_dir.lexically_normal() == source.lexically_normal())
-    {
-        out_dir += "_output";
-    }
-
+    const fs::path out_dir = OutputFolder(source, name, o);
+    std::error_code ec;
     fs::create_directories(out_dir, ec);
     if (ec)
     {
@@ -807,16 +821,7 @@ int ConvertFile(const std::string& input, const std::string& label, const Option
     const std::string prefix = o.quiet ? label + ": " : "  ";
     if (!o.quiet)
     {
-        std::printf("%s: %s (%s), ", label.c_str(), rom.Title().c_str(), rom.GameCode().c_str());
-        if (drivers.size() == 1)
-        {
-            const int songs = drivers.front().music->SongCount();
-            std::printf("%d song%s\n", songs, songs == 1 ? "" : "s");
-        }
-        else
-        {
-            std::printf("%d sound drivers\n", int(drivers.size()));
-        }
+        PrintGame(label, rom, drivers);
     }
     for (const std::string& w : unread)
     {
@@ -847,16 +852,7 @@ int ConvertFile(const std::string& input, const std::string& label, const Option
 
     if (!o.quiet)
     {
-        std::printf("converted %d song%s", tally.converted, tally.converted == 1 ? "" : "s");
-        if (tally.silent)
-        {
-            std::printf(" (%d without notes skipped)", tally.silent);
-        }
-        if (tally.failures)
-        {
-            std::printf(", %d failed", tally.failures);
-        }
-        std::printf("\noutput: %s\n", Utf8(fs::absolute(out_dir, ec).lexically_normal()).c_str());
+        PrintTally(tally, out_dir);
     }
 
     return tally.failures ? 1 : 0;
@@ -869,10 +865,9 @@ int Run(const std::vector<std::string>& args)
     xsflib::console::LineBufferOutput();
 
     Options o;
-    const int parsed = ParseArgs(args, o);
-    if (parsed)
+    if (const std::optional<int> exit_code = ParseArgs(args, o))
     {
-        return parsed < 0 ? 0 : parsed;
+        return *exit_code;
     }
 
     std::vector<fs::path> done, failed;

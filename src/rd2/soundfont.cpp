@@ -9,8 +9,7 @@
 #include <utility>
 #include <vector>
 
-#include "seqlib/sf2/units.h"
-
+#include "psg.h"
 #include "rd2/driver.h"
 
 namespace agbsf2::rd2
@@ -18,24 +17,11 @@ namespace agbsf2::rd2
 namespace
 {
 
-// The shortest time a SoundFont envelope can give a phase, in timecents: 1 ms.
-constexpr int kInstant = -12000;
-
-// The greatest attenuation, in centibels.
-constexpr int kSilent = 1440;
-
 // The envelope's full level.
 constexpr int kFullLevel = 0x7FFF;
 
 // The most points an envelope is read for.
 constexpr int kMaxPoints = 64;
-
-// The shortest loop a sample gets, in points. A shorter one is repeated until it's at least this long, since some
-// players can't play a very short loop.
-constexpr uint32_t kMinLoop = 32;
-
-// The points after a loop's end that repeat its start, for players that read past the end when they interpolate.
-constexpr uint32_t kLoopGuard = 8;
 
 // The longest sample read, in points.
 constexpr uint32_t kMaxSamplePoints = 1u << 24;
@@ -46,68 +32,16 @@ constexpr int kDutyHigh[4] = {1, 2, 4, 6};
 // The points a square sample gives each of its 8 steps.
 constexpr int kStepPoints = 8;
 
-// Middle C and C3, which square and wave samples play on their root keys.
-constexpr double kMiddleC = 261.6255653005986;
+// C3, which wave samples play on their root keys. Square samples play middle C there.
 constexpr double kC3 = kMiddleC / 2;
 
 // The rate a noise sample is rendered at, and its length.
 constexpr uint32_t kNoiseRate = 65536;
 constexpr uint32_t kNoisePoints = kNoiseRate;
 
-// Returns a time in timecents, the unit of SoundFont envelope times.
-int Timecents(double seconds)
-{
-    return sf2::ToTimecents(seconds * 1000.0, kInstant, 8000);
-}
-
-// Returns the SoundFont duration for a fade to silence over `frames` frames. The driver's level falls linearly, so its
-// fade stays loud for most of its length, where a SoundFont's level falls linearly in decibels and becomes quiet
-// sooner. The SoundFont fade is lengthened to keep their loudness close while the fade is audible. Short fades fall in
-// larger steps and need less stretching.
-double FadeSeconds(double frames)
-{
-    const double stretch = std::clamp(3.0 + 3.0 * (frames - 5) / 11.0, 3.0, 6.0);
-    return stretch * frames / kFrameRate;
-}
-
-// Returns the centibels of a level below the full level.
-int Centibels(double level, double full)
-{
-    return level <= 0 ? kSilent : std::clamp(int(std::lround(-200.0 * std::log10(level / full))), 0, kSilent);
-}
-
-// Returns the SoundFont release of a sample or wave voice. Its release takes a share of its level off each frame.
-int SampleRelease(uint8_t release)
-{
-    const double per_frame = -20.0 * std::log10((release + 0xE6) / 512.0);
-    return Timecents(100.0 / per_frame / kFrameRate);
-}
-
-std::string Name(const char* kind, uint32_t address)
-{
-    char b[32];
-    std::snprintf(b, sizeof b, "%s %08X", kind, unsigned(address));
-
-    return b;
-}
-
-// Stores one waveform cycle as three copies looping over the middle one, so players get lead-in and lead-out points
-// around the loop.
-void SetCycle(sf2::Sample& out, const std::vector<int16_t>& cycle)
-{
-    out.data.clear();
-    for (int i = 0; i < 3; i++)
-    {
-        out.data.insert(out.data.end(), cycle.begin(), cycle.end());
-    }
-
-    out.loop_start = uint32_t(cycle.size());
-    out.loop_end = uint32_t(2 * cycle.size());
-}
-
 } // namespace
 
-Sf2Envelope EnvelopeFor(const Rom& rom, uint32_t address, uint8_t release, bool psg)
+Sf2Envelope EnvelopeFor(const Rom& rom, uint32_t address, int release)
 {
     Sf2Envelope env;
 
@@ -136,7 +70,7 @@ Sf2Envelope EnvelopeFor(const Rom& rom, uint32_t address, uint8_t release, bool 
         env.attenuation = kSilent;
         return env;
     }
-    env.attenuation = Centibels(peak, kFullLevel);
+    env.attenuation = Centibels(double(peak) / kFullLevel);
 
     // The attack lasts until the first point at the peak. The driver's first frame is already a step up.
     size_t i = 0;
@@ -196,32 +130,34 @@ Sf2Envelope EnvelopeFor(const Rom& rom, uint32_t address, uint8_t release, bool 
         else
         {
             // A SoundFont's decay time is for a fall of 100 dB, so it reaches the sustain level in proportion.
-            env.sustain = Centibels(final_level, peak);
+            env.sustain = Centibels(double(final_level) / peak);
             env.decay = decay > 0 && env.sustain > 0 ? Timecents(1000.0 / env.sustain * decay / kFrameRate) : kInstant;
         }
     }
 
-    // A sample or wave voice's release takes a share of its level off each frame. A square or noise voice's release is
-    // the PSG's envelope, which steps its volume down from 15 at most every 1/64 s for each step of the release's top 3
-    // bits, or silences it at once.
-    if (!psg)
-    {
-        env.release = SampleRelease(release);
-    }
-    else if (release >> 5)
-    {
-        env.release = Timecents(FadeSeconds(15.0 * (release >> 5) / 64.0 * kFrameRate));
-    }
+    env.release = release;
 
     return env;
 }
 
-Sf2Envelope WaveEnvelope(uint8_t release)
+Sf2Envelope WaveEnvelope(int release)
 {
     Sf2Envelope env;
-    env.release = SampleRelease(release);
+    env.release = release;
 
     return env;
+}
+
+int SampleRelease(uint8_t release)
+{
+    const double per_frame = -20.0 * std::log10((release + 0xE6) / 512.0);
+    return Timecents(100.0 / per_frame / kFrameRate);
+}
+
+int PsgRelease(uint8_t release)
+{
+    const int steps = release >> 5;
+    return steps ? Timecents(FadeSeconds(15.0 * steps / 64.0 * kFrameRate)) : kInstant;
 }
 
 void AddEnvelope(sf2::Zone& zone, const Sf2Envelope& envelope)
@@ -283,7 +219,7 @@ int SoundfontBuilder::GameSample(uint32_t address)
     }
 
     sf2::Sample s;
-    s.name = Name("Sample", address);
+    s.name = AddressName("Sample", address);
     s.sample_rate = rate;
     s.original_key = 60;
     s.data.reserve(points + kMinLoop + kLoopGuard);
@@ -292,26 +228,14 @@ int SoundfontBuilder::GameSample(uint32_t address)
         s.data.push_back(int16_t(rom_.S8(address + 16 + i) * 256));
     }
 
+    // A short loop is repeated until it's long enough, and the points after it repeat its start. The data ends at the
+    // loop's end.
     if (loop_end)
     {
-        // A short loop is repeated until it's long enough, and the points after it repeat its start.
-        const uint32_t loop = loop_end - loop_start;
-        uint32_t end = loop_end;
-        while (end - loop_start < kMinLoop)
-        {
-            for (uint32_t i = 0; i < loop; i++)
-            {
-                s.data.push_back(s.data[loop_start + i]);
-            }
-            end += loop;
-        }
-        for (uint32_t i = 0; i < kLoopGuard; i++)
-        {
-            s.data.push_back(s.data[loop_start + i % (end - loop_start)]);
-        }
-
         s.loop_start = loop_start;
-        s.loop_end = end;
+        s.loop_end = loop_end;
+        LengthenLoop(s);
+        AddLoopGuard(s);
     }
 
     file_.samples.push_back(std::move(s));
@@ -342,9 +266,8 @@ int SoundfontBuilder::SquareSample(int duty)
         }
     }
 
-    static constexpr const char* kNames[4] = {"Square 12.5%", "Square 25%", "Square 50%", "Square 75%"};
     sf2::Sample s;
-    s.name = kNames[duty];
+    s.name = SquareName(duty);
     s.sample_rate = uint32_t(std::lround(8 * kStepPoints * kMiddleC));
     s.original_key = 60;
     SetCycle(s, cycle);
@@ -374,7 +297,7 @@ int SoundfontBuilder::WaveSample(uint32_t address)
     }
 
     sf2::Sample s;
-    s.name = Name("Wave", address);
+    s.name = AddressName("Wave", address);
     s.sample_rate = uint32_t(std::lround(32 * kC3));
     s.original_key = 48;
     SetCycle(s, cycle);
@@ -417,21 +340,13 @@ int SoundfontBuilder::NoiseSample(uint8_t nr43)
         const uint32_t den = uint32_t(ratio ? 2 * ratio : 1) << shift;
         for (; clock >= den; clock -= den)
         {
-            const uint32_t bit = (lfsr ^ (lfsr >> 1)) & 1;
-            lfsr = (lfsr >> 1) | (bit << 14);
-            if (nr43 & 8)
-            {
-                lfsr = (lfsr & ~0x40u) | (bit << 6);
-            }
+            lfsr = NextLfsr(lfsr, (nr43 & 8) != 0);
         }
     }
 
     s.loop_start = 0;
     s.loop_end = uint32_t(s.data.size());
-    for (uint32_t i = 0; i < kLoopGuard; i++)
-    {
-        s.data.push_back(s.data[i]);
-    }
+    AddLoopGuard(s);
 
     file_.samples.push_back(std::move(s));
     noises_[nr43] = int(file_.samples.size()) - 1;

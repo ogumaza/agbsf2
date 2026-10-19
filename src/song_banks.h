@@ -46,6 +46,9 @@ private:
     static constexpr int kBanks = 128;
     static constexpr int kPrograms = 128;
 
+    // Takes the first free program of `bank`. Returns nothing if the bank is full.
+    std::optional<BankProgram> Take(int bank);
+
     int songs_;
     int song_ = 0;
     std::array<std::bitset<kPrograms>, kBanks> taken_;

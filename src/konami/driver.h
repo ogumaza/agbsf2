@@ -5,17 +5,16 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "gba.h"
 #include "konami/seqformat.h"
 #include "rom.h"
 
 namespace agbsf2::konami
 {
-
-// CPU clock frequency in Hz; also the timer clock.
-constexpr double kCpuHz = 16777216.0;
 
 // A DirectSound sample: header { u32 step, s32 length, s32 loop_start } + s8 PCM. In the Dungeon Dice Monsters
 // revision, an entry of the sample table points at the PCM, and gives the length and the sample's rate.
@@ -30,7 +29,7 @@ struct SampleInfo
     // Returns the sample's playback rate in Hz at semitone 0, with the mixer running at `mix_rate`.
     double Rate(double mix_rate) const
     {
-        return period ? kCpuHz / period : mix_rate * step / 4096.0;
+        return period ? double(kSecondCycles) / period : mix_rate * step / 4096.0;
     }
 
     bool valid = false;
@@ -40,6 +39,10 @@ struct SampleInfo
     int32_t loop_start = -1; // -1: one-shot
     uint32_t data = 0;       // address of the first PCM byte
 };
+
+// Returns entry `index` of the table of halfwords at `table`. Returns nothing if `table` is 0 (not found) or if the
+// entry lies outside the ROM. A negative index reads before the table. The driver reads there too.
+std::optional<uint16_t> TableEntry(const Rom& rom, uint32_t table, int index);
 
 // Driver table addresses, detection details (`log`), and problems or assumptions made during detection (`warnings`).
 struct DriverInfo

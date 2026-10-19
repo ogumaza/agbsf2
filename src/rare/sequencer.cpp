@@ -2,8 +2,11 @@
 
 #include "rare/sequencer.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+
+#include "warnings.h"
 
 namespace agbsf2::rare
 {
@@ -13,16 +16,9 @@ namespace
 // Maximum number of commands a track may run per frame. A loop without a delay in it would hang the driver.
 constexpr int kMaxCommandsPerFrame = 100000;
 
-// The level below which a decay stops a note.
-constexpr int32_t kAudibleLevel = 0x1000;
-
 // The music volume, out of 128, at which Donkey Kong Country 3 plays most of its tunes. The driver's init sets 128.
 // The game sets the volume for each tune after it requests the tune.
 constexpr uint32_t kGameMusicVolume = 69;
-
-// The full level divided by 16. The driver works out the attack's and the decay's steps from it with its 16-bit
-// division, then multiplies them by 16.
-constexpr uint32_t kAttackRange = 0x8000;
 
 // A quotient and remainder from the driver's 16-bit division.
 struct Quotient
@@ -37,7 +33,43 @@ Quotient Divide(uint32_t dividend, uint32_t divisor)
     return {(dividend / divisor) & 0xFFFF, dividend % divisor};
 }
 
+// Frees a slot whose envelope has ended. The driver leaves a level of 0x10 in the slot.
+void Stop(Slot& s)
+{
+    s.state = kSlotFree;
+    s.level = 0x10;
+}
+
+// Takes a frame's step off a releasing note's level. Ends the note where the level would reach 0.
+void FallRelease(Slot& s)
+{
+    if (s.level - s.level_step > 0)
+    {
+        s.level -= s.level_step;
+    }
+    else
+    {
+        Stop(s);
+    }
+}
+
 } // namespace
+
+uint32_t AttackSteps(uint32_t attack, uint8_t setting)
+{
+    return setting < 0x80 ? uint32_t(setting) : Divide((99 - std::min<uint32_t>(attack, 99)) << 5, 99).quotient;
+}
+
+uint32_t SustainLevel(uint32_t sustain, uint8_t setting)
+{
+    if (setting < 0x80)
+    {
+        return uint32_t(setting) << 8;
+    }
+
+    const Quotient whole = Divide(sustain << 7, 99);
+    return (whole.quotient << 8) | Divide(whole.remainder << 8, 99).quotient;
+}
 
 Sequencer::Sequencer(const Rom& rom, const DriverInfo& info, int tune) : rom_(rom), info_(info)
 {
@@ -139,18 +171,16 @@ bool Sequencer::RunTrack(int t)
         }
 
         track.position += e.size;
-        Action a;
-        a.track = uint8_t(t);
-        a.channel = e.channel;
-        a.tick = track.tick;
         switch (e.command)
         {
         case kCmdTempo:
-            tempo_ = e.value;
-            frame_time_ = kFrameTime;
-            a.kind = Action::kTempo;
-            a.value = e.value;
-            actions_.push_back(a);
+            {
+                tempo_ = e.value;
+                frame_time_ = kFrameTime;
+                Action a = TrackAction(Action::kTempo, t, e);
+                a.value = e.value;
+                actions_.push_back(a);
+            }
             break;
 
         case kCmdDelay1:
@@ -183,8 +213,7 @@ bool Sequencer::RunTrack(int t)
 
         case kCmdBend:
             channels_[e.channel].bend = e.value;
-            a.kind = Action::kBend;
-            actions_.push_back(a);
+            actions_.push_back(TrackAction(Action::kBend, t, e));
             break;
 
         case kCmdEnd:
@@ -204,6 +233,17 @@ bool Sequencer::RunTrack(int t)
     return true;
 }
 
+Action Sequencer::TrackAction(Action::Kind kind, int t, const Event& e) const
+{
+    Action a;
+    a.kind = kind;
+    a.track = uint8_t(t);
+    a.channel = e.channel;
+    a.tick = tracks_[size_t(t)].tick;
+
+    return a;
+}
+
 int64_t Sequencer::DelayTime(uint32_t command, uint32_t ticks) const
 {
     // The delay in microseconds, a quotient and a remainder of ticks * tempo / ticks per quarter, with 8 bits of
@@ -220,13 +260,9 @@ int64_t Sequencer::DelayTime(uint32_t command, uint32_t ticks) const
 
 void Sequencer::NoteOn(int t, const Event& e)
 {
-    Action a;
-    a.kind = Action::kNoteOn;
-    a.track = uint8_t(t);
-    a.channel = e.channel;
+    Action a = TrackAction(Action::kNoteOn, t, e);
     a.a = e.a;
     a.b = e.b;
-    a.tick = tracks_[size_t(t)].tick;
 
     // A mono channel always plays in its first slot. Otherwise the note takes the first free slot, or failing that the
     // first one whose note is releasing.
@@ -258,18 +294,15 @@ void Sequencer::NoteOn(int t, const Event& e)
     // but a sample or a key split is read as a drum kit. The driver reads these words even where they aren't
     // instruments, as it does for a channel without a program, which reads zeros here.
     const uint32_t top = channels_[e.channel].instrument;
-    const uint32_t type = rom_.U32(top);
+    const Instrument chosen = InstrumentAt(rom_, top);
     uint32_t voice = top;
-    uint8_t pitch_key = e.a;
-    if (type != kInstSample && type != kInstSampleB)
+    if (!chosen.IsSample())
     {
-        const uint8_t index_in_map = rom_.U8(rom_.U32(top + 28) + e.a);
-        voice = rom_.U32(rom_.U32(top + 32) + 4u * index_in_map);
-        if (type != kInstKeySplit)
-        {
-            pitch_key = uint8_t(rom_.U32(voice + 12));
-        }
+        const uint8_t index_in_map = rom_.U8(chosen.key_map + e.a);
+        voice = rom_.U32(chosen.key_table + 4u * index_in_map);
     }
+    const Instrument played = InstrumentAt(rom_, voice);
+    const bool drum_kit = !chosen.IsSample() && chosen.type != kInstKeySplit;
 
     Instrument inst;
     a.playable = ReadInstrument(rom_, voice, inst) && SampleValid(rom_, inst) && rom_.Contains(top);
@@ -288,12 +321,12 @@ void Sequencer::NoteOn(int t, const Event& e)
 
     Slot& s = slots_[size_t(index)];
     s.velocity = uint8_t(e.b + 1);
-    s.loop_mode = uint8_t(rom_.U32(voice + 4));
+    s.loop_mode = uint8_t(played.loop_mode);
     s.key = e.a;
-    s.pitch_key = pitch_key;
-    s.position = rom_.U32(voice + 16);
+    s.pitch_key = drum_kit ? uint8_t(played.root_key) : e.a;
+    s.position = played.start;
     s.fraction = 0;
-    s.phase = 0;
+    s.phase = kPhaseAttackStart;
     s.level = 0;
     s.instrument = voice;
     s.state = kSlotOn;
@@ -318,13 +351,9 @@ void Sequencer::NoteOff(int t, const Event& e)
         }
     }
 
-    Action a;
-    a.kind = Action::kNoteOff;
+    Action a = TrackAction(Action::kNoteOff, t, e);
     a.slot = released;
-    a.track = uint8_t(t);
-    a.channel = e.channel;
     a.a = e.a;
-    a.tick = tracks_[size_t(t)].tick;
     actions_.push_back(a);
 }
 
@@ -342,12 +371,8 @@ void Sequencer::Control(int t, const Event& e, Track& track)
             // The model works out a voice's level only to find whether it's 0, and passes the volume on to the
             // conversion.
             c.volume = e.b;
-            Action a;
-            a.kind = Action::kVolume;
-            a.track = uint8_t(t);
-            a.channel = e.channel;
+            Action a = TrackAction(Action::kVolume, t, e);
             a.a = e.b;
-            a.tick = track.tick;
             actions_.push_back(a);
         }
         break;
@@ -401,13 +426,9 @@ void Sequencer::Program(int t, const Event& e)
     c.program = e.a;
     c.envelope = EnvelopeSettings();
 
-    Action a;
-    a.kind = Action::kProgram;
-    a.track = uint8_t(t);
-    a.channel = e.channel;
+    Action a = TrackAction(Action::kProgram, t, e);
     a.a = e.a;
     a.instrument = c.instrument;
-    a.tick = tracks_[size_t(t)].tick;
     actions_.push_back(a);
 }
 
@@ -438,58 +459,37 @@ void Sequencer::UpdateEnvelope(int index)
     // The channel's settings from controllers 20-23 count where each phase starts.
     const EnvelopeSettings& settings = channels_[size_t(s.channel)].envelope;
 
-    // The conversion learns which settings each note's phases took.
-    auto took = [&](const EnvelopeSettings& used)
-    {
-        if (!used.None())
-        {
-            Action a;
-            a.kind = Action::kEnvelope;
-            a.channel = uint8_t(s.channel);
-            a.slot = index;
-            a.envelope = used;
-            actions_.push_back(a);
-        }
-    };
-
-    auto stop = [&s]()
-    {
-        s.state = kSlotFree;
-        s.level = 0x10;
-    };
-
-    // Envelope phases advance within the same frame wherever the driver's code falls through.
+    // Envelope phases advance within the same frame wherever the driver's code falls through. An update of a released
+    // note in kPhaseAttack, kPhaseDecay or kPhaseSustain starts the release instead.
     switch (s.phase)
     {
-    case 0:
+    case kPhaseAttackStart:
         {
             // The attack takes `steps` + 1 frames, from 0 to the full level.
-            took({.attack = settings.attack});
-            const uint32_t attack = inst.attack > 99 ? 99 : inst.attack;
-            const uint32_t steps = settings.attack < 0x80 ? settings.attack : Divide((99 - attack) << 5, 99).quotient;
+            AddEnvelopeAction(index, {.attack = settings.attack});
+            const uint32_t steps = AttackSteps(inst.attack, settings.attack);
             if (steps == 0)
             {
-                s.phase = 2;
+                s.phase = kPhaseDecayStart;
                 s.level = kFullLevel;
                 return;
             }
 
-            const Quotient q = Divide(kAttackRange, steps + 1);
+            const Quotient q = Divide(kFullSustain, steps + 1);
             s.level = int32_t(q.remainder << 4);
             s.level_step = int32_t(q.quotient << 4);
-            s.phase = 1;
+            s.phase = kPhaseAttack;
         }
         [[fallthrough]];
 
-    case 1:
+    case kPhaseAttack:
         if (s.state == kSlotReleased)
         {
-            break;
+            StartRelease(index, inst);
         }
-
-        if (s.level + s.level_step >= kFullLevel)
+        else if (s.level + s.level_step >= kFullLevel)
         {
-            s.phase = 2;
+            s.phase = kPhaseDecayStart;
             s.level = kFullLevel;
         }
         else
@@ -498,24 +498,21 @@ void Sequencer::UpdateEnvelope(int index)
         }
         return;
 
-    case 2:
+    case kPhaseDecayStart:
         {
             // The decay falls from the full level to the sustain level in the fade table's number of frames. Where a
             // channel sets the sustain level but not the decay, the driver reads the decay from a register that holds
             // whatever the code before left there, so the model takes the instrument's.
-            took({.decay = settings.decay, .sustain = settings.sustain});
-            const Quotient whole = Divide(inst.sustain << 7, 99);
-            const uint32_t sustain = settings.sustain < 0x80
-                                         ? uint32_t(settings.sustain) << 8
-                                         : (whole.quotient << 8) | Divide(whole.remainder << 8, 99).quotient;
+            AddEnvelopeAction(index, {.decay = settings.decay, .sustain = settings.sustain});
+            const uint32_t sustain = SustainLevel(inst.sustain, settings.sustain);
             s.sustain = int32_t(sustain << 4);
-            const int frames = settings.decay < 0x80 ? FadeEntryFrames(settings.decay) : FadeFrames(info_, inst.decay);
+            const int frames = FadeFrames(info_, inst.decay, settings.decay);
             if (frames == 0)
             {
-                s.phase = 4;
+                s.phase = kPhaseSustain;
                 if (s.sustain < kAudibleLevel)
                 {
-                    stop();
+                    Stop(s);
                 }
                 else
                 {
@@ -524,29 +521,30 @@ void Sequencer::UpdateEnvelope(int index)
                 return;
             }
 
-            const Quotient q = Divide(kAttackRange - sustain, uint32_t(frames));
+            const Quotient q = Divide(kFullSustain - sustain, uint32_t(frames));
             s.level_step = int32_t(q.quotient << 4);
             s.level -= int32_t(q.remainder << 4);
-            s.phase = 3;
+            s.phase = kPhaseDecay;
         }
         [[fallthrough]];
 
-    case 3:
+    case kPhaseDecay:
         {
             if (s.state == kSlotReleased)
             {
-                break;
+                StartRelease(index, inst);
+                return;
             }
 
             int32_t level = s.level - s.level_step;
             if (level <= s.sustain)
             {
-                s.phase = 4;
+                s.phase = kPhaseSustain;
                 level = s.sustain;
             }
             if (level < kAudibleLevel)
             {
-                stop();
+                Stop(s);
             }
             else
             {
@@ -555,55 +553,63 @@ void Sequencer::UpdateEnvelope(int index)
             return;
         }
 
-    case 4:
+    case kPhaseSustain:
         if (s.state == kSlotReleased)
         {
-            break;
+            StartRelease(index, inst);
         }
         return;
 
-    case 6:
-        if (s.level - s.level_step > 0)
-        {
-            s.level -= s.level_step;
-        }
-        else
-        {
-            stop();
-        }
+    case kPhaseRelease:
+        FallRelease(s);
         return;
 
+    case kPhaseReleaseStart:
     default:
-        break;
+        StartRelease(index, inst);
+        return;
     }
+}
 
-    // Phase 5: the release falls from the level the note had to 0 in the fade table's number of frames.
-    took({.release = settings.release});
-    const int frames = settings.release < 0x80 ? FadeEntryFrames(settings.release) : FadeFrames(info_, inst.release);
+void Sequencer::StartRelease(int index, const Instrument& inst)
+{
+    // The release falls from the note's level to 0 in the fade table's number of frames.
+    Slot& s = slots_[size_t(index)];
+    const EnvelopeSettings& settings = channels_[size_t(s.channel)].envelope;
+    AddEnvelopeAction(index, {.release = settings.release});
+    const int frames = FadeFrames(info_, inst.release, settings.release);
     if (frames == 0)
     {
-        stop();
+        Stop(s);
         return;
     }
 
     const Quotient q = Divide(uint32_t(s.level) >> 4, uint32_t(frames));
     if (q.quotient == 0)
     {
-        stop();
+        Stop(s);
         return;
     }
 
     s.level_step = int32_t(q.quotient << 4);
     s.level -= int32_t(q.remainder << 4);
-    s.phase = 6;
-    if (s.level - s.level_step > 0)
+    s.phase = kPhaseRelease;
+    FallRelease(s);
+}
+
+void Sequencer::AddEnvelopeAction(int index, const EnvelopeSettings& used)
+{
+    if (used.None())
     {
-        s.level -= s.level_step;
+        return;
     }
-    else
-    {
-        stop();
-    }
+
+    Action a;
+    a.kind = Action::kEnvelope;
+    a.channel = uint8_t(slots_[size_t(index)].channel);
+    a.slot = index;
+    a.envelope = used;
+    actions_.push_back(a);
 }
 
 void Sequencer::Mix()
@@ -654,7 +660,7 @@ void Sequencer::MixVoice(Slot& s)
     ReadInstrument(rom_, s.instrument, inst);
     const uint64_t moved = s.fraction + uint64_t(s.step) * uint32_t(info_.samples_per_frame);
     const uint32_t position = s.position + uint32_t(moved >> 23);
-    const bool loops = s.loop_mode == kLoopForward || s.loop_mode == kLoopForwardB;
+    const bool loops = LoopsForward(s.loop_mode);
     if (int32_t(position) >= int32_t(inst.end) && !loops)
     {
         s.state = kSlotFree;
@@ -704,7 +710,7 @@ uint32_t Sequencer::PitchStep(const Slot& s) const
     ReadInstrument(rom_, s.instrument, voice);
 
     // The pitch in semitones from the root key, as 32.32 fixed point: the fine tune (cents), the bend and the vibrato.
-    const int64_t total = int64_t(0x028F5C29) * voice.fine_tune + PitchOffset(s.channel);
+    const int64_t total = kCent * voice.fine_tune + PitchOffset(s.channel);
     const uint32_t fraction = uint32_t(total);
     const int32_t semitones = int32_t(s.pitch_key) - int32_t(voice.root_key) + int32_t(total >> 32);
 
@@ -767,15 +773,7 @@ int64_t Sequencer::PitchOffset(int channel) const
 
 void Sequencer::Warn(const std::string& message)
 {
-    for (const std::string& w : warnings_)
-    {
-        if (w == message)
-        {
-            return;
-        }
-    }
-
-    warnings_.push_back(message);
+    WarnOnce(warnings_, message);
 }
 
 } // namespace agbsf2::rare

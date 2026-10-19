@@ -17,22 +17,16 @@
 namespace agbsf2::rare
 {
 
-// The bank in which General MIDI players look for the drum channel's programs.
-constexpr int kDrumBank = 128;
-
-// A SoundFont volume envelope: times in timecents and the sustain level in centibels of attenuation.
-struct Sf2Envelope
+// Returns `bank`, or the next bank if `bank` is the drum bank. The drum bank holds only the drum channel's presets.
+constexpr int SkipDrumBank(int bank)
 {
-    int attack = -12000;
-    int decay = -12000;
-    int sustain = 0;
-    int release = -12000;
-};
+    return bank == kDrumBank ? bank + 1 : bank;
+}
 
 // Returns the SoundFont envelope that comes closest to an instrument's envelope in the driver, with the settings from
 // controllers 20-23 that its notes play with. The driver's decays and releases fall in a straight line in level, where
 // a SoundFont's fall in a straight line in decibels.
-Sf2Envelope EnvelopeFor(const DriverInfo& info, const Instrument& inst, const EnvelopeSettings& settings = {});
+VolumeEnvelope EnvelopeFor(const DriverInfo& info, const Instrument& inst, const EnvelopeSettings& settings = {});
 
 // A builder of SoundFont samples and instruments from the ROM, which reuses any already built. The converter adds the
 // presets.
@@ -55,6 +49,9 @@ public:
     // Returns the bank for the presets of bank `bank` played with the envelope settings `settings`: `bank` itself
     // without any, and otherwise a bank of their own, the next free one the first time.
     int BankFor(int bank, const EnvelopeSettings& settings);
+
+    // Returns the preset for `program` in `bank`, or null if the bank has none.
+    const sf2::Preset* FindPreset(int bank, int program) const;
 
     // Adds a preset for `program` in `bank` that plays SoundFont instrument `instrument`, unless the bank has a preset
     // for the program already.

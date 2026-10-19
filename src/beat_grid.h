@@ -100,6 +100,14 @@ private:
     // Returns the events of a channel, from their frames in order, with their ornaments.
     static std::vector<Group> Groups(std::vector<uint32_t> frames);
 
+    // Returns the frames that bound the parts of the song from `start` to `end` between the changes of tempo that
+    // `hints` show.
+    static std::vector<uint32_t> Bounds(std::vector<uint32_t> hints, uint32_t start, uint32_t end);
+
+    // Returns the parts between `bounds`, each with its beat if it's steady, from the events of `groups`. Parts in a
+    // row with the same beat are one.
+    static std::vector<Part> Parts(const std::vector<std::vector<Group>>& groups, const std::vector<uint32_t>& bounds);
+
     // Returns the units to a quarter note, a power of 2, that make a quarter note of `unit` frames nearest `quarter`.
     static double PerQuarter(double unit, double quarter);
 
@@ -118,6 +126,9 @@ private:
 
     // Adds the stretches of a part, which `groups` play. The last part's beat goes on after its end.
     void AddPart(const std::vector<std::vector<Group>>& groups, const Part& part, bool last);
+
+    // Adds the stretches of a part without a steady beat, which `groups` play.
+    void AddChangingPart(const std::vector<std::vector<Group>>& groups, const Part& part, bool last);
 
     // Adds a steady beat of `unit` frames from frame `from` to its last note on the beat, `on_beat`, and then stretches
     // that follow the notes from there to `to`.

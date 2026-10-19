@@ -94,33 +94,16 @@ struct Pattern
 
 // A cartridge image being put together: a synthetic copy of the code patterns that detection reads, Krawall's tables,
 // and the game's samples and modules.
-class Cart
+class Cart : public test::CartImage
 {
 public:
-    explicit Cart(bool code = true) : d_(0x10000, 0)
+    explicit Cart(bool code = true) : CartImage(0x10000)
     {
         WriteTables();
         if (code)
         {
             WriteCode();
         }
-    }
-
-    void Put8(uint32_t a, uint8_t v)
-    {
-        d_[a - kRomBase] = v;
-    }
-
-    void Put16(uint32_t a, uint16_t v)
-    {
-        Put8(a, uint8_t(v));
-        Put8(a + 1, uint8_t(v >> 8));
-    }
-
-    void Put32(uint32_t a, uint32_t v)
-    {
-        Put16(a, uint16_t(v));
-        Put16(a + 2, uint16_t(v >> 16));
     }
 
     void PutString(uint32_t a, const std::string& s)
@@ -196,31 +179,7 @@ public:
         }
     }
 
-    Rom ToRom() const
-    {
-        Rom r;
-        r.Assign(d_);
-
-        return r;
-    }
-
 private:
-    // Writes the Thumb bl at `at` that calls `target`.
-    void Bl(uint32_t at, uint32_t target)
-    {
-        const uint32_t offset = target - (at + 4);
-        Put16(at, uint16_t(0xF000 | ((offset >> 12) & 0x7FF)));
-        Put16(at + 2, uint16_t(0xF800 | ((offset >> 1) & 0x7FF)));
-    }
-
-    void PutHalfwords(uint32_t at, const std::vector<uint16_t>& code)
-    {
-        for (size_t i = 0; i < code.size(); i++)
-        {
-            Put16(at + 2 * uint32_t(i), code[i]);
-        }
-    }
-
     // Writes pattern `p` at `pattern`: an index of every 4th row's data, the rows and the data. Returns the next word's
     // address after it.
     uint32_t WritePattern(uint32_t pattern, const Pattern& p)
@@ -261,7 +220,7 @@ private:
         }
         for (int i = (p.rows + 3) / 4; i < 16; i++)
         {
-            Put16(pattern + 2 * uint32_t(i), Le16(&d_[pattern + 2 * uint32_t((p.rows - 1) / 4) - kRomBase]));
+            Put16(pattern + 2 * uint32_t(i), Get16(pattern + 2 * uint32_t((p.rows - 1) / 4)));
         }
         Put8(pattern + kPatternRows, uint8_t(p.rows));
         for (size_t i = 0; i < data.size(); i++)
@@ -337,8 +296,9 @@ private:
         }
     }
 
-    // Writes the patterns of krapPlay(), processRow()'s loads of the tables, the timers' setup, getDmaAddress(),
-    // kragInit(), kramQualityMode() and kramSetMasterVol(), the game's calls of the last three, and the version string.
+    // Writes the patterns of krapPlay(), the loads of the tables in the row's routine, the timers' setup,
+    // getDmaAddress(), kragInit(), kramQualityMode() and kramSetMasterVol(), the game's calls of the last three, and
+    // the version string.
     void WriteCode()
     {
         PutHalfwords(kPlay,
@@ -356,16 +316,15 @@ private:
 
         // kragInit(1), kramSetMasterVol(0x40080) with the level from a literal, and kramQualityMode(0).
         Put16(kGameInit, 0x2001);
-        Bl(kGameInit + 2, kInit);
+        PutBl(kGameInit + 2, kInit);
         Put16(kGameInit + 6, 0x4806);
         Put32(kGameInit + 0x20, 0x40080);
-        Bl(kGameInit + 8, kMaster);
+        PutBl(kGameInit + 8, kMaster);
         Put16(kGameInit + 0xC, 0x2000);
-        Bl(kGameInit + 0xE, kQuality);
+        PutBl(kGameInit + 0xE, kQuality);
         PutString(kVersion, "$Id: Krawall $Date: 2003/09/01 06:51:01 $");
     }
 
-    std::vector<uint8_t> d_;
     uint32_t next_module_ = kModules;
     int listed_ = 0;
 };
@@ -452,8 +411,8 @@ void TestPlayer()
     const auto record = [&](uint64_t time)
     {
         times.push_back(time);
-        first.push_back(player.Mixer()[player.Channels()[0].handle & 0x1F]);
-        second.push_back(player.Mixer()[player.Channels()[1].handle & 0x1F]);
+        first.push_back(player.MixerOf(player.Channels()[0]));
+        second.push_back(player.MixerOf(player.Channels()[1]));
         periods.push_back(player.Channels()[0].period);
     };
     player.OnTick(record);
@@ -509,12 +468,12 @@ void TestMixer()
     std::vector<uint32_t> silent_points;
     const auto check = [&](uint64_t)
     {
-        const MixChannel& f = player.Mixer()[player.Channels()[0].handle & 0x1F];
-        const MixChannel& b = player.Mixer()[player.Channels()[2].handle & 0x1F];
-        const MixChannel& s = player.Mixer()[player.Channels()[3].handle & 0x1F];
+        const MixChannel& f = player.MixerOf(player.Channels()[0]);
+        const MixChannel& b = player.MixerOf(player.Channels()[2]);
+        const MixChannel& s = player.MixerOf(player.Channels()[3]);
         forward_in_loop = forward_in_loop && f.status == 1 && f.pos < f.end && f.pos >= f.start;
         bidi_turned = bidi_turned || b.inc < 0;
-        one_shot_status = player.Mixer()[player.Channels()[1].handle & 0x1F].status;
+        one_shot_status = player.MixerOf(player.Channels()[1]).status;
         if (s.status == 1)
         {
             silent_points.push_back(s.pos - s.start);
@@ -533,32 +492,27 @@ void TestMixer()
     SEQLIB_CHECK(silent_points.size() >= 2 && silent_points[1] - silent_points[0] == kTickSamples);
 }
 
-// Eight rows per quarter note give a tempo of 126 BPM, within the target range of 105 to 210 BPM. Each player tick is
-// one MIDI tick, and the tempo comes from the sample count for eight rows. Each channel's notes are on its MIDI
-// channel, on the keys their rates give, with a program for each sample and start offset. The five-row loop, from the
-// first row back to it, plays twice; the volume slide becomes CC11 and the portamento bends upwards. SoundFont presets
-// preserve sample offsets and C-4 rates, and bidirectional loops contain both the forward and reverse samples.
+// A module holds two songs separated by +++: the first plays pattern 0, with a note on C-4, and the second pattern 1,
+// with a note an octave up. Each converts on its own in the player's song mode. At its end it goes back to its start,
+// and it never plays the other song.
 void TestSongs()
 {
-    // A module holds two songs separated by +++: the first plays pattern 0, with a note on C-4, and the second pattern
-    // 1, with a note an octave up. Each converts on its own in the player's song mode. At its end it goes back to its
-    // start, and it never plays the other song.
     Cart cart;
     const uint32_t module = cart.Module(1, {{4, {{0, 0, 49, 1}}}, {4, {{0, 0, 61, 1}}}});
     cart.Songs(module, {{0}, {1}});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.out_dir = test::g_temp.string();
     opt.base_name = "krawall_songs";
 
-    const SongSummary first = ConvertSong(rom, info, 0, opt, nullptr);
-    const SongSummary second = ConvertSong(rom, info, 1, opt, nullptr);
+    const SongReport first = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport second = ConvertSong(rom, info, 1, opt, nullptr);
 
     SEQLIB_CHECK(info.songs == (std::vector<ModuleSong>{{module, 0}, {module, 1}}));
     SEQLIB_CHECK(first.ok && second.ok && !first.silent && !second.silent);
     std::vector<std::set<int>> keys;
-    for (const SongSummary* s : {&first, &second})
+    for (const SongReport* s : {&first, &second})
     {
         std::set<int> played;
         for (const auto& e : ReadMidi(s->midi_path).Find(0x90))
@@ -571,6 +525,11 @@ void TestSongs()
     SEQLIB_CHECK(!keys[0].empty() && !keys[1].empty() && *keys[0].begin() + 12 == *keys[1].begin());
 }
 
+// Eight rows per quarter note give a tempo of 126 BPM, within the target range of 105 to 210 BPM. Each player tick is
+// one MIDI tick, and the tempo comes from the sample count for eight rows. Each channel's notes are on its MIDI
+// channel, on the keys their rates give, with a program for each sample and start offset. The five-row loop, from the
+// first row back to it, plays twice; the volume slide becomes CC11 and the portamento bends upwards. SoundFont presets
+// preserve sample offsets and C-4 rates, and bidirectional loops contain both the forward and reverse samples.
 void TestConversion()
 {
     Cart cart;
@@ -578,12 +537,12 @@ void TestConversion()
     cart.Module(1, 4, {{0, 0, 49, 3, -1, -1, 0}, {3, 0, -1, 0, -1, kJump, 0x00}});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.out_dir = test::g_temp.string();
     opt.base_name = "krawall";
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
-    const SongSummary bidi = ConvertSong(rom, info, 1, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport bidi = ConvertSong(rom, info, 1, opt, nullptr);
     const test::MidiEvents midi = ReadMidi(sum.midi_path);
     const test::Sf2Records sf2 = ReadSf2(sum.sf2_path);
     const test::Sf2Records bidi_sf2 = ReadSf2(bidi.sf2_path);
@@ -598,9 +557,9 @@ void TestConversion()
     SEQLIB_CHECK(std::fabs(sum.seconds - 30 * kTickSeconds) < 1e-9);
     SEQLIB_CHECK(std::fabs(sum.bpm - 60.0 / (kBeatTicks * kTickSeconds)) < 1e-3);
     SEQLIB_CHECK_EQ(midi.division, kBeatTicks);
-    const auto tempos = midi.Find(0xFF);
+    const auto metas = midi.Find(0xFF);
     bool tempo = false, loop_start = false, loop_end = false;
-    for (const auto& [tick, bytes] : tempos)
+    for (const auto& [tick, bytes] : metas)
     {
         tempo = tempo ||
                 (bytes[1] == 0x51 && tick == 0 &&
@@ -629,10 +588,10 @@ void TestConversion()
             expression.push_back(bytes[2]);
         }
     }
-    int cc10 = 0, cc60 = 0, cc56 = 0;
-    LevelsToControllers((60 * 64 * 64) >> 13, (60 * 64 * 64) >> 13, cc10, cc60);
-    LevelsToControllers((56 * 64 * 64) >> 13, (56 * 64 * 64) >> 13, cc10, cc56);
-    SEQLIB_CHECK(expression == std::vector<int>({cc60, cc56}));
+    int cc10 = 0, cc11_at_60 = 0, cc11_at_56 = 0;
+    LevelsToControllers((60 * 64 * 64) >> 13, (60 * 64 * 64) >> 13, cc10, cc11_at_60);
+    LevelsToControllers((56 * 64 * 64) >> 13, (56 * 64 * 64) >> 13, cc10, cc11_at_56);
+    SEQLIB_CHECK(expression == std::vector<int>({cc11_at_60, cc11_at_56}));
 
     // The portamento: a bend up on the first channel in row 3.
     bool bent_up = false;
@@ -690,13 +649,13 @@ void TestBars()
     cart.Module(1, {{48, {{0, 0, 49, 1}}}, {48, {{0, 0, 49, 1}}}});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.out_dir = test::g_temp.string();
     opt.base_name = "krawall_bars";
 
-    const SongSummary cut = ConvertSong(rom, info, 0, opt, nullptr);
-    const SongSummary full = ConvertSong(rom, info, 1, opt, nullptr);
-    const SongSummary compound = ConvertSong(rom, info, 2, opt, nullptr);
+    const SongReport cut = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport full = ConvertSong(rom, info, 1, opt, nullptr);
+    const SongReport compound = ConvertSong(rom, info, 2, opt, nullptr);
 
     // Each pass starts with a one-row pickup, followed by full bars and a one-quarter-note bar at the end of the third
     // pattern. The unbroken 64-row pattern stays in 4/4. The 48-row patterns use 12/8, with four rows per quarter note.
@@ -719,11 +678,11 @@ void TestLoopStartsAtSecondPass()
                     {4, {{0, 0, 49, 1, -1, -1, 0}, {2, 0, -1, 0, -1, kPan, 0x80}, {3, 0, -1, 0, -1, kJump, 0x01}}}});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.out_dir = test::g_temp.string();
     opt.base_name = "krawall_second";
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     // The loop runs from the second pass, after the intro's row and the first pass's four, for four rows. The file
     // plays the note in the first pass and in the loop's two passes.
@@ -743,20 +702,20 @@ void TestManyChannels()
     cart.Module(18, 4, {{0, 0, 49, 1}, {0, 17, 53, 2}});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.out_dir = test::g_temp.string();
     opt.base_name = "krawall_channels";
-    ConvertOptions first_only = opt;
+    ConvertSettings first_only = opt;
     first_only.track_mask = 1;
-    ConvertOptions last_only = opt;
+    ConvertSettings last_only = opt;
     last_only.track_mask = 1u << 17;
-    ConvertOptions first_sixteen = opt;
+    ConvertSettings first_sixteen = opt;
     first_sixteen.track_mask = 0xFFFF;
 
-    const SongSummary every = ConvertSong(rom, info, 0, opt, nullptr);
-    const SongSummary chosen = InspectSong(rom, info, 0, first_only);
-    const SongSummary last = InspectSong(rom, info, 0, last_only);
-    const SongSummary sixteen = InspectSong(rom, info, 0, first_sixteen);
+    const SongReport every = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport chosen = InspectSong(rom, info, 0, first_only);
+    const SongReport last = InspectSong(rom, info, 0, last_only);
+    const SongReport sixteen = InspectSong(rom, info, 0, first_sixteen);
 
     SEQLIB_CHECK(every.ok && chosen.ok && last.ok && sixteen.ok);
     SEQLIB_CHECK_EQ(every.tracks, 2);

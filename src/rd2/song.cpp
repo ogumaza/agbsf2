@@ -39,6 +39,86 @@ uint32_t VarLength(const Rom& rom, uint32_t address, uint32_t& size)
     return b;
 }
 
+// A track that an F8 starts: where it starts, its number in the player, and the F8's address.
+struct TrackStart
+{
+    uint32_t address = 0;
+    int number = 0;
+    uint32_t from = 0;
+};
+
+// Lists the commands of the track at `address` in `sequence`, adding them to `text`. Follows the track as the driver
+// does: waits take up time, and so do notes after C8, and calls return. Adds each track that an F8 starts to `starts`.
+void ListTrack(const Rom& rom, const DriverInfo& info, uint32_t sequence, uint32_t address, std::string& text,
+               std::vector<TrackStart>& starts)
+{
+    uint64_t tick = 0;
+    uint16_t length = 0x7F;
+    uint8_t velocity = 0x7F;
+    uint16_t wait = 0;
+    bool timed = false;
+    std::vector<uint32_t> stack;
+    std::set<uint32_t> seen;
+    for (int n = 0; n < kMaxListedCommands; n++)
+    {
+        const Command c = DecodeCommand(rom, info, address, length, velocity, wait);
+        const std::string bytes = HexBytes(rom, address, c.size);
+        char line[320];
+        std::snprintf(line, sizeof line, "0x%08X %8llu  %-12s %s\n", unsigned(address),
+                      static_cast<unsigned long long>(tick), bytes.c_str(), c.text.c_str());
+        text += line;
+        seen.insert(address);
+
+        if (c.has_length && c.note)
+        {
+            length = uint16_t(c.ticks);
+            velocity = c.velocity;
+        }
+        if (c.has_length && c.wait)
+        {
+            wait = uint16_t(c.ticks);
+        }
+        if (c.wait || (c.note && timed))
+        {
+            tick += c.ticks;
+        }
+        timed = c.op == 0xC8 ? true : c.op == 0xC9 ? false : timed;
+
+        if (c.end)
+        {
+            if (stack.empty())
+            {
+                break;
+            }
+            address = stack.back();
+            stack.pop_back();
+            continue;
+        }
+        if (c.op == 0xF0)
+        {
+            address = sequence + c.target;
+            if (seen.count(address))
+            {
+                text += "; loops\n";
+                break;
+            }
+            continue;
+        }
+        if (c.op == 0xF4 && stack.size() < size_t(kMaxDepth))
+        {
+            stack.push_back(address + c.size);
+            address = sequence + c.target;
+            continue;
+        }
+        if (c.op == 0xF8 && c.track < kPlayerTracks)
+        {
+            starts.push_back({sequence + c.target, c.track, address});
+        }
+
+        address += c.size;
+    }
+}
+
 } // namespace
 
 Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, uint16_t length, uint8_t velocity,
@@ -46,7 +126,7 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
 {
     Command c;
     const uint8_t op = rom.U8(address);
-    const bool mario = info.revision == Revision::kSuperMarioAdvance2;
+    c.op = op;
     char text[160];
     if (op <= 0xBF)
     {
@@ -58,12 +138,12 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
             length = uint16_t(VarLength(rom, address + 1, size));
             velocity = rom.U8(address + 1 + size);
             c.size = 2 + size;
-            c.length = length;
             c.has_length = true;
             note -= 0x60;
         }
 
         c.ticks = length;
+        c.velocity = velocity;
         std::snprintf(text, sizeof text, "note %d (%s), length %u, velocity %u", note, NoteName(note).c_str(),
                       unsigned(length), unsigned(velocity));
         c.text = text;
@@ -77,7 +157,6 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
             uint32_t size = 0;
             wait = uint16_t(VarLength(rom, address + 1, size));
             c.size = 1 + size;
-            c.length = wait;
             c.has_length = true;
         }
 
@@ -164,7 +243,8 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
         {
             // The Super Mario Advance 2 revision's tempo is a byte.
             uint32_t size = 1;
-            const uint32_t tempo = mario ? rom.U8(address + 1) : VarLength(rom, address + 1, size);
+            const uint32_t tempo =
+                TraitsOf(info.revision).byte_tempo ? rom.U8(address + 1) : VarLength(rom, address + 1, size);
             c.size = 1 + size;
             c.text = "tempo " + std::to_string(tempo);
             break;
@@ -192,13 +272,13 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
 
     case 0xEA:
         // The Super Mario Advance 2 revision has no player volume, and EA is one of the commands that do nothing.
-        if (mario)
+        if (TraitsOf(info.revision).player_volume)
         {
-            c.text = "nothing";
+            with("player volume");
         }
         else
         {
-            with("player volume");
+            c.text = "nothing";
         }
         break;
 
@@ -212,8 +292,9 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
 
     case 0xF8:
         c.size = 4;
+        c.track = rom.U8(address + 1);
         c.target = rom.U16(address + 2);
-        std::snprintf(text, sizeof text, "start track %u at 0x%04X", unsigned(rom.U8(address + 1)), unsigned(c.target));
+        std::snprintf(text, sizeof text, "start track %u at 0x%04X", unsigned(c.track), unsigned(c.target));
         c.text = text;
         break;
 
@@ -249,93 +330,8 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
                   rom.Title().c_str(), rom.GameCode().c_str(), song, unsigned(sequence), count);
     text += line;
 
-    // The tracks that F8 starts: where each starts, its number in the player, and the F8's address.
-    struct Start
-    {
-        uint32_t address = 0;
-        int number = 0;
-        uint32_t from = 0;
-    };
-
-    std::vector<Start> starts;
+    std::vector<TrackStart> starts;
     std::set<uint32_t> listed;
-
-    // Follows a track as the driver does: waits take up time, and so do notes after C8, and calls return.
-    const auto list_track = [&](uint32_t address)
-    {
-        uint64_t tick = 0;
-        uint16_t length = 0x7F;
-        uint8_t velocity = 0x7F;
-        uint16_t wait = 0;
-        bool timed = false;
-        std::vector<uint32_t> stack;
-        std::set<uint32_t> seen;
-        for (int n = 0; n < kMaxListedCommands; n++)
-        {
-            const Command c = DecodeCommand(rom, info, address, length, velocity, wait);
-            const uint8_t op = rom.U8(address);
-            std::string bytes;
-            for (uint32_t i = 0; i < c.size; i++)
-            {
-                char b[4];
-                std::snprintf(b, sizeof b, "%02X ", rom.U8(address + i));
-                bytes += b;
-            }
-            std::snprintf(line, sizeof line, "0x%08X %8llu  %-12s %s\n", unsigned(address),
-                          static_cast<unsigned long long>(tick), bytes.c_str(), c.text.c_str());
-            text += line;
-            seen.insert(address);
-
-            if (c.has_length && c.note)
-            {
-                length = c.length;
-                velocity = rom.U8(address + c.size - 1);
-            }
-            if (c.has_length && c.wait)
-            {
-                wait = c.length;
-            }
-            if (c.wait || (c.note && timed))
-            {
-                tick += c.ticks;
-            }
-            timed = op == 0xC8 ? true : op == 0xC9 ? false : timed;
-
-            if (c.end)
-            {
-                if (stack.empty())
-                {
-                    break;
-                }
-                address = stack.back();
-                stack.pop_back();
-                continue;
-            }
-            if (op == 0xF0)
-            {
-                address = sequence + c.target;
-                if (seen.count(address))
-                {
-                    text += "; loops\n";
-                    break;
-                }
-                continue;
-            }
-            if (op == 0xF4 && stack.size() < size_t(kMaxDepth))
-            {
-                stack.push_back(address + c.size);
-                address = sequence + c.target;
-                continue;
-            }
-            if (op == 0xF8 && rom.U8(address + 1) < kPlayerTracks)
-            {
-                starts.push_back({sequence + c.target, rom.U8(address + 1), address});
-            }
-
-            address += c.size;
-        }
-    };
-
     for (int t = 0; t < count && t < kPlayerTracks; t++)
     {
         const uint32_t offset = rom.U16(sequence + 2 + 2 * uint32_t(t));
@@ -347,14 +343,14 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
         std::snprintf(line, sizeof line, "\n; ---- track %d at 0x%08X ----\n", t, unsigned(sequence + offset));
         text += line;
         listed.insert(sequence + offset);
-        list_track(sequence + offset);
+        ListTrack(rom, info, sequence, sequence + offset, text, starts);
     }
 
     // Then each place that an F8 starts a track at. A place where a listed track starts already is left out. A track
     // listed here can start more.
     for (size_t i = 0; i < starts.size(); i++)
     {
-        const Start start = starts[i];
+        const TrackStart start = starts[i];
         if (!listed.insert(start.address).second)
         {
             continue;
@@ -363,11 +359,10 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
         std::snprintf(line, sizeof line, "\n; ---- track %d at 0x%08X, started by F8 at 0x%08X ----\n", start.number,
                       unsigned(start.address), unsigned(start.from));
         text += line;
-        list_track(start.address);
+        ListTrack(rom, info, sequence, start.address, text, starts);
     }
 
-    std::vector<uint8_t> data(text.begin(), text.end());
-    return WriteFile(path, data, error);
+    return WriteTextFile(path, text, error);
 }
 
 } // namespace agbsf2::rd2

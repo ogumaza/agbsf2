@@ -3,67 +3,20 @@
 #include "rare/soundfont.h"
 
 #include <algorithm>
-#include <cmath>
 #include <cstdio>
 #include <string>
 #include <utility>
 
-#include "seqlib/sf2/units.h"
+#include "rare/sequencer.h"
 
 namespace agbsf2::rare
 {
 namespace
 {
 
-// The shortest time a SoundFont envelope can give a phase, in timecents: 1 ms.
-constexpr int kInstant = -12000;
-
-// The greatest attenuation, in centibels.
-constexpr int kSilent = 1440;
-
 // A modulator that mutes a note while its key's polyphonic key pressure is 64 or more. Its 96 dB of attenuation takes
 // a 16-bit sample below its smallest step.
 constexpr sf2::Modulator kMute = {sf2::kPolyPressure | sf2::kSwitch, sf2::kInitialAttenuation, 960, 0, 0};
-
-// The shortest loop a sample gets, in points. A shorter one is repeated until it's at least this long, since some
-// players can't play a very short loop.
-constexpr uint32_t kMinLoop = 32;
-
-// The points after a loop's end that repeat its start, for players that read past the end when they interpolate.
-constexpr uint32_t kLoopGuard = 8;
-
-// Returns a time in timecents, the unit of SoundFont envelope times.
-int Timecents(double seconds)
-{
-    return sf2::ToTimecents(seconds * 1000.0, kInstant, 8000);
-}
-
-// Returns the SoundFont duration for a decay or release that falls to silence over `frames` frames. The driver's level
-// falls linearly, so its fade stays loud for most of its length, where a SoundFont's level falls linearly in decibels
-// and becomes quiet sooner. The SoundFont fade is lengthened to keep their loudness close while the fade is audible.
-// Short fades fall in larger steps and need less stretching.
-double FadeSeconds(int frames)
-{
-    const double stretch = std::clamp(3.0 + 3.0 * (frames - 5) / 11.0, 3.0, 6.0);
-    return stretch * frames / kFrameRate;
-}
-
-// Returns the sustain level of an instrument with sustain value 0-99 as the driver works it out, from 0 to 0x8000.
-uint32_t SustainLevel(uint32_t sustain)
-{
-    const uint32_t value = std::min<uint32_t>(sustain, 99);
-    const uint32_t whole = (value << 7) / 99;
-    const uint32_t part = (((value << 7) % 99) << 8) / 99;
-    return (whole << 8) | part;
-}
-
-std::string Name(const char* kind, uint32_t address)
-{
-    char b[32];
-    std::snprintf(b, sizeof b, "%s %08X", kind, unsigned(address));
-
-    return b;
-}
 
 // Returns the name of the SoundFont instrument for the driver's instrument at `address` played with the envelope
 // settings `settings`: "Instrument 08700154" without any, and otherwise the address and each setting given, such as
@@ -72,7 +25,7 @@ std::string InstrumentName(uint32_t address, const EnvelopeSettings& settings)
 {
     if (settings.None())
     {
-        return Name("Instrument", address);
+        return AddressName("Instrument", address);
     }
 
     char b[16];
@@ -93,25 +46,25 @@ std::string InstrumentName(uint32_t address, const EnvelopeSettings& settings)
 
 } // namespace
 
-Sf2Envelope EnvelopeFor(const DriverInfo& info, const Instrument& inst, const EnvelopeSettings& settings)
+VolumeEnvelope EnvelopeFor(const DriverInfo& info, const Instrument& inst, const EnvelopeSettings& settings)
 {
-    Sf2Envelope env;
+    VolumeEnvelope env;
 
     // The attack rises in a straight line, as a SoundFont's does, and reaches the full level after `steps` + 1 frames.
-    const uint32_t attack = std::min<uint32_t>(inst.attack, 99);
-    const uint32_t steps = settings.attack < 0x80 ? settings.attack : ((99 - attack) << 5) / 99;
+    const uint32_t steps = AttackSteps(inst.attack, settings.attack);
     if (steps > 0)
     {
         env.attack = Timecents((steps + 1) / kFrameRate);
     }
 
-    // The decay falls to the sustain level. At a sustain of 0, the driver stops the note when the decay ends.
-    const uint32_t sustain = settings.sustain < 0x80 ? uint32_t(settings.sustain) << 8 : SustainLevel(inst.sustain);
-    const int decay = settings.decay < 0x80 ? FadeEntryFrames(settings.decay) : FadeFrames(info, inst.decay);
-    if (sustain < 0x8000)
+    // The decay falls to the sustain level. Where that's below the audible level, the driver stops the note when the
+    // decay ends. An instrument's sustain above 99 counts as 99 here.
+    const uint32_t sustain = SustainLevel(std::min<uint32_t>(inst.sustain, 99), settings.sustain);
+    const int decay = FadeFrames(info, inst.decay, settings.decay);
+    if (sustain < kFullSustain)
     {
-        const double level = sustain / 32768.0;
-        if (sustain << 4 < 0x1000)
+        const double level = sustain / double(kFullSustain);
+        if (int32_t(sustain << 4) < kAudibleLevel)
         {
             env.sustain = kSilent;
             env.decay = decay ? Timecents(FadeSeconds(decay)) : kInstant;
@@ -119,12 +72,12 @@ Sf2Envelope EnvelopeFor(const DriverInfo& info, const Instrument& inst, const En
         else
         {
             // A SoundFont's decay time is for a fall of 100 dB, so it reaches the sustain level in proportion.
-            env.sustain = std::min(kSilent, int(std::lround(-200.0 * std::log10(level))));
+            env.sustain = Centibels(level);
             env.decay = decay && env.sustain > 0 ? Timecents(1000.0 / env.sustain * decay / kFrameRate) : kInstant;
         }
     }
 
-    const int release = settings.release < 0x80 ? FadeEntryFrames(settings.release) : FadeFrames(info, inst.release);
+    const int release = FadeFrames(info, inst.release, settings.release);
     if (release)
     {
         env.release = Timecents(FadeSeconds(release));
@@ -157,10 +110,8 @@ int SoundfontBuilder::InstrumentFor(uint32_t address, const EnvelopeSettings& se
     // The global zone makes velocity and controller 7 scale the level in a straight line, as the driver does. The
     // default curves square them, and these take the place of the defaults.
     sf2::Instrument si = MakeInstrument(InstrumentName(address, settings));
-    si.zones.front().modulators.push_back(
-        {sf2::kNoteOnVelocity | sf2::kNegative | sf2::kConcave, sf2::kInitialAttenuation, 480, 0, 0});
-    si.zones.front().modulators.push_back(
-        {uint16_t(sf2::kController | 7) | sf2::kNegative | sf2::kConcave, sf2::kInitialAttenuation, 480, 0, 0});
+    si.zones.front().modulators.push_back(kLinearVelocity);
+    si.zones.front().modulators.push_back(kLinearVolume);
     if (mutes_)
     {
         si.zones.front().modulators.push_back(kMute);
@@ -228,24 +179,30 @@ int SoundfontBuilder::BankFor(int bank, const EnvelopeSettings& settings)
         return found->second;
     }
 
-    // The drum bank is left for the drum channel's presets.
-    if (next_bank_ == kDrumBank)
-    {
-        next_bank_++;
-    }
+    next_bank_ = SkipDrumBank(next_bank_);
     banks_[key] = next_bank_;
 
     return next_bank_++;
 }
 
-void SoundfontBuilder::AddPreset(int bank, int program, int instrument)
+const sf2::Preset* SoundfontBuilder::FindPreset(int bank, int program) const
 {
     for (const sf2::Preset& p : file_.presets)
     {
         if (p.bank == bank && p.program == program)
         {
-            return;
+            return &p;
         }
+    }
+
+    return nullptr;
+}
+
+void SoundfontBuilder::AddPreset(int bank, int program, int instrument)
+{
+    if (FindPreset(bank, program))
+    {
+        return;
     }
 
     file_.presets.push_back(
@@ -284,7 +241,7 @@ int SoundfontBuilder::SampleFor(const Instrument& inst)
 
     // The driver's samples are signed 8-bit.
     sf2::Sample s;
-    s.name = Name("Sample", inst.start);
+    s.name = AddressName("Sample", inst.start);
     s.sample_rate = inst.rate;
     s.original_key = uint8_t(std::min<uint32_t>(inst.root_key, 127));
     const uint32_t length = inst.end - inst.start;
@@ -298,20 +255,8 @@ int SoundfontBuilder::SampleFor(const Instrument& inst)
     {
         s.loop_start = length - inst.loop_length;
         s.loop_end = length;
-        while (s.loop_end - s.loop_start < kMinLoop)
-        {
-            for (uint32_t i = 0; i < inst.loop_length; i++)
-            {
-                s.data.push_back(s.data[s.loop_start + i]);
-            }
-
-            s.loop_end += inst.loop_length;
-        }
-
-        for (uint32_t i = 0; i < kLoopGuard; i++)
-        {
-            s.data.push_back(s.data[s.loop_start + i % (s.loop_end - s.loop_start)]);
-        }
+        LengthenLoop(s);
+        AddLoopGuard(s);
     }
 
     file_.samples.push_back(s);
@@ -325,33 +270,8 @@ sf2::Zone SoundfontBuilder::ZoneFor(const Instrument& voice, const EnvelopeSetti
 {
     sf2::Zone z;
     z.generators.push_back(sf2::Generator::Range(sf2::kKeyRange, low, high));
-
-    // Envelope phases at their defaults are left out.
-    const Sf2Envelope env = EnvelopeFor(info_, voice, settings);
-    const std::pair<uint16_t, int> phases[] = {
-        {sf2::kAttackVolEnv, env.attack}, {sf2::kDecayVolEnv, env.decay}, {sf2::kReleaseVolEnv, env.release}};
-    for (const auto& [op, value] : phases)
-    {
-        if (value != kInstant)
-        {
-            z.generators.push_back(sf2::Generator::Value(op, value));
-        }
-    }
-    if (env.sustain)
-    {
-        z.generators.push_back(sf2::Generator::Value(sf2::kSustainVolEnv, env.sustain));
-    }
-
-    // A fine tune of a semitone or more goes partly into the coarse tune, since the fine tune only reaches 99 cents.
-    if (voice.fine_tune / 100)
-    {
-        z.generators.push_back(sf2::Generator::Value(sf2::kCoarseTune, std::clamp(voice.fine_tune / 100, -120, 120)));
-    }
-    if (voice.fine_tune % 100)
-    {
-        z.generators.push_back(sf2::Generator::Value(sf2::kFineTune, voice.fine_tune % 100));
-    }
-
+    AddVolumeEnvelope(z, EnvelopeFor(info_, voice, settings));
+    AddTuning(z, voice.fine_tune);
     if (fixed_pitch)
     {
         z.generators.push_back(sf2::Generator::Value(sf2::kScaleTuning, 0));

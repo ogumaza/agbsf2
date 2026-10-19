@@ -9,6 +9,10 @@
 #include <set>
 #include <tuple>
 
+#include "xsflib/bytes.h"
+
+#include "files.h"
+
 namespace agbsf2::mp2k
 {
 namespace
@@ -25,8 +29,8 @@ constexpr int kXcmdArgs[kXcmdCount] = {-1, 4, 1, -1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 
 // Maximum number of commands ScanTrack() reads per track.
 constexpr int kMaxTrackCommands = 1000000;
 
-// The size of the memory area that kCmdMemAcc reads and writes: a byte offset reaches 256 bytes.
-constexpr size_t kMemAccSize = 256;
+// Maximum number of commands DumpSong() lists per track.
+constexpr int kMaxListedCommands = 200000;
 
 // Returns true if kCmdMemAcc's conditional operation `op` jumps, for a byte `value` of the memory area and an operand
 // `operand`.
@@ -49,12 +53,138 @@ bool MemAccJumps(uint8_t op, uint8_t value, uint8_t operand)
     }
 }
 
+// Returns true if `e` is a wait: a wait command, or extended command kXcmdWait.
+bool IsWait(const Event& e)
+{
+    return (e.command >= kCmdWait && e.command <= kCmdLastWait) || (e.command == kCmdXcmd && e.arg[0] == kXcmdWait);
+}
+
+// Returns the ticks of wait `e`.
+uint64_t WaitTicks(const Event& e)
+{
+    return e.command == kCmdXcmd ? uint64_t(xsflib::LoadLe16(&e.arg[1])) : uint64_t(ClockLength(e.command - kCmdWait));
+}
+
+// A walk through a track in the order that the driver plays its commands. The walk counts the ticks of the waits and
+// follows the pattern calls and the counted repeats. The code that walks the track handles jumps, loops and the end.
+class TrackWalk
+{
+public:
+    // A command's place in the walk: its address, the number of open pattern calls, and the address that the newest
+    // call returns to.
+    using Place = std::tuple<uint32_t, int, uint32_t>;
+
+    explicit TrackWalk(uint32_t address) : address_(address)
+    {
+    }
+
+    // Decodes the command at the walk's address. Returns false if DecodeEvent() does.
+    bool Decode(const Rom& rom, Event& e) const
+    {
+        return DecodeEvent(rom, address_, running_, e);
+    }
+
+    // Moves past `e`: sets the running status, goes on to the next command and counts the ticks of a wait.
+    void Advance(const Event& e)
+    {
+        running_ = RunningStatus(e, running_);
+        address_ += e.size;
+        if (IsWait(e))
+        {
+            tick_ += WaitTicks(e);
+        }
+    }
+
+    // Calls the pattern that kCmdPatt `e` gives, after Advance(). Returns false if three calls are open already.
+    bool Call(const Event& e)
+    {
+        if (level_ >= int(stack_.size()))
+        {
+            return false;
+        }
+
+        stack_[size_t(level_++)] = address_;
+        address_ = e.target;
+
+        return true;
+    }
+
+    // Returns from a pattern at its kCmdPend. Outside a pattern, kCmdPend does nothing.
+    void Return()
+    {
+        if (level_ > 0)
+        {
+            address_ = stack_[size_t(--level_)];
+        }
+    }
+
+    // Plays kCmdRept `e`, whose count isn't 0, after Advance(): goes back to its address until the part has played
+    // count times in all.
+    void Repeat(const Event& e)
+    {
+        if (++repeats_ < e.arg[0])
+        {
+            address_ = e.target;
+        }
+        else
+        {
+            repeats_ = 0;
+        }
+    }
+
+    // Goes on from `address`.
+    void Jump(uint32_t address)
+    {
+        address_ = address;
+    }
+
+    // Returns the place of the command at `address`, with the pattern calls that are open now.
+    Place PlaceOf(uint32_t address) const
+    {
+        return std::make_tuple(address, level_, level_ ? stack_[size_t(level_ - 1)] : 0);
+    }
+
+    // Returns the place of the command at the walk's address.
+    Place Here() const
+    {
+        return PlaceOf(address_);
+    }
+
+    uint32_t Address() const
+    {
+        return address_;
+    }
+
+    uint64_t Tick() const
+    {
+        return tick_;
+    }
+
+    int Level() const
+    {
+        return level_;
+    }
+
+private:
+    uint32_t address_;
+    uint8_t running_ = 0;
+    uint64_t tick_ = 0;
+    std::array<uint32_t, 3> stack_ = {};
+    int level_ = 0;
+    int repeats_ = 0;
+};
+
 } // namespace
 
 bool EndsTrack(uint8_t command)
 {
     return command == kCmdFine || (command >= 0xB6 && command <= 0xB8) || command == 0xC6 || command == 0xC7 ||
            (command >= 0xC9 && command <= 0xCB);
+}
+
+bool EndsTrack(const Event& event)
+{
+    return EndsTrack(event.command) || (event.command == kCmdXcmd && kXcmdArgs[event.arg[0]] < 0);
 }
 
 int ClockLength(int index)
@@ -80,7 +210,7 @@ bool ReadSongHeader(const Rom& rom, uint32_t address, SongHeader& header)
     }
 
     header.voices = rom.U32(address + 4);
-    if (header.track_count > 16 || !rom.Contains(address, 8 + 4 * uint32_t(header.track_count)) ||
+    if (header.track_count > kMaxTracks || !rom.Contains(address, 8 + 4 * uint32_t(header.track_count)) ||
         !rom.Contains(header.voices, 12))
     {
         return false;
@@ -98,6 +228,16 @@ bool ReadSongHeader(const Rom& rom, uint32_t address, SongHeader& header)
     }
 
     return true;
+}
+
+bool ReadSong(const Rom& rom, const DriverInfo& info, int song, SongHeader& header)
+{
+    return ReadSongHeader(rom, SongAddress(rom, info, song), header) && header.track_count > 0;
+}
+
+int PlayedTracks(const Rom& rom, const DriverInfo& info, int song, const SongHeader& header)
+{
+    return std::min(header.track_count, SongPlayer(rom, info, song).track_count);
 }
 
 bool ReadVoice(const Rom& rom, uint32_t address, Voice& voice)
@@ -273,7 +413,7 @@ std::string DescribeEvent(const Event& e)
 
     char b[96];
     const uint8_t c = e.command;
-    if (c >= kCmdWait && c <= 0xB0)
+    if (c >= kCmdWait && c <= kCmdLastWait)
     {
         std::snprintf(b, sizeof b, "W%02d", ClockLength(c - kCmdWait));
     }
@@ -366,14 +506,10 @@ TrackLayout ScanTrack(const Rom& rom, uint32_t address)
 {
     TrackLayout layout;
     std::array<uint8_t, kMemAccSize> memory = {};
-    std::array<uint32_t, 3> stack = {};
-    int level = 0;
-    int repeats = 0;
-    uint8_t running = 0;
-    uint64_t tick = 0;
+    TrackWalk walk(address);
 
-    // The tick at which each command was first played, by its address and the patterns it was called from.
-    std::map<std::tuple<uint32_t, int, uint32_t>, uint64_t> first;
+    // The tick at which each command was first played, by its place.
+    std::map<TrackWalk::Place, uint64_t> first;
 
     // The keys of the ties that no end of tie has released yet, and the track's last key, which a note, tie or end of
     // tie without one uses.
@@ -382,37 +518,25 @@ TrackLayout ScanTrack(const Rom& rom, uint32_t address)
 
     for (int n = 0; n < kMaxTrackCommands; n++)
     {
-        const auto at = std::make_tuple(address, level, level ? stack[size_t(level - 1)] : 0);
-        first.emplace(at, tick);
+        first.emplace(walk.Here(), walk.Tick());
 
         Event e;
-        if (!DecodeEvent(rom, address, running, e) || EndsTrack(e.command))
+        if (!walk.Decode(rom, e) || EndsTrack(e))
         {
             break;
         }
 
-        running = RunningStatus(e, running);
-        address += e.size;
-        const uint8_t c = e.command;
-        if (c >= kCmdWait && c <= 0xB0)
+        walk.Advance(e);
+        if (IsWait(e))
         {
-            tick += uint64_t(ClockLength(c - kCmdWait));
             continue;
-        }
-        if (c == kCmdXcmd && e.arg[0] == kXcmdWait)
-        {
-            tick += uint64_t(e.arg[1] | (e.arg[2] << 8));
-            continue;
-        }
-        if (c == kCmdXcmd && kXcmdArgs[e.arg[0]] < 0)
-        {
-            break;
         }
 
         // A command other than a wait plays at this tick, and a note of a set length lasts its length plus its third
         // argument.
+        const uint8_t c = e.command;
         const uint64_t length = c > kCmdTie ? uint64_t(ClockLength(c - kCmdTie) + (e.args >= 3 ? e.arg[2] : 0)) : 0;
-        layout.last_command = std::max(layout.last_command, tick + length);
+        layout.last_command = std::max(layout.last_command, walk.Tick() + length);
 
         // A note, tie or end of tie can give the track a new key. An end of tie releases one of the ties on its key, as
         // the driver releases the newest note it's playing there.
@@ -431,41 +555,34 @@ TrackLayout ScanTrack(const Rom& rom, uint32_t address)
 
         if (c == kCmdPatt)
         {
-            if (level >= 3)
+            if (!walk.Call(e))
             {
                 break;
             }
-
-            stack[size_t(level++)] = address;
-            address = e.target;
         }
-        else if (c == kCmdPend && level > 0)
+        else if (c == kCmdPend)
         {
-            address = stack[size_t(--level)];
+            walk.Return();
         }
         else if (c == kCmdGoto || (c == kCmdRept && e.arg[0] == 0) ||
                  (c == kCmdMemAcc && e.args == 7 &&
                   MemAccJumps(e.arg[0], memory[e.arg[1]], e.arg[0] >= 12 ? memory[e.arg[2]] : e.arg[2])))
         {
             // An unconditional jump back to a command played before is the track's loop.
-            const auto found = first.find(std::make_tuple(e.target, level, level ? stack[size_t(level - 1)] : 0));
+            const auto found = first.find(walk.PlaceOf(e.target));
             if (c != kCmdMemAcc && found != first.end())
             {
                 layout.loops = true;
                 layout.loop_start = found->second;
-                layout.loop_end = tick;
+                layout.loop_end = walk.Tick();
                 return layout;
             }
 
-            address = e.target;
-        }
-        else if (c == kCmdRept && ++repeats < e.arg[0])
-        {
-            address = e.target;
+            walk.Jump(e.target);
         }
         else if (c == kCmdRept)
         {
-            repeats = 0;
+            walk.Repeat(e);
         }
         else if (c == kCmdMemAcc && e.arg[0] < 6)
         {
@@ -477,10 +594,97 @@ TrackLayout ScanTrack(const Rom& rom, uint32_t address)
     }
 
     // The track's end releases the notes it's still playing, which cuts a note short, or ends a tie.
-    layout.end = tick;
-    layout.last_command = ties.empty() ? std::min(layout.last_command, tick) : tick;
+    layout.end = walk.Tick();
+    layout.last_command = ties.empty() ? std::min(layout.last_command, walk.Tick()) : walk.Tick();
 
     return layout;
+}
+
+bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::string& path, std::string& error)
+{
+    SongHeader h;
+    if (!ReadSong(rom, info, song, h))
+    {
+        error = "invalid song";
+        return false;
+    }
+
+    std::string text;
+    char line[256];
+    std::snprintf(line, sizeof line,
+                  "; %s (%s) song %d\n; header 0x%08X: %d tracks, priority %u, reverb 0x%02X, voice group 0x%08X\n"
+                  "; columns: address, tick, bytes, command. Each track is listed in the order it plays, up to its "
+                  "end or the end of its first loop.\n",
+                  rom.Title().c_str(), rom.GameCode().c_str(), song, unsigned(h.address), h.track_count,
+                  unsigned(h.priority), unsigned(h.reverb), unsigned(h.voices));
+    text += line;
+
+    for (int t = 0; t < h.track_count; t++)
+    {
+        std::snprintf(line, sizeof line, "\n; ---- track %d at 0x%08X ----\n", t, unsigned(h.tracks[size_t(t)]));
+        text += line;
+
+        // Follow the track as the driver plays it, through its patterns, repeats and jumps.
+        TrackWalk walk(h.tracks[size_t(t)]);
+        std::set<TrackWalk::Place> played;
+        for (int n = 0; n < kMaxListedCommands; n++)
+        {
+            Event e;
+            if (!walk.Decode(rom, e))
+            {
+                std::snprintf(line, sizeof line, "0x%08X %8llu  %02X  (unknown command; the track stops here)\n",
+                              unsigned(walk.Address()), static_cast<unsigned long long>(walk.Tick()),
+                              rom.U8(walk.Address()));
+                text += line;
+                break;
+            }
+
+            played.insert(walk.Here());
+            const std::string bytes = HexBytes(rom, walk.Address(), std::min<uint32_t>(e.size, 8));
+            std::snprintf(line, sizeof line, "0x%08X %8llu  %-24s %s%s\n", unsigned(walk.Address()),
+                          static_cast<unsigned long long>(walk.Tick()), bytes.c_str(),
+                          std::string(size_t(2 * walk.Level()), ' ').c_str(), DescribeEvent(e).c_str());
+            text += line;
+
+            walk.Advance(e);
+            if (IsWait(e))
+            {
+                continue;
+            }
+
+            const uint8_t c = e.command;
+            if (c == kCmdPatt)
+            {
+                if (!walk.Call(e))
+                {
+                    break;
+                }
+            }
+            else if (c == kCmdPend)
+            {
+                walk.Return();
+            }
+            else if (c == kCmdRept && e.arg[0])
+            {
+                walk.Repeat(e);
+            }
+            else if (c == kCmdGoto || c == kCmdRept)
+            {
+                if (played.count(walk.PlaceOf(e.target)))
+                {
+                    break;
+                }
+
+                walk.Jump(e.target);
+            }
+            else if (EndsTrack(e))
+            {
+                break;
+            }
+        }
+    }
+
+    return WriteTextFile(path, text, error);
 }
 
 } // namespace agbsf2::mp2k

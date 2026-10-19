@@ -171,7 +171,7 @@ TrackLayout ScanTrack(const Rom& rom, uint32_t address, Format format)
         }
 
         address += e.size;
-        if (e.command == kCmdDelay1 || e.command == kCmdDelay2 || e.command == kCmdDelay3)
+        if (IsDelay(e.command))
         {
             tick += e.value;
             continue;
@@ -200,14 +200,9 @@ TrackLayout ScanTrack(const Rom& rom, uint32_t address, Format format)
     return layout;
 }
 
-bool ReadInstrument(const Rom& rom, uint32_t address, Instrument& inst)
+Instrument InstrumentAt(const Rom& rom, uint32_t address)
 {
-    inst = Instrument();
-    if (!rom.Contains(address, 68))
-    {
-        return false;
-    }
-
+    Instrument inst;
     inst.type = rom.U32(address);
     inst.loop_mode = rom.U32(address + 4);
     inst.rate = rom.U32(address + 8);
@@ -226,6 +221,18 @@ bool ReadInstrument(const Rom& rom, uint32_t address, Instrument& inst)
     inst.vibrato_rate = rom.U32(address + 60);
     inst.vibrato_depth = rom.S32(address + 64);
 
+    return inst;
+}
+
+bool ReadInstrument(const Rom& rom, uint32_t address, Instrument& inst)
+{
+    inst = Instrument();
+    if (!rom.Contains(address, 68))
+    {
+        return false;
+    }
+
+    inst = InstrumentAt(rom, address);
     return true;
 }
 

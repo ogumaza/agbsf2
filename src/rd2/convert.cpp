@@ -16,12 +16,15 @@
 #include <vector>
 
 #include "files.h"
+#include "gba.h"
 #include "midi.h"
 #include "music.h"
 #include "program.h"
+#include "psg.h"
 #include "rd2/sequencer.h"
 #include "sf2.h"
 #include "song_banks.h"
+#include "warnings.h"
 
 namespace agbsf2::rd2
 {
@@ -32,10 +35,6 @@ namespace
 // quarter note, so that a frame at the driver's tempo T is exactly T ticks long.
 constexpr uint32_t kTicksPerQuarter = 24 * kTickUnits;
 
-// The CPU cycles in a frame, and a second's.
-constexpr uint64_t kFrameCycles = 280896;
-constexpr uint64_t kSecondCycles = 16777216;
-
 // The longest conversion, in frames: about an hour.
 constexpr uint32_t kMaxFrames = 60 * 60 * 60;
 
@@ -43,43 +42,8 @@ constexpr uint32_t kMaxFrames = 60 * 60 * 60;
 // microseconds a tempo event can give it.
 constexpr int kMinMidiTempo = 4;
 
-// The widest pitch bend range the MIDI files set, in semitones.
-constexpr int kMaxBendRange = 96;
-
 // A bend that no pitch has, for a note whose bend is unknown when two passes are compared.
 constexpr double kNoBend = 1e9;
-
-// The MIDI channel that General MIDI players keep for drums, which the tracks leave out.
-constexpr int kDrumChannel = 9;
-
-// The pan that plays a voice on both sides alike.
-constexpr int kCentre = 0x40;
-
-// The pitch index that plays a sample at its own rate, a square at middle C and the wave at C3.
-constexpr int kUnityIndex = 0x30;
-
-// The highest pitch index the driver reads, one past its tables.
-constexpr int kTopIndex = 0x78;
-
-std::string TwoDigits(int n)
-{
-    char b[16];
-    std::snprintf(b, sizeof b, "%02d", n);
-
-    return b;
-}
-
-// Returns the seconds that `frames` frames take.
-double FrameSeconds(double frames)
-{
-    return frames * double(kFrameCycles) / double(kSecondCycles);
-}
-
-// Returns the MIDI channel of the player's track `number`.
-int ChannelOf(int number)
-{
-    return number < kDrumChannel ? number : number + 1;
-}
 
 // Returns how far a voice's pitch in the frame is from its note's, in semitones. A square or wave voice's pitch is a
 // frequency setting, whose period is 2048 less the setting. A noise voice has none.
@@ -94,7 +58,7 @@ double Semitones(const Voice& v)
         return 0.0;
     }
 
-    return 12.0 * std::log2((2048.0 - v.note_pitch) / (2048.0 - v.pitch));
+    return PsgSemitones(int(v.note_pitch), int(v.pitch));
 }
 
 // A frame's results for the conversion.
@@ -111,22 +75,13 @@ struct TimedEvent
     uint32_t frame = 0;
 };
 
-// The stretch of a sequence that the conversion covers, in MIDI ticks.
-struct Plan
-{
-    bool loops = false;
-    uint64_t loop_start = 0; // the latest of the looping tracks' loop starts and the other tracks' last commands
-    uint64_t loop_end = 0;   // the loop start plus the length LoopLength() gives for the tracks' loops
-    uint64_t end = 0;
-};
-
 // The model's output for the stretch of a sequence that the plan covers, and its timing in the MIDI file.
 struct Simulation
 {
     std::vector<FrameData> frames;
     std::vector<TimedEvent> events;
     std::vector<uint64_t> frame_ticks; // the MIDI tick each frame starts at, and the one after the last frame
-    Plan plan;
+    SongPlan plan;                     // in MIDI ticks
     bool frame_timing = false; // each event at the start of the frame the driver plays it in, rather than its time
     int volume2 = 0x80;        // the player's second volume, as the game sets it for the sequence
     std::vector<std::string> warnings;
@@ -152,152 +107,123 @@ uint64_t TimeTick(const Simulation& sim, uint64_t units)
     return it == sim.frame_ticks.end() ? sim.frame_ticks.back() : *it;
 }
 
-// Runs the model until every track has looped or ended and the sequence has played its loop `loops` times. A track's
-// units are the MIDI file's ticks: each frame lasts the tempo's units, and each command comes at its track's time, or
-// with `frame_timing`, at the start of the frame the driver plays it in. With `second`, the loop starts at the
-// sequence's second pass through it, and the sequence plays the first pass before it.
-Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops, bool frame_timing, bool second)
+// The plan's record of a track: its first loop, its count of loops, its end, and the time by which it has read its last
+// command and its notes have ended. The track's end can release its notes before then. A track that F8 starts again
+// doesn't hold the plan open.
+struct TrackPlan
 {
-    Simulation sim;
-    sim.frame_timing = frame_timing;
-    Sequencer seq(rom, info, song);
-    sim.frame_ticks.push_back(0);
-
-    // Each track's first loop, its count of loops, its end, and the time by which it has read its last command and its
-    // notes have ended, unless its end released them first. A track that F8 starts again doesn't hold the plan open.
-    struct TrackPlan
-    {
-        bool started = false;
-        bool restarted = false;
-        bool ended = false;
-        int loops = 0;
-        uint64_t loop_start = 0;
-        uint64_t loop_end = 0;
-        uint64_t end = 0;
-        uint64_t last_command = 0;
-    };
-    std::array<TrackPlan, kPlayerTracks> tracks;
-    bool planned = false;
-    bool looping = false;
+    bool started = false;
+    bool restarted = false;
+    bool ended = false;
+    int loops = 0;
     uint64_t loop_start = 0;
-    uint64_t loop_length = 0;
-    bool finished = false; // the sequence played what the plan requires, or ended
-    for (uint32_t f = 0; f < kMaxFrames && seq.Valid(); f++)
+    uint64_t loop_end = 0;
+    uint64_t end = 0;
+    uint64_t last_command = 0;
+};
+
+using TrackPlans = std::array<TrackPlan, kPlayerTracks>;
+
+// Returns the frame's results, after the model's step: the tempo, and the bend of each track's newest voice.
+FrameData RecordFrame(const Sequencer& seq)
+{
+    FrameData d;
+    d.tempo = seq.FrameTempo();
+    d.bend.fill(std::numeric_limits<double>::quiet_NaN());
+    for (int n = 0; n < kPlayerTracks; n++)
     {
-        seq.Step();
-        if (f == 0)
+        const int slot = seq.GetPlayer().tracks[size_t(n)];
+        if (slot < 0)
         {
-            sim.volume2 = seq.GetPlayer().volume2;
+            continue;
         }
 
-        FrameData d;
-        d.tempo = std::max(0, int(seq.GetPlayer().tempo) + seq.GetPlayer().tempo_adjust);
-        d.bend.fill(std::numeric_limits<double>::quiet_NaN());
-        for (int n = 0; n < kPlayerTracks; n++)
+        const int v = seq.Tracks()[size_t(slot)].voices;
+        if (v >= 0 && seq.Voices()[size_t(v)].state == kVoicePlaying)
         {
-            const int slot = seq.GetPlayer().tracks[size_t(n)];
-            if (slot < 0)
-            {
-                continue;
-            }
-
-            tracks[size_t(n)].started = true;
-            const int v = seq.Tracks()[size_t(slot)].voices;
-            if (v >= 0 && seq.Voices()[size_t(v)].state == 1)
-            {
-                d.bend[size_t(n)] = Semitones(seq.Voices()[size_t(v)]);
-            }
-        }
-        sim.frames.push_back(d);
-        sim.frame_ticks.push_back(seq.Elapsed());
-
-        for (const Event& e : seq.Events())
-        {
-            sim.events.push_back({e, f});
-            if (e.track < 0 || e.track >= kPlayerTracks)
-            {
-                continue;
-            }
-
-            TrackPlan& t = tracks[size_t(e.track)];
-            t.started = true;
-            if (e.phase == Event::kCommands && e.kind != Event::kTrackEnd)
-            {
-                t.last_command = std::max(t.last_command, e.units + (e.kind == Event::kNote ? e.length : 0));
-            }
-
-            if (e.kind == Event::kJump && e.target_units != ~uint64_t(0) && e.target_units < e.units)
-            {
-                if (++t.loops == 1)
-                {
-                    t.loop_start = e.target_units;
-                    t.loop_end = e.units;
-                }
-            }
-            else if (e.kind == Event::kTrackEnd)
-            {
-                t.ended = true;
-                t.end = e.units;
-            }
-            else if (e.kind == Event::kTrackStart && e.value < uint32_t(kPlayerTracks))
-            {
-                tracks[e.value].started = true;
-                tracks[e.value].restarted = true;
-            }
-        }
-
-        // Once every track has looped or ended, the loop is known. The sequence then continues for the required number
-        // of passes. Tracks may have different loop points and lengths. The overall loop starts once all looping tracks
-        // have entered their loops and the others have read their last command and released their notes. It ends when
-        // all looping tracks return to their loop starts, subject to the length limit in LoopLength().
-        if (!planned)
-        {
-            planned = true;
-            loop_start = 0;
-            uint64_t last_command = 0;
-            std::vector<uint64_t> lengths;
-            for (const TrackPlan& t : tracks)
-            {
-                if (!t.started || t.restarted)
-                {
-                    continue;
-                }
-
-                planned = planned && (t.loops > 0 || t.ended);
-                if (t.loops > 0)
-                {
-                    loop_start = std::max(loop_start, t.loop_start);
-                    lengths.push_back(t.loop_end - t.loop_start);
-                }
-                else
-                {
-                    last_command = std::max(last_command, std::min(t.last_command, t.end));
-                }
-            }
-
-            looping = planned && !lengths.empty();
-            if (looping)
-            {
-                loop_length = LoopLength(lengths);
-                loop_start = std::max(loop_start, last_command) + (second ? loop_length : 0);
-            }
-        }
-        if ((planned && (!looping || sim.frame_ticks[f] >= loop_start + uint64_t(loops) * loop_length)) || seq.Ended())
-        {
-            finished = true;
-            break;
+            d.bend[size_t(n)] = Semitones(seq.Voices()[size_t(v)]);
         }
     }
 
-    // The loop, and the end: the last pass through the loop, or the last track's end if the sequence doesn't loop. A
-    // sequence that the model gave up on ends where it stopped.
-    Plan& plan = sim.plan;
-    if (looping)
+    return d;
+}
+
+// Updates the tracks' plans from one of the model's events.
+void UpdateTrackPlans(const Event& e, TrackPlans& tracks)
+{
+    if (e.track < 0 || e.track >= kPlayerTracks)
     {
-        plan.loops = true;
-        plan.loop_start = loop_start;
-        plan.loop_end = loop_start + loop_length;
-        plan.end = std::min(loop_start + uint64_t(loops) * loop_length, sim.frame_ticks.back());
+        return;
+    }
+
+    TrackPlan& t = tracks[size_t(e.track)];
+    t.started = true;
+    if (e.phase == Event::kCommands && e.kind != Event::kTrackEnd)
+    {
+        t.last_command = std::max(t.last_command, e.units + (e.kind == Event::kNote ? e.length : 0));
+    }
+
+    if (e.kind == Event::kJump && e.target_units != kUnreadTarget && e.target_units < e.units)
+    {
+        if (++t.loops == 1)
+        {
+            t.loop_start = e.target_units;
+            t.loop_end = e.units;
+        }
+    }
+    else if (e.kind == Event::kTrackEnd)
+    {
+        t.ended = true;
+        t.end = e.units;
+    }
+    else if (e.kind == Event::kTrackStart && e.value < uint32_t(kPlayerTracks))
+    {
+        tracks[e.value].started = true;
+        tracks[e.value].restarted = true;
+    }
+}
+
+// Returns PlanSong()'s plan for the sequence, in units, once every track that counts has looped or ended. Returns
+// nothing before then. A track counts once it has started, unless F8 started it again. A track without a loop has read
+// its last command and released its notes by its end at the latest. With `second`, the loop starts at the sequence's
+// second pass through it.
+std::optional<SongPlan> PlanLoop(const TrackPlans& tracks, int loops, bool second)
+{
+    std::vector<TrackLayout> layouts;
+    for (const TrackPlan& t : tracks)
+    {
+        if (!t.started || t.restarted)
+        {
+            continue;
+        }
+        if (t.loops == 0 && !t.ended)
+        {
+            return std::nullopt;
+        }
+
+        TrackLayout layout;
+        layout.loops = t.loops > 0;
+        layout.loop_start = t.loop_start;
+        layout.loop_end = t.loop_end;
+        layout.end = t.end;
+        layout.last_command = std::min(t.last_command, t.end);
+        layouts.push_back(layout);
+    }
+
+    return PlanSong(layouts, loops, second);
+}
+
+// Returns the stretch of the sequence that the conversion covers, from PlanLoop()'s plan if it made one. A looping plan
+// ends after its last pass through the loop, or at `stopped` if the model stopped first. Without a looping plan, the
+// sequence ends at the latest of the tracks' ends. The tracks that F8 started again count too. If no track ended, the
+// sequence ends at `stopped`.
+SongPlan FinishPlan(const std::optional<SongPlan>& loop, const TrackPlans& tracks, uint64_t stopped)
+{
+    SongPlan plan;
+    if (loop && loop->loops)
+    {
+        plan = *loop;
+        plan.end = std::min(plan.end, stopped);
     }
     else
     {
@@ -311,23 +237,84 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops,
     }
     if (plan.end == 0)
     {
-        plan.end = sim.frame_ticks.back();
+        plan.end = stopped;
     }
 
-    sim.warnings = seq.Warnings();
-    if (!finished && seq.Valid() && sim.frames.size() == kMaxFrames)
+    return plan;
+}
+
+// Returns the conversion's warnings: the model's, then a cut-off after an hour, then a tempo too slow for the MIDI
+// file.
+std::vector<std::string> SimulationWarnings(const Sequencer& seq, const std::vector<FrameData>& frames, bool finished)
+{
+    std::vector<std::string> warnings = seq.Warnings();
+    if (!finished && seq.Valid() && frames.size() == kMaxFrames)
     {
-        sim.warnings.push_back("the sequence was cut off after an hour");
+        warnings.push_back("the sequence was cut off after an hour");
     }
-    for (const FrameData& d : sim.frames)
+    for (const FrameData& d : frames)
     {
         if (d.tempo < kMinMidiTempo)
         {
-            sim.warnings.push_back("the tempo drops below " + std::to_string(kMinMidiTempo) +
-                                   ", which the MIDI file plays at " + std::to_string(kMinMidiTempo));
+            warnings.push_back("the tempo drops below " + std::to_string(kMinMidiTempo) +
+                               ", which the MIDI file plays at " + std::to_string(kMinMidiTempo));
             break;
         }
     }
+
+    return warnings;
+}
+
+// Runs the model until every track has looped or ended and the sequence has played its loop `loops` times. A track's
+// units are the MIDI file's ticks: each frame lasts the tempo's units, and each command comes at its track's time, or
+// with `frame_timing`, at the start of the frame the driver plays it in. With `second`, the loop starts at the
+// sequence's second pass through it, and the sequence plays the first pass before it.
+Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops, bool frame_timing, bool second)
+{
+    Simulation sim;
+    sim.frame_timing = frame_timing;
+    Sequencer seq(rom, info, song);
+    sim.frame_ticks.push_back(0);
+
+    TrackPlans tracks;
+    std::optional<SongPlan> loop;
+    bool finished = false; // the sequence played what the plan requires, or ended
+    for (uint32_t f = 0; f < kMaxFrames && seq.Valid(); f++)
+    {
+        seq.Step();
+        if (f == 0)
+        {
+            sim.volume2 = seq.GetPlayer().volume2;
+        }
+
+        sim.frames.push_back(RecordFrame(seq));
+        sim.frame_ticks.push_back(seq.Elapsed());
+        for (int n = 0; n < kPlayerTracks; n++)
+        {
+            if (seq.GetPlayer().tracks[size_t(n)] >= 0)
+            {
+                tracks[size_t(n)].started = true;
+            }
+        }
+        for (const Event& e : seq.Events())
+        {
+            sim.events.push_back({e, f});
+            UpdateTrackPlans(e, tracks);
+        }
+
+        if (!loop)
+        {
+            loop = PlanLoop(tracks, loops, second);
+        }
+        if ((loop && (!loop->loops || sim.frame_ticks[f] >= loop->end)) || seq.Ended())
+        {
+            finished = true;
+            break;
+        }
+    }
+
+    sim.plan = FinishPlan(loop, tracks, sim.frame_ticks.back());
+    sim.warnings = SimulationWarnings(seq, sim.frames, finished);
 
     return sim;
 }
@@ -350,25 +337,6 @@ std::vector<std::pair<uint64_t, int>> TempoMap(const Simulation& sim)
     }
 
     return tempos;
-}
-
-// Returns the seconds from the start to MIDI tick `tick`.
-double TickSeconds(const Simulation& sim, uint64_t tick)
-{
-    const std::vector<uint64_t>& starts = sim.frame_ticks;
-    const size_t f = size_t(std::upper_bound(starts.begin(), starts.end(), tick) - starts.begin()) - 1;
-    const double into = f + 1 < starts.size() && starts[f + 1] > starts[f]
-                            ? double(tick - starts[f]) / double(starts[f + 1] - starts[f])
-                            : 0.0;
-    return FrameSeconds(double(f) + into);
-}
-
-// Returns the microseconds of a quarter note at the driver's tempo `tempo`.
-uint32_t QuarterMicros(int tempo)
-{
-    constexpr uint64_t kNumerator = uint64_t(kTicksPerQuarter) * kFrameCycles * 1000000;
-    const uint64_t denominator = uint64_t(tempo) * kSecondCycles;
-    return uint32_t((kNumerator + denominator / 2) / denominator);
 }
 
 // The sound a SoundFont zone plays for a key.
@@ -421,7 +389,7 @@ struct Program
 class NoteMaker
 {
 public:
-    NoteMaker(const Rom& rom, const DriverInfo& info, const Simulation& sim, uint16_t track_mask)
+    NoteMaker(const Rom& rom, const DriverInfo& info, const Simulation& sim, uint32_t track_mask)
         : rom_(rom), info_(info), sim_(sim), mask_(track_mask)
     {
     }
@@ -531,36 +499,66 @@ private:
     // wave's pitch, or a noise voice's note. Returns -1 for a note that can't be converted.
     int ProgramOf(const Event& e, int& key)
     {
-        // The driver plays a note that its instrument has no region for from the bank's table of offsets, which in
-        // Super Mario Advance 2 holds the level at 0 and reads the sample from past the end of its sample set's table.
         const Lookup& lk = e.lookup;
         if (lk.missing)
         {
-            const uint32_t base = info_.banks + rom_.U32(info_.banks + 4 * uint32_t(e.bank));
-            const bool none = rom_.U16(base + 2 * uint32_t(e.instrument)) == 0;
-            char text[112];
-            std::snprintf(text, sizeof text,
-                          none ? "instrument %u isn't in bank %u, so its notes are left out"
-                               : "instrument %u of bank %u has no region for some of its notes, which are left out",
-                          unsigned(e.instrument), unsigned(e.bank));
-            if (std::find(warnings_.begin(), warnings_.end(), text) == warnings_.end())
-            {
-                warnings_.push_back(text);
-            }
+            WarnMissing(e);
             return -1;
         }
 
-        const uint32_t region = lk.region;
-        const uint8_t tuning = region ? rom_.U8(region + 7) : uint8_t(kUnityIndex);
-        const uint8_t note = lk.drum || lk.key_sample ? uint8_t(kUnityIndex) : e.key;
-        const int raw = int16_t(uint16_t(note + kUnityIndex - tuning));
-        const int index = std::clamp(raw, 0, kTopIndex);
-        const bool fixed = lk.drum || lk.key_sample;
+        const std::optional<ZoneSound> z = ZoneFor(e, key);
+        if (!z)
+        {
+            return -1;
+        }
+        if (key < 0 || key > 127)
+        {
+            warnings_.push_back("a note's key is outside MIDI's range, so it's left out");
+            return -1;
+        }
 
+        // A sample instrument without drums or a sample for each key gets a zone for every key.
+        const bool fill = e.type == kSampleType && !lk.drum && !lk.key_sample;
+        const size_t p = FindProgram(e.bank, e.instrument, fill);
+        programs_[p].keys.emplace(key, *z);
+
+        return int(p);
+    }
+
+    // Warns that a note's instrument has no region for the note. Each warning appears once. The driver plays such a
+    // note from the bank's table of offsets. In Super Mario Advance 2, that table read as a region gives a level of 0,
+    // and a sample from past the end of the sample set's table.
+    void WarnMissing(const Event& e)
+    {
+        const uint32_t base = BankAddress(rom_, info_, e.bank);
+        const bool none = rom_.U16(base + 2 * uint32_t(e.instrument)) == 0;
+        char text[112];
+        std::snprintf(text, sizeof text,
+                      none ? "instrument %u isn't in bank %u, so its notes are left out"
+                           : "instrument %u of bank %u has no region for some of its notes, which are left out",
+                      unsigned(e.instrument), unsigned(e.bank));
+        WarnOnce(warnings_, text);
+    }
+
+    // Returns the zone that plays a note, and sets the note's key. Returns nothing for a voice of a type that the
+    // conversion doesn't handle.
+    std::optional<ZoneSound> ZoneFor(const Event& e, int& key) const
+    {
+        const Lookup& lk = e.lookup;
+        const bool fixed = lk.drum || lk.key_sample;
+        if (e.type == kSampleType && !fixed)
+        {
+            key = e.key;
+            return SampleZone(e.sample, lk);
+        }
+
+        const uint32_t region = lk.region;
+        const uint8_t tuning = RegionTuning(rom_, region);
+        const int index = PitchIndex(fixed ? kFixedNote : e.key, tuning);
         ZoneSound z;
         z.type = e.type;
         z.envelope = lk.envelope;
-        z.release = region ? rom_.U8(region + 6) : 0;
+        z.release = RegionRelease(rom_, region);
         z.own_pan = lk.drum;
         if (lk.drum && lk.drum_pan != kCentre)
         {
@@ -570,34 +568,18 @@ private:
         switch (e.type)
         {
         case kSampleType:
+            // A drum or an instrument with a sample for each key plays the sample at the region's pitch.
             z.sound = e.sample;
             key = e.key;
-            if (fixed)
-            {
-                z.root = key;
-                z.coarse = index - kUnityIndex;
-            }
-            else
-            {
-                z.root = std::clamp(int(tuning), 0, 127);
-                z.coarse = z.root - tuning;
-            }
+            z.root = key;
+            z.coarse = index - kUnityIndex;
             break;
 
         case kSquare1Type:
         case kSquare2Type:
-            {
-                // The duty the voice settles on: a table's last entry. The driver steps through the others, a frame
-                // each, and holds the last.
-                uint32_t duty = e.psg & 0xFF;
-                if (region && (rom_.U8(region + 1) & 1))
-                {
-                    duty = rom_.U8(e.psg + 1 + rom_.U16(e.psg));
-                }
-                z.sound = duty & 3;
-                key = index + 12;
-                break;
-            }
+            z.sound = SettledDuty(e) & 3u;
+            key = index + 12;
+            break;
 
         case kWaveType:
             z.sound = e.psg;
@@ -608,10 +590,9 @@ private:
 
         case kNoiseType:
             {
-                // The width, as for a square's duty, from the last entry of a table.
-                uint8_t nr43 = rom_.U8(info_.noise_table + uint32_t(std::min(index, kTopIndex - 1)));
-                const bool table = region && (rom_.U8(region + 1) & 1);
-                if ((table ? rom_.U8(e.psg + 1 + rom_.U16(e.psg)) : uint8_t(e.psg)) != 0)
+                // A width that isn't 0 sets NR43's bit 3.
+                uint8_t nr43 = NoiseTableEntry(rom_, info_, uint32_t(index));
+                if (SettledDuty(e) != 0)
                 {
                     nr43 |= 8;
                 }
@@ -622,32 +603,52 @@ private:
             }
 
         default:
-            return -1;
-        }
-        if (key < 0 || key > 127)
-        {
-            warnings_.push_back("a note's key is outside MIDI's range, so it's left out");
-            return -1;
+            return std::nullopt;
         }
 
-        // The program for the instrument, in the order the sequence first plays them.
+        return z;
+    }
+
+    // Returns the duty or width that a square or noise voice settles on: the low byte of `e.psg`, or a table's last
+    // entry. The driver steps through the table's other entries, a frame each, and holds the last.
+    uint8_t SettledDuty(const Event& e) const
+    {
+        return HasPsgTable(rom_, e.lookup.region) ? LastPsgTableEntry(rom_, e.psg) : uint8_t(e.psg);
+    }
+
+    // Returns the zone of a sample region that plays `sample` at the region's tuning. The regions of drums, and of
+    // instruments with a sample for each key, play at a fixed pitch instead.
+    ZoneSound SampleZone(uint32_t sample, const Lookup& lk) const
+    {
+        const uint8_t tuning = RegionTuning(rom_, lk.region);
+        ZoneSound z;
+        z.sound = sample;
+        z.envelope = lk.envelope;
+        z.release = RegionRelease(rom_, lk.region);
+        z.root = std::clamp(int(tuning), 0, 127);
+        z.coarse = z.root - tuning;
+        return z;
+    }
+
+    // Returns the index of the program for an instrument of a bank, after adding the program if it's new. The programs
+    // come in the order the sequence first plays them. A new program gets a zone for every key if `fill` is set.
+    size_t FindProgram(uint16_t bank, uint16_t instrument, bool fill)
+    {
         size_t p = 0;
-        while (p < programs_.size() && (programs_[p].bank != e.bank || programs_[p].instrument != e.instrument))
+        while (p < programs_.size() && (programs_[p].bank != bank || programs_[p].instrument != instrument))
         {
             p++;
         }
         if (p == programs_.size())
         {
-            programs_.push_back({e.bank, e.instrument, {}});
-            if (e.type == kSampleType && !fixed)
+            programs_.push_back({bank, instrument, {}});
+            if (fill)
             {
                 FillKeys(programs_.back());
             }
         }
 
-        programs_[p].keys.emplace(key, z);
-
-        return int(p);
+        return p;
     }
 
     // Gives a sample instrument without drums or a sample for each key a zone for every key, from its regions, so that
@@ -657,26 +658,21 @@ private:
         for (int key = 0; key < 128; key++)
         {
             const Lookup lk = LookUpInstrument(rom_, info_, program.bank, program.instrument, uint8_t(key));
-            if (!lk.found || !lk.region || lk.missing || lk.drum || lk.key_sample || rom_.U8(lk.region) != kSampleType)
+            if (!lk.found || !lk.region || lk.missing || lk.drum || lk.key_sample ||
+                RegionType(rom_, lk.region) != kSampleType)
             {
                 continue;
             }
 
-            const uint8_t tuning = rom_.U8(lk.region + 7);
-            ZoneSound z;
-            z.sound = SampleAddress(rom_, info_, program.bank, rom_.U16(lk.region + 2));
-            z.envelope = lk.envelope;
-            z.release = rom_.U8(lk.region + 6);
-            z.root = std::clamp(int(tuning), 0, 127);
-            z.coarse = z.root - tuning;
-            program.keys.emplace(key, z);
+            const uint32_t sample = SampleAddress(rom_, info_, program.bank, rom_.U16(lk.region + 2));
+            program.keys.emplace(key, SampleZone(sample, lk));
         }
     }
 
     const Rom& rom_;
     const DriverInfo& info_;
     const Simulation& sim_;
-    uint16_t mask_;
+    uint32_t mask_;
     std::vector<Program> programs_;
     std::vector<std::string> warnings_;
 };
@@ -752,9 +748,11 @@ std::vector<std::string> AddPresets(const Rom& rom, SoundfontBuilder& sf, const 
                 sf2::Generator::Value(sf2::kSampleModes, Looped(sf.File().samples[size_t(sample)]) ? 1 : 0));
             zone.generators.push_back(sf2::Generator::Value(sf2::kSampleId, sample));
 
-            const bool psg = z.type == kSquare1Type || z.type == kSquare2Type || z.type == kNoiseType;
-            const Sf2Envelope env =
-                z.type == kWaveType ? WaveEnvelope(z.release) : EnvelopeFor(rom, z.envelope, z.release, psg);
+            // A square's or noise's release is the PSG's envelope. A sample's or the wave's takes a share of its level
+            // off each frame.
+            const bool psg_release = z.type == kSquare1Type || z.type == kSquare2Type || z.type == kNoiseType;
+            const int release = psg_release ? PsgRelease(z.release) : SampleRelease(z.release);
+            const Sf2Envelope env = z.type == kWaveType ? WaveEnvelope(release) : EnvelopeFor(rom, z.envelope, release);
             AddEnvelope(zone, env);
             zones.push_back(zone);
         }
@@ -767,30 +765,21 @@ std::vector<std::string> AddPresets(const Rom& rom, SoundfontBuilder& sf, const 
     return warnings;
 }
 
-// Returns the pitch bend value for `bend` semitones with a bend range of `range`.
-int BendValue(double bend, int range)
-{
-    return std::clamp(8192 + int(std::lround(bend / range * 8192)), 0, 16383);
-}
-
 // Returns a track's levels on each side (full scale 128) for a voice at full velocity and envelope, from its pan and
-// volume and the player's volumes, as the driver works out a sample voice's. A Link to the Past's revision gives the
-// voice a level of 190 at most at the player's default second volume, 0x80, splits it between the sides in 256ths and
-// divides the mix by 128. The Super Mario Advance 2 revision has no second volume. It gives the voice 127 at most,
-// splits it in 128ths and divides each voice's points by 256. The Super Mario Advance 3 revision is A Link to the
-// Past's with two thirds of the level.
+// volume and the player's volumes. The driver works out a sample voice's levels in the same way. The revision's
+// volume_scale and volume_shift turn the voice's level into its volume. With the player's second volume at its
+// default, 0x80, the volume reaches 190 at most in A Link to the Past's revision and 126 at most in the others. The
+// Super Mario Advance 2 revision leaves out the player's second volume. That revision's mixer splits the volume
+// between the sides in 128ths and divides each voice's points by 256. The other mixers split it in 256ths and divide
+// the mix by 128. Both ways give the same levels.
 std::pair<double, double> TrackLevels(Revision revision, int pan, int volume, int player_volume, int player_volume2)
 {
+    const RevisionTraits& traits = TraitsOf(revision);
     pan = std::clamp(pan, 0, 127);
-    if (revision == Revision::kSuperMarioAdvance2)
-    {
-        const double level = 127 * (player_volume / 128.0) * (volume / 128.0) * (32767.0 / 32768.0);
-        return {(127 - pan) * level / 128 * 127 / 256, pan * level / 128 * 127 / 256};
-    }
 
-    const double scale = revision == Revision::kSuperMarioAdvance3 ? 2.0 : 3.0;
-    const double level =
-        scale * 127 * (player_volume / 128.0) * (player_volume2 / 128.0) * (volume / 256.0) * (32767.0 / 32768.0);
+    const double scale = double(traits.volume_scale) * 512.0 / double(1u << traits.volume_shift);
+    const double second = traits.player_volume ? player_volume2 / 128.0 : 1.0;
+    const double level = scale * 127 * (player_volume / 128.0) * second * (volume / 256.0) * (32767.0 / 32768.0);
     return {(127 - pan) * level / 256 * 127 / 128, pan * level / 256 * 127 / 128};
 }
 
@@ -849,7 +838,7 @@ std::array<std::vector<LevelChange>, kPlayerTracks> TrackChanges(const Simulatio
             levels[e.value] = levels[size_t(e.track)];
             changed.push_back(int(e.value));
         }
-        else if (e.kind == Event::kVolume)
+        else if (e.kind == Event::kPlayerVolume)
         {
             for (int n = 0; n < kPlayerTracks; n++)
             {
@@ -1026,7 +1015,7 @@ bool FirstPassRepeats(const Rom& rom, const DriverInfo& info, const Simulation& 
 {
     NoteMaker maker(rom, info, sim, 0xFFFF);
     const std::array<std::vector<LevelChange>, kPlayerTracks> changes = TrackChanges(sim);
-    const Plan& plan = sim.plan;
+    const SongPlan& plan = sim.plan;
     PassComparison passes(plan.loop_start, plan.loop_end - plan.loop_start);
     for (const Note& n : maker.Make())
     {
@@ -1061,7 +1050,7 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
                std::string& error)
 {
     constexpr uint16_t kDivision = kTicksPerQuarter;
-    const Plan& plan = sim.plan;
+    const SongPlan& plan = sim.plan;
     const uint32_t end = uint32_t(TimeTick(sim, plan.end));
     MidiFile midi(kDivision);
 
@@ -1071,7 +1060,7 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
     conductor.TimeSignature(0, 4, 2);
     for (const auto& [tick, tempo] : TempoMap(sim))
     {
-        conductor.Tempo(uint32_t(tick), QuarterMicros(tempo));
+        conductor.Tempo(uint32_t(tick), QuarterMicros(kTicksPerQuarter, uint64_t(tempo)));
     }
     const uint64_t loop_start = TimeTick(sim, plan.loop_start);
     if (plan.loops)
@@ -1100,7 +1089,7 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
             continue;
         }
 
-        const int c = ChannelOf(n);
+        const int c = MelodicChannel(n);
         MidiTrack& mt = midi.AddTrack();
         mt.Name("Track " + std::to_string(n));
         mt.SetEnd(end);
@@ -1114,7 +1103,7 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
                 widest = std::max(widest, std::fabs(d.bend[size_t(n)]));
             }
         }
-        const int range = widest > 0.005 ? std::clamp(int(std::ceil(widest - 1e-9)), 2, kMaxBendRange) : 0;
+        const int range = BendRangeFor(widest, kSmallBend);
 
         const int program = list[0]->program;
         mt.Bank(0, c, slots[size_t(program)].bank);
@@ -1137,29 +1126,29 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
 }
 
 // Converts a sequence, writing its files if `write` is set.
-SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertOptions& opt, SoundfontBuilder* shared,
-                bool write)
+SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings,
+               SoundfontBuilder* shared, bool write)
 {
-    SongSummary sum;
+    SongReport report;
     if (song < 0 || song >= int(info.sequence_addresses.size()))
     {
-        sum.warnings.push_back("there's no such sequence");
-        return sum;
+        report.warnings.push_back("there's no such sequence");
+        return report;
     }
 
     // The marked loop starts at the sequence's second pass if its first plays unlike it, as when the tracks come back
     // to their loops with the pan or volume that the loop's end left them. The passes are compared on the beat, as the
     // default MIDI file plays them, so frame timing moves the same loops.
-    Simulation sim = Simulate(rom, info, song, opt.loops, opt.frame_timing, false);
+    Simulation sim = Simulate(rom, info, song, settings.loops, settings.frame_timing, false);
     if (sim.plan.loops && !FirstPassRepeats(rom, info, Simulate(rom, info, song, 2, false, false)))
     {
-        sim = Simulate(rom, info, song, opt.loops, opt.frame_timing, true);
+        sim = Simulate(rom, info, song, settings.loops, settings.frame_timing, true);
     }
-    sum.warnings = sim.warnings;
+    report.warnings = sim.warnings;
 
-    NoteMaker maker(rom, info, sim, opt.track_mask);
+    NoteMaker maker(rom, info, sim, settings.track_mask);
     const std::vector<Note> notes = maker.Make();
-    sum.warnings.insert(sum.warnings.end(), maker.Warnings().begin(), maker.Warnings().end());
+    report.warnings.insert(report.warnings.end(), maker.Warnings().begin(), maker.Warnings().end());
 
     std::array<bool, kPlayerTracks> played = {};
     for (const Note& n : notes)
@@ -1168,86 +1157,86 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
     }
     for (bool p : played)
     {
-        sum.tracks += p ? 1 : 0;
+        report.tracks += p ? 1 : 0;
     }
 
-    sum.seconds = TickSeconds(sim, sim.plan.end);
+    report.seconds = TickSeconds(sim.frame_ticks, sim.plan.end);
     if (sim.plan.loops)
     {
-        sum.loop_start = TickSeconds(sim, sim.plan.loop_start);
-        sum.loop_end = TickSeconds(sim, sim.plan.loop_end);
+        report.loop_start = TickSeconds(sim.frame_ticks, sim.plan.loop_start);
+        report.loop_end = TickSeconds(sim.frame_ticks, sim.plan.loop_end);
     }
-    sum.bpm = 60.0 / FrameSeconds(double(kTicksPerQuarter) / TempoMap(sim).front().second);
+    report.bpm = 60.0 / FrameSeconds(double(kTicksPerQuarter) / TempoMap(sim).front().second);
 
-    sum.silent = sum.tracks == 0;
-    if (sum.silent || !write)
+    report.silent = report.tracks == 0;
+    if (report.silent || !write)
     {
-        sum.ok = true;
-        return sum;
+        report.ok = true;
+        return report;
     }
 
     // The SoundFont's presets, in the sequence's file or the shared one, in the banks and programs that it gives the
     // sequence.
+    // In a SoundFont for this sequence alone, the presets go in sequence 0's banks and programs.
     SoundfontBuilder own(rom, PsgShare(info.revision));
     SoundfontBuilder& sf = shared ? *shared : own;
     const int count = int(maker.Programs().size());
-    const std::vector<BankProgram> slots = sf.Banks().Place(opt.bank, count);
+    const std::vector<BankProgram> slots = sf.Banks().Place(shared ? song : 0, count);
     if (int(slots.size()) < count)
     {
-        sum.warnings.push_back("needs " + std::to_string(count) +
-                               " presets, more than the SoundFont's banks have free" +
-                               (shared ? "; convert the sequence without --single-sf2" : ""));
-        return sum;
+        report.warnings.push_back("needs " + std::to_string(count) +
+                                  " presets, more than the SoundFont's banks have free" +
+                                  (shared ? "; convert the sequence without --single-sf2" : ""));
+        return report;
     }
     for (const std::string& w : AddPresets(rom, sf, maker.Programs(), slots))
     {
-        sum.warnings.push_back(w);
+        report.warnings.push_back(w);
     }
 
-    const std::string title = rom.Title() + " #" + TwoDigits(song);
+    const std::string number = SongNumber(song, 0);
+    const std::string title = rom.Title() + " #" + number;
     char about[160];
     std::snprintf(about, sizeof about, "%s (%s) sequence %d at 0x%08X, converted by %s", rom.Title().c_str(),
                   rom.GameCode().c_str(), song, unsigned(info.sequence_addresses[size_t(song)]), kProgramName);
-    const std::string stem =
-        Utf8(PathFromUtf8(opt.out_dir) / PathFromUtf8(SafeFileName(opt.base_name) + "_" + TwoDigits(song)));
+    const std::string stem = SongStem(settings, number);
 
     std::string error;
-    sum.midi_path = stem + ".mid";
-    if (!WriteMidi(sum.midi_path, title, about, info.revision, sim, notes, slots, error))
+    report.midi_path = stem + ".mid";
+    if (!WriteMidi(report.midi_path, title, about, info.revision, sim, notes, slots, error))
     {
-        sum.warnings.push_back(error);
-        return sum;
+        report.warnings.push_back(error);
+        return report;
     }
 
     if (!shared)
     {
         Sf2File& file = sf.File();
-        file.name = title;
-        file.comment = "Instruments for " + title + ", extracted by " + kProgramName;
-        sum.sf2_path = stem + ".sf2";
-        if (!file.Write(sum.sf2_path, error))
+        file.SetTitle(title);
+        report.sf2_path = stem + ".sf2";
+        if (!file.Write(report.sf2_path, error))
         {
-            sum.warnings.push_back(error);
-            return sum;
+            report.warnings.push_back(error);
+            return report;
         }
     }
 
-    sum.ok = true;
+    report.ok = true;
 
-    return sum;
+    return report;
 }
 
 } // namespace
 
-SongSummary InspectSong(const Rom& rom, const DriverInfo& info, int song, const ConvertOptions& opt)
+SongReport InspectSong(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings)
 {
-    return Run(rom, info, song, opt, nullptr, false);
+    return Run(rom, info, song, settings, nullptr, false);
 }
 
-SongSummary ConvertSong(const Rom& rom, const DriverInfo& info, int song, const ConvertOptions& opt,
-                        SoundfontBuilder* shared)
+SongReport ConvertSong(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings,
+                       SoundfontBuilder* shared)
 {
-    return Run(rom, info, song, opt, shared, true);
+    return Run(rom, info, song, settings, shared, true);
 }
 
 } // namespace agbsf2::rd2

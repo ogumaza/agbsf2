@@ -38,6 +38,7 @@ using test::ReadMidi;
 using test::ReadSf2;
 using test::Sf2Records;
 using test::TempPath;
+using test::TempSettings;
 
 // Addresses in a test cartridge: the driver's code that detection reads, the game's call to its init, the driver's
 // tables, and the game's settings and data.
@@ -81,10 +82,10 @@ constexpr uint8_t kNoiseSteps = 8;  // noise with a table of widths: the 7-bit n
 constexpr uint8_t kWave = 9;        // the wave voice: it leaves out its envelope, the one that rises and falls
 
 // A track's data being written, one command at a time.
-class Track
+class TrackData
 {
 public:
-    Track& Bytes(std::vector<uint8_t> b)
+    TrackData& Bytes(std::vector<uint8_t> b)
     {
         bytes_.insert(bytes_.end(), b.begin(), b.end());
 
@@ -92,7 +93,7 @@ public:
     }
 
     // Adds a note with a length and velocity of its own.
-    Track& Note(uint8_t note, uint16_t length, uint8_t velocity)
+    TrackData& Note(uint8_t note, uint16_t length, uint8_t velocity)
     {
         bytes_.push_back(uint8_t(0x60 + note));
         if (length >= 0x80)
@@ -105,7 +106,7 @@ public:
         return *this;
     }
 
-    Track& Wait(uint16_t ticks)
+    TrackData& Wait(uint16_t ticks)
     {
         bytes_.push_back(0xC1);
         if (ticks >= 0x80)
@@ -130,10 +131,10 @@ private:
 
 // A cartridge image being put together: a synthetic copy of the code patterns that detection reads, in a revision's
 // form, the driver's tables, and the game's settings, samples, bank and sequences.
-class Cart
+class Cart : public test::CartImage
 {
 public:
-    explicit Cart(bool code = true, Revision revision = Revision::kLinkToThePast) : d_(0x10000, 0)
+    explicit Cart(bool code = true, Revision revision = Revision::kLinkToThePast) : CartImage(0x10000)
     {
         WriteTables();
         if (code)
@@ -143,23 +144,6 @@ public:
         WriteSettings();
         WriteSamples();
         WriteBank();
-    }
-
-    void Put8(uint32_t a, uint8_t v)
-    {
-        d_[a - kRomBase] = v;
-    }
-
-    void Put16(uint32_t a, uint16_t v)
-    {
-        Put8(a, uint8_t(v));
-        Put8(a + 1, uint8_t(v >> 8));
-    }
-
-    void Put32(uint32_t a, uint32_t v)
-    {
-        Put16(a, uint16_t(v));
-        Put16(a + 2, uint16_t(v >> 16));
     }
 
     // Writes the sequences, each a list of tracks, with their tables of offsets. Each plays bank 0.
@@ -204,26 +188,18 @@ public:
         }
         code += " 4770";
         Code(kPlayMusic, code.c_str(), {{0, kMusicTable}});
-        Bl(kPlayMusic + 22, kSetVoices);
-        Bl(kPlayMusic + 30, kSetVoices);
-        Bl(kPlayMusic + 38, kRequest);
+        PutBl(kPlayMusic + 22, kSetVoices);
+        PutBl(kPlayMusic + 30, kSetVoices);
+        PutBl(kPlayMusic + 38, kRequest);
         for (uint32_t i = 0; i < volumes.size(); i++)
         {
-            Bl(kPlayMusic + 50 + 12 * i, kSetVolume2);
+            PutBl(kPlayMusic + 50 + 12 * i, kSetVolume2);
         }
 
         for (uint32_t m = 0; m < table.size(); m++)
         {
             Put16(kMusicTable + 2 * m, table[m]);
         }
-    }
-
-    Rom ToRom() const
-    {
-        Rom r;
-        r.Assign(d_);
-
-        return r;
     }
 
 private:
@@ -244,21 +220,13 @@ private:
         for (const auto& [index, literal] : loads)
         {
             const uint32_t ins = at + 2 * uint32_t(index);
-            const uint16_t op = uint16_t(d_[ins - kRomBase + 1] << 8);
+            const uint16_t op = uint16_t(Get8(ins + 1) << 8);
             Put16(ins, uint16_t(op | ((pool - ((ins + 4) & ~3u)) / 4)));
             Put32(pool, literal);
             pool += 4;
         }
 
         return pool;
-    }
-
-    // Writes a bl from `at` to `target`.
-    void Bl(uint32_t at, uint32_t target)
-    {
-        const int32_t offset = int32_t(target) - int32_t(at + 4);
-        Put16(at, uint16_t(0xF000 | ((offset >> 12) & 0x7FF)));
-        Put16(at + 2, uint16_t(0xF800 | ((offset >> 1) & 0x7FF)));
     }
 
     // Writes the tables: each pitch index's sample pitch, 0x8000 at index 0x30, and square frequency setting, middle C
@@ -294,7 +262,7 @@ private:
     {
         Code(kInit, "B530 4900 6008 4900 2000 7008 2080 7008 3904 4A00 1C10 8008 3102 200D 7008 BD30");
         Put16(kGameInit, 0x4801);
-        Bl(kGameInit + 2, kInit);
+        PutBl(kGameInit + 2, kInit);
         Put16(kGameInit + 6, 0x4770);
         Put32(kGameInit + 8, kSettings);
 
@@ -421,8 +389,6 @@ private:
             add({0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF, 0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54, 0x32, 0x10});
         Put16(kBank + 2 * kWave, add(region(3, 0, wave, rise, 0x46, 0x30)));
     }
-
-    std::vector<uint8_t> d_;
 };
 
 // Returns the driver's tables in `rom`, which must have them.
@@ -453,7 +419,7 @@ void TestDetection()
 {
     // The driver's code gives its tables, and the game's call to its init gives its settings.
     Cart cart;
-    cart.Sequences({{Track().End()}, {Track().End()}});
+    cart.Sequences({{TrackData().End()}, {TrackData().End()}});
     const Rom rom = cart.ToRom();
     DriverInfo info;
     std::string error;
@@ -475,7 +441,7 @@ void TestDetection()
 
     // A game without the driver's code has no sign of it, unless it's given the settings.
     Cart bare(false);
-    bare.Sequences({{Track().End()}});
+    bare.Sequences({{TrackData().End()}});
     const Rom none = bare.ToRom();
     DriverOverrides given;
     given.settings = kSettings;
@@ -496,7 +462,7 @@ void TestSuperMarioAdvance2()
     // The Super Mario Advance 2 revision's code gives its tables too. Its E4 takes a byte, so a tempo of 150 plays a
     // tick a frame, and EA does nothing and takes no operand.
     Cart cart(true, Revision::kSuperMarioAdvance2);
-    cart.Sequences({{Track()
+    cart.Sequences({{TrackData()
                          .Bytes({0xE4, 150, 0xEA, 0xC2, kLooped, 0xE2, 2, 0xE1, 64})
                          .Note(60, 4, 127)
                          .Wait(4)
@@ -554,7 +520,7 @@ void TestTiming()
     // At a tempo of 75, a tick takes two frames, and a note of 3 ticks lasts 6 frames before its release. With C8,
     // notes wait for their length.
     Cart cart;
-    cart.Sequences({{Track()
+    cart.Sequences({{TrackData()
                          .Bytes({0xE4, 75, 0xC2, kLooped})
                          .Note(60, 3, 127)
                          .Wait(2)
@@ -599,7 +565,7 @@ void TestVoices()
     // The mixer has 7 voices. An eighth note takes the oldest of the lowest priority, and a note of a lower priority
     // than every voice's gets none.
     Cart cart;
-    Track t;
+    TrackData t;
     t.Bytes({0xC2, kLooped});
     for (uint8_t n = 0; n < 8; n++)
     {
@@ -632,7 +598,7 @@ void TestVoices()
 // Returns a track that plays `notes` notes at once on the plain sample, from note 50 up, and ends once they have.
 std::vector<uint8_t> Chord(int notes)
 {
-    Track t;
+    TrackData t;
     t.Bytes({0xC2, kPlain});
     for (int n = 0; n < notes; n++)
     {
@@ -645,10 +611,8 @@ std::vector<uint8_t> Chord(int notes)
 // Returns the first CC11 of a sequence's conversion, or -1 if it has none.
 int FirstExpression(const Rom& rom, const DriverInfo& info, int sequence)
 {
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "rd2_music_settings";
-    const SongSummary sum = ConvertSong(rom, info, sequence, opt, nullptr);
+    ConvertSettings opt = TempSettings("rd2_music_settings");
+    const SongReport sum = ConvertSong(rom, info, sequence, opt, nullptr);
     SEQLIB_CHECK(sum.ok);
     if (!sum.ok)
     {
@@ -736,7 +700,7 @@ void TestEnvelope()
     // The envelope rises to 0x7FFF in 4 frames, a quarter each frame. The release then takes the voice's volume down to
     // 300/512 of itself each frame until it's silent, and the voice is freed 10 frames after the release starts.
     Cart cart;
-    cart.Sequences({{Track().Bytes({0xC2, kLooped}).Note(60, 6, 127).Wait(40).End()}});
+    cart.Sequences({{TrackData().Bytes({0xC2, kLooped}).Note(60, 6, 127).Wait(40).End()}});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
     Sequencer seq(rom, info, 0);
@@ -768,7 +732,7 @@ void TestPsg()
     // A square 2 note starts the channel at its pitch, with its envelope and duty, on both sides. With a tuning of
     // 0x30, note 0x30 plays middle C.
     Cart cart;
-    cart.Sequences({{Track().Bytes({0xC2, kSquare}).Note(0x30, 4, 127).Wait(10).End()}});
+    cart.Sequences({{TrackData().Bytes({0xC2, kSquare}).Note(0x30, 4, 127).Wait(10).End()}});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
     Sequencer seq(rom, info, 0);
@@ -793,7 +757,7 @@ void TestInstruments()
     // A drum kit plays its regions at their own pitch and pan, an instrument with a sample for each key picks one, and
     // a key split plays one region below its split and another above.
     Cart cart;
-    cart.Sequences({{Track()
+    cart.Sequences({{TrackData()
                          .Bytes({0xC2, kDrums})
                          .Note(36, 4, 100)
                          .Wait(1)
@@ -841,7 +805,7 @@ void TestConversion()
     // SoundFont's zone for the instrument, which plays the sample at its tuning. The first track goes back to its
     // start, just after the sequence's header of 6 bytes.
     Cart cart;
-    cart.Sequences({{Track()
+    cart.Sequences({{TrackData()
                          .Bytes({0xE4, 120, 0xC2, kPlain})
                          .Note(60, 6, 127)
                          .Wait(6)
@@ -849,15 +813,15 @@ void TestConversion()
                          .Wait(6)
                          .Bytes({0xF0, 0x06, 0x00})
                          .End(),
-                     Track().Bytes({0xC2, kLooped}).Note(48, 12, 100).Wait(48).End()}});
+                     TrackData().Bytes({0xC2, kLooped}).Note(48, 12, 100).Wait(48).End()}});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.loops = 1;
     opt.out_dir = Utf8(test::g_temp);
     opt.base_name = "rd2";
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(sum.ok);
     SEQLIB_CHECK_EQ(sum.tracks, 2);
@@ -900,7 +864,7 @@ void TestPsgTables()
     // A square that steps through a table of duties, a frame each, holds the last one, 75%. A noise holds the last of
     // its widths, the 15-bit noise. Each SoundFont zone plays what its voice holds.
     Cart cart;
-    cart.Sequences({{Track()
+    cart.Sequences({{TrackData()
                          .Bytes({0xC2, kSquareSteps})
                          .Note(0x30, 12, 127)
                          .Wait(12)
@@ -910,11 +874,9 @@ void TestPsgTables()
                          .End()}});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "rd2_psg_tables";
+    ConvertSettings opt = TempSettings("rd2_psg_tables");
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(sum.ok);
     const Sf2Records sf = ReadSf2(sum.sf2_path);
@@ -943,7 +905,7 @@ void TestDrumPanAndWave()
     // with one of no amount, and the plain instrument's zone keeps the default. The wave voice leaves its region's
     // envelope out. Its zone has the release alone.
     Cart cart;
-    cart.Sequences({{Track()
+    cart.Sequences({{TrackData()
                          .Bytes({0xC3, 0x60, 0xC2, kDrums})
                          .Note(36, 4, 100)
                          .Note(37, 4, 100)
@@ -957,11 +919,9 @@ void TestDrumPanAndWave()
                          .End()}});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "rd2_drum_wave";
+    ConvertSettings opt = TempSettings("rd2_drum_wave");
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(sum.ok);
     const Sf2Records sf = ReadSf2(sum.sf2_path);
@@ -1018,16 +978,19 @@ void TestLevelOrder()
     // sets the player's volume to 0 at tick 3. Track 0 plays with both from that frame on. So the MIDI file gives them
     // both at tick 4, and track 0's last CC11 silences it.
     Cart cart;
-    cart.Sequences(
-        {{Track().Bytes({0xE4, 0x81, 0x2C, 0xC2, kPlain}).Note(60, 20, 127).Wait(4).Bytes({0xC3, 0x10}).Wait(16).End(),
-          Track().Wait(3).Bytes({0xEA, 0}).Wait(17).End()}});
+    cart.Sequences({{TrackData()
+                         .Bytes({0xE4, 0x81, 0x2C, 0xC2, kPlain})
+                         .Note(60, 20, 127)
+                         .Wait(4)
+                         .Bytes({0xC3, 0x10})
+                         .Wait(16)
+                         .End(),
+                     TrackData().Wait(3).Bytes({0xEA, 0}).Wait(17).End()}});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "rd2_level_order";
+    ConvertSettings opt = TempSettings("rd2_level_order");
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(sum.ok);
     std::vector<std::pair<uint32_t, int>> expression;
@@ -1048,16 +1011,14 @@ void TestLoopLengths()
     // both loops are back where they started, 36 ticks, and the sequence plays it twice. A tick is 150 of the MIDI
     // file's.
     Cart cart;
-    cart.Sequences({{Track().Bytes({0xE4, 120, 0xC2, kLooped}).Note(60, 6, 127).Wait(12).Bytes({0xF0, 8, 0}).End(),
-                     Track().Bytes({0xC2, kLooped}).Note(64, 6, 100).Wait(18).Bytes({0xF0, 21, 0}).End(),
-                     Track().Bytes({0xC2, kLooped}).Note(67, 9, 100).Wait(24).End()}});
+    cart.Sequences({{TrackData().Bytes({0xE4, 120, 0xC2, kLooped}).Note(60, 6, 127).Wait(12).Bytes({0xF0, 8, 0}).End(),
+                     TrackData().Bytes({0xC2, kLooped}).Note(64, 6, 100).Wait(18).Bytes({0xF0, 21, 0}).End(),
+                     TrackData().Bytes({0xC2, kLooped}).Note(67, 9, 100).Wait(24).End()}});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "loop_lengths";
+    ConvertSettings opt = TempSettings("loop_lengths");
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     const MidiEvents midi = ReadMidi(sum.midi_path);
     std::vector<std::pair<uint32_t, std::string>> markers;
@@ -1081,7 +1042,7 @@ void TestLoopLengths()
 void TestLoopSettingsAgain()
 {
     Cart cart;
-    cart.Sequences({{Track()
+    cart.Sequences({{TrackData()
                          .Bytes({0xE4, 120, 0xC2, kLooped, 0xE0, 200})
                          .Note(60, 6, 127)
                          .Wait(6)
@@ -1095,11 +1056,9 @@ void TestLoopSettingsAgain()
                          .End()}});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "loop_again";
+    ConvertSettings opt = TempSettings("loop_again");
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     const test::MidiEvents midi = ReadMidi(sum.midi_path);
     std::vector<std::pair<uint32_t, std::string>> markers;
@@ -1140,8 +1099,8 @@ void TestDump()
     // The track starts track 3 at the note after its end. The track's data starts at offset 4, after the sequence's
     // header and the track's offset. F8 takes 4 bytes.
     const std::vector<uint8_t> first =
-        Track().Bytes({0xE4, 120, 0xC2, kPlain, 0xC3, 0x20}).Note(60, 6, 127).Wait(6).End();
-    const std::vector<uint8_t> started = Track().Note(62, 6, 127).Wait(6).End();
+        TrackData().Bytes({0xE4, 120, 0xC2, kPlain, 0xC3, 0x20}).Note(60, 6, 127).Wait(6).End();
+    const std::vector<uint8_t> started = TrackData().Note(62, 6, 127).Wait(6).End();
     const uint16_t offset = uint16_t(4 + 4 + first.size());
     std::vector<uint8_t> track = {0xF8, 3, uint8_t(offset), uint8_t(offset >> 8)};
     track.insert(track.end(), first.begin(), first.end());
@@ -1172,18 +1131,13 @@ void TestMusic()
 {
     // The Music interface finds the driver, names it, and reports a sequence's tracks and address.
     Cart cart;
-    cart.Sequences({{Track().Bytes({0xC2, kPlain}).Note(60, 6, 127).Wait(6).End()}});
+    cart.Sequences({{TrackData().Bytes({0xC2, kPlain}).Note(60, 6, 127).Wait(6).End()}});
     const Rom rom = cart.ToRom();
     std::string error;
 
     const std::unique_ptr<Music> music = agbsf2::OpenMusic(rom, Overrides(), error);
 
-    SEQLIB_CHECK(music != nullptr);
-    if (!music)
-    {
-        return;
-    }
-
+    SEQLIB_REQUIRE(music != nullptr);
     SEQLIB_CHECK(music->Log()[0] == "Nintendo R&D2's sound driver");
     SEQLIB_CHECK_EQ(music->SongCount(), 1);
 

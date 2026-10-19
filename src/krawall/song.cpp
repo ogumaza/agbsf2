@@ -81,7 +81,7 @@ constexpr const char* kNoteNames[] = {"C-", "C#", "D-", "D#", "E-", "F-", "F#", 
 // Returns a note of a pattern as its name: the note from C-0 in the pattern, before the sample's relative note.
 std::string NoteName(int note)
 {
-    if (note == 0x7F)
+    if (note == kNoteOff)
     {
         return "off";
     }
@@ -146,45 +146,38 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
         {
             std::snprintf(line, sizeof line, "%3d", row);
             std::string text = line;
-            for (uint8_t follow = rom.U8(at++); follow && rom.Contains(at); follow = rom.U8(at++))
+            for (uint8_t flags = rom.U8(at++); flags && rom.Contains(at); flags = rom.U8(at++))
             {
-                std::snprintf(line, sizeof line, " | c%d", follow & 0x1F);
+                const RowEntry entry = ReadEntry(rom, flags, at);
+                std::snprintf(line, sizeof line, " | c%d", entry.channel);
                 text += line;
-                if (follow & 0x20)
+                if (entry.note)
                 {
-                    const uint8_t b0 = rom.U8(at);
-                    const int instrument = rom.U8(at + 1) | ((b0 & 1) << 8);
-                    at += 2;
-                    if (b0 >> 1)
-                    {
-                        text += " " + NoteName(b0 >> 1);
-                    }
-                    if (instrument)
-                    {
-                        text += " i" + std::to_string(instrument);
-                    }
+                    text += " " + NoteName(entry.note);
                 }
-                if (follow & 0x40)
+                if (entry.instrument)
                 {
-                    const uint8_t volume = rom.U8(at++);
-                    if (volume <= 0x60)
+                    text += " i" + std::to_string(entry.instrument);
+                }
+                if (flags & kEntryVolume)
+                {
+                    if (entry.volume <= 0x60)
                     {
-                        text += " v" + std::to_string(volume - 0x10);
+                        text += " v" + std::to_string(entry.volume - 0x10);
                     }
                     else
                     {
-                        std::snprintf(line, sizeof line, " %s %d", kColumnNames[(volume - 0x60) >> 4],
-                                      (volume - 0x60) & 0xF);
+                        std::snprintf(line, sizeof line, " %s %d", kColumnNames[(entry.volume - 0x60) >> 4],
+                                      (entry.volume - 0x60) & 0xF);
                         text += line;
                     }
                 }
-                if (follow & 0x80)
+                if (flags & kEntryEffect)
                 {
-                    const uint8_t effect = rom.U8(at);
-                    const uint8_t op = rom.U8(at + 1);
-                    at += 2;
+                    const uint8_t effect = entry.effect;
                     std::snprintf(line, sizeof line, " %s %02X",
-                                  effect < std::size(kEffectNames) ? kEffectNames[effect] : "unknown effect", op);
+                                  effect < std::size(kEffectNames) ? kEffectNames[effect] : "unknown effect",
+                                  entry.effect_op);
                     text += line;
                 }
             }
@@ -192,7 +185,7 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
         }
     }
 
-    return WriteFile(path, std::vector<uint8_t>(out.begin(), out.end()), error);
+    return WriteTextFile(path, out, error);
 }
 
 } // namespace agbsf2::krawall

@@ -24,11 +24,43 @@ constexpr uint8_t kSlotFree = 0x10;
 constexpr uint8_t kSlotOn = 0x11;
 constexpr uint8_t kSlotReleased = 0x12;
 
+// The phases of a slot's envelope.
+constexpr uint8_t kPhaseAttackStart = 0;  // sets up the attack
+constexpr uint8_t kPhaseAttack = 1;       // rises to the full level
+constexpr uint8_t kPhaseDecayStart = 2;   // sets up the decay
+constexpr uint8_t kPhaseDecay = 3;        // falls to the sustain level
+constexpr uint8_t kPhaseSustain = 4;      // holds the sustain level
+constexpr uint8_t kPhaseReleaseStart = 5; // sets up the release
+constexpr uint8_t kPhaseRelease = 6;      // falls to 0
+
 // An envelope's full level.
 constexpr int32_t kFullLevel = 0x80000;
 
+// The full level in the units of SustainLevel(): kFullLevel / 16. The driver works out the attack's and the decay's
+// steps in these units with its 16-bit division, then multiplies them by 16.
+constexpr uint32_t kFullSustain = 0x8000;
+
+// The level below which a decay stops a note.
+constexpr int32_t kAudibleLevel = 0x1000;
+
+// Returns the number of steps of a note's attack. The attack reaches the full level after `steps` + 1 frames. A
+// channel's `setting` from controller 20 gives the steps. A setting from 0x80 up leaves the instrument's `attack`, in
+// which values above 99 count as 99.
+uint32_t AttackSteps(uint32_t attack, uint8_t setting);
+
+// Returns a note's sustain level, from 0 to kFullSustain. A channel's `setting` from controller 22 gives it in 1/128ths
+// of the full level. A setting from 0x80 up leaves the instrument's `sustain` of 0-99: sustain / 99 of the full level,
+// worked out in 8.8 fixed point with the driver's 16-bit division.
+uint32_t SustainLevel(uint32_t sustain, uint8_t setting);
+
 // The song time that the driver counts for each frame, in 1/256 microseconds: 1/60 s, as it works it out.
 constexpr int64_t kFrameTime = 4266666;
+
+// One semitone in the model's pitch offsets. They count semitones in 32.32 fixed point.
+constexpr int64_t kSemitone = int64_t(1) << 32;
+
+// One cent in the model's pitch offsets: kSemitone / 100, rounded.
+constexpr int64_t kCent = 0x028F5C29;
 
 // What the mixer did with a note slot's voice in the last frame.
 enum class MixResult : uint8_t
@@ -46,7 +78,7 @@ struct Slot
     uint8_t loop_mode = 0;
     uint8_t key = 0;       // the key that started it, which a note off matches
     uint8_t velocity = 0;  // the note's velocity + 1
-    uint8_t phase = 0;     // the envelope's phase: 0 start, 1 attack, 2-3 decay, 4 sustain, 5-6 release
+    uint8_t phase = 0;     // the envelope's phase, such as kPhaseAttack
     uint8_t pitch_key = 0; // the key it plays at: the key, or a drum kit instrument's root key
     int8_t channel = 0;
     uint32_t step = 0;     // the sample step the mixer used this frame, in 1/2^23 bytes per output sample
@@ -72,7 +104,8 @@ struct ChannelState
     EnvelopeSettings envelope; // a program change sets them back
 };
 
-// A track action used by the MIDI conversion.
+// Something the model did in a frame, for the MIDI conversion: a track's command, or the start of an envelope phase
+// that took settings from controllers 20-23.
 struct Action
 {
     enum Kind : uint8_t
@@ -115,7 +148,7 @@ public:
         return valid_;
     }
 
-    // Runs one frame of the driver's per-frame routine. Returns what the tracks did in it, in order.
+    // Runs one frame of the driver's per-frame routine. Returns the frame's actions, in order.
     const std::vector<Action>& Step();
 
     // Returns true once every track has reached its end in the same frame, so that the driver stopped the tune.
@@ -179,6 +212,9 @@ private:
     // Runs the commands of track `t` that are due. Returns true if it's at its end.
     bool RunTrack(int t);
 
+    // Returns an action of kind `kind` for event `e` of track `t`, at the track's tick.
+    Action TrackAction(Action::Kind kind, int t, const Event& e) const;
+
     // Converts a delay of `ticks` to song time, as the driver does.
     int64_t DelayTime(uint32_t command, uint32_t ticks) const;
 
@@ -189,6 +225,14 @@ private:
 
     void UpdateVibrato();
     void UpdateEnvelope(int index);
+
+    // Sets up the release of slot `index`, which plays `inst`, and takes its first frame's step.
+    void StartRelease(int index, const Instrument& inst);
+
+    // Adds a kEnvelope action for the phase that slot `index` starts, unless every setting in `used` leaves the
+    // instrument's. The conversion reads these actions to give each note the settings that its phases took.
+    void AddEnvelopeAction(int index, const EnvelopeSettings& used);
+
     void Mix();
     void MixVoice(Slot& slot);
     void Advance(Slot& slot);

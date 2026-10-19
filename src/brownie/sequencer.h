@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <map>
@@ -13,32 +14,11 @@
 #include <vector>
 
 #include "brownie/driver.h"
+#include "gba.h"
 #include "rom.h"
 
 namespace agbsf2::brownie
 {
-
-// The driver's sound channels: 0-3 play the music on the PSG's square 1, square 2, wave and noise channels, 4-7 play
-// sound effects on the same PSG channels, and the rest play samples. In the Sword of Mana revision, 8-12 play the
-// music's samples on the mixer's voices 0-4. In the Magical Vacation revision, 8 and 9 play the music's samples on FIFO
-// A and FIFO B, and 10 and 11 play sound effects' samples, taking the FIFO from 8 or 9. kChannelCount is the most that
-// a revision has.
-constexpr int kChannelCount = 13;
-constexpr int kFirstEffectChannel = 4;
-constexpr int kFirstSampleChannel = 8;
-constexpr int kFirstEffectSampleChannel = 10;
-constexpr int kWaveChannel = 2;
-constexpr int kNoiseChannel = 3;
-
-// The Sword of Mana revision keeps a 14th record after the 13 channels, which only its resets and E2 touch.
-constexpr int kRecordCount = 14;
-
-// The mixer's voices in the Sword of Mana revision, one for each sample channel.
-constexpr int kVoiceCount = 5;
-
-// The FIFOs, which in the Magical Vacation revision play a sample each: FIFO A at Timer 0's rate, and FIFO B at Timer
-// 1's.
-constexpr int kFifoCount = 2;
 
 // The steps of the Magical Vacation revision's rate table for each semitone.
 constexpr int kRateSteps = 12;
@@ -46,22 +26,103 @@ constexpr int kRateSteps = 12;
 // The points of each FIFO that the mixer makes each time it runs.
 constexpr int kMixPoints = 16;
 
+// The sound registers that Sequencer::Registers() returns: from SOUND1CNT_L up to the end of the wave RAM.
+constexpr uint32_t kIoNr10 = 0x04000060;      // SOUND1CNT_L: square 1's sweep, and the first of the sound registers
+constexpr uint32_t kIoNr30 = 0x04000070;      // SOUND3CNT_L: the wave channel's bank and on bit
+constexpr uint32_t kIoSoundcntL = 0x04000080; // NR50 and NR51
+constexpr uint32_t kIoSoundcntH = 0x04000082; // the FIFOs' and the PSG's mix
+constexpr uint32_t kIoNr52 = 0x04000084;      // SOUNDCNT_X: the sound's on bit
+constexpr uint32_t kIoWaveRam = 0x04000090;
+constexpr uint32_t kIoSoundEnd = 0x040000A0; // just past the wave RAM
+
+// Each PSG channel's NRx1 and NRx2, and its NRx3 and NRx4. NRx3 and NRx4 hold the channel's frequency setting.
+inline constexpr uint32_t kIoControlRegisters[4] = {0x04000062, 0x04000068, 0x04000072, 0x04000078};
+inline constexpr uint32_t kIoFrequencyRegisters[4] = {0x04000064, 0x0400006C, 0x04000074, 0x0400007C};
+
 // The bits of a channel's flags.
 constexpr uint8_t kFlagOn = 0x01;     // the channel is in use
 constexpr uint8_t kFlagEffect = 0x02; // a sound effect has the music channel's PSG channel
 constexpr uint8_t kFlagPaused = 0x80; // the channel was in use when a fade out stopped everything
 
-// A write to a hardware register.
-struct RegisterWrite
-{
-    uint32_t address = 0;
-    uint8_t size = 0; // in bytes
-    uint32_t value = 0;
-};
-
-// The driver's record of a sound channel: 0x38 bytes, with each field's offset.
+// The driver's record of a sound channel: 0x38 bytes, with each field's offset. The fields have a PSG channel's names.
+// A sample channel uses some of them for other things. The accessors give those uses their names.
 struct Channel
 {
+    // A sample channel's 0x24: the frames to the level's next change.
+    uint8_t RampWait() const
+    {
+        return duty;
+    }
+
+    void SetRampWait(uint8_t value)
+    {
+        duty = value;
+    }
+
+    // A sample channel's 0x25: its volume with the envelope's level.
+    uint8_t EnvelopeVolume() const
+    {
+        return sweep;
+    }
+
+    void SetEnvelopeVolume(uint8_t value)
+    {
+        sweep = value;
+    }
+
+    // A sample channel's 0x2A and 0x2B: its right and left levels.
+    uint8_t RightLevel() const
+    {
+        return pan_on;
+    }
+
+    void SetRightLevel(uint8_t value)
+    {
+        pan_on = value;
+    }
+
+    uint8_t LeftLevel() const
+    {
+        return pan_off;
+    }
+
+    void SetLeftLevel(uint8_t value)
+    {
+        pan_off = value;
+    }
+
+    // In the Magical Vacation revision, a sample channel's 0x14, 0x1C and 0x20: its sample's start and loop, and the
+    // reload value of the timer that plays its note.
+    uint32_t SampleStart() const
+    {
+        return samples;
+    }
+
+    void SetSampleStart(uint32_t value)
+    {
+        samples = value;
+    }
+
+    uint32_t SampleLoop() const
+    {
+        return wave;
+    }
+
+    void SetSampleLoop(uint32_t value)
+    {
+        wave = value;
+    }
+
+    uint16_t TimerReload() const
+    {
+        return frequency;
+    }
+
+    void SetTimerReload(uint16_t value)
+    {
+        frequency = value;
+    }
+
     uint8_t flags = 0;        // 0x00
     uint8_t wait = 0;         // 0x01: frames to the next read of the channel's data
     uint8_t step_frames = 0;  // 0x02: frames to the envelope's next step, or 0 for none
@@ -104,6 +165,23 @@ struct Voice
     uint32_t end = 0;   // 0x08: the end of the sample
     uint32_t loop = 0;  // 0x0C: where the sample goes back to at its end, or the end if it doesn't loop
 };
+
+// The keys of each octave of a sample set: the mixer plays the first 12 keys' samples at an eighth of its rate, the
+// next 12 at a quarter and the 12 after them at half, and the rest at its rate.
+constexpr int kOctaveKeys = 12;
+constexpr int kSampleOctaves = 4;
+
+// Returns the key that a sample note plays: keys from 64 play key 47.
+inline int SampleKey(int key)
+{
+    return (key & 0xC0) ? 47 : key;
+}
+
+// Returns the octave of a sample note's key, 0-3, which the mixer plays at an eighth of its rate up to its full rate.
+inline int SampleOctave(int key)
+{
+    return std::min(key / kOctaveKeys, kSampleOctaves - 1);
+}
 
 // A FIFO's sample in the Magical Vacation revision, as the driver keeps it: 16 bytes.
 struct FifoVoice
@@ -168,7 +246,8 @@ struct Event
     uint8_t key = 0;      // kNote: the key after the transpose, or a noise note's byte
     uint32_t frame = 0;   // the frame it happened in
     uint32_t first = 0;   // kLoop: the frame in which the channel first read the place it goes back to
-    uint32_t samples = 0; // kNote on a sample channel: the channel's sample set
+    uint32_t samples = 0; // kNote on a sample channel: the channel's sample set, or in the Magical Vacation revision
+                          // its sample's start
 };
 
 // Plays a sound one frame at a time, as the driver's per-frame routine and its mixer do.
@@ -188,13 +267,13 @@ public:
     // Returns the number of channels that the revision's per-frame routine runs.
     int ChannelCount() const
     {
-        return channel_count_;
+        return layout_.channels;
     }
 
     // Returns the number of the revision's voices: the mixer's, or the FIFOs'.
     int VoiceCount() const
     {
-        return vacation_ ? kFifoCount : kVoiceCount;
+        return layout_.voices;
     }
 
     // Returns voice `v` as the driver keeps it, for traces: a mixer voice, or a FIFO's sample.
@@ -301,9 +380,11 @@ private:
     void PsgEnvelopeStep(int c);
     void SampleEnvelopeStep(int c);
     void FifoEnvelopeStep(int c);
+    void TakeSampleStep(int c, uint32_t at);
+    void TakeFifoStep(int c, uint32_t at);
     void RampStep(int c);
     void FifoRampStep(int c);
-    void SetVoiceLevels(int c, uint32_t level);
+    void SetVoiceLevels(int c);
     void EndChannel(int c);
     void LoadWave(uint32_t wave);
     void Resume();
@@ -343,9 +424,12 @@ private:
     // sample channel past the end of the driver's table of registers, change nothing the model follows.
     void Write(uint32_t address, int size, uint32_t value);
 
-    // Returns the address of a PSG channel's register from the driver's tables, as the driver reads them: NRx1 and NRx2
-    // if `control` is set, the frequency setting otherwise. A sample channel reads past their ends.
-    uint32_t PsgRegister(int c, bool control) const;
+    // Returns the address of a PSG channel's NRx1 and NRx2 from the driver's table, as the driver reads it. A sample
+    // channel reads past the table's end.
+    uint32_t ControlRegister(int c) const;
+
+    // Returns the address of a PSG channel's NRx3 and NRx4, with the frequency setting, in the same way.
+    uint32_t FrequencyRegister(int c) const;
 
     // Notes that channel `c` read the command at `address`, in this frame if it hasn't before.
     void Visit(int c, uint32_t address);
@@ -355,8 +439,8 @@ private:
 
     const Rom& rom_;
     const DriverInfo& info_;
-    const bool vacation_;     // the Magical Vacation revision
-    const int channel_count_; // the channels that the per-frame routine runs
+    const RevisionLayout& layout_;
+    const bool vacation_; // the Magical Vacation revision
     bool valid_ = false;
     std::array<Channel, kRecordCount> channels_ = {};
     std::array<Voice, kVoiceCount> voices_ = {};

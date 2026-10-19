@@ -15,7 +15,6 @@
 #include "mp2k/sequencer.h"
 #include "mp2k/song.h"
 #include "mp2k/soundfont.h"
-#include "program.h"
 #include "sf2.h"
 
 namespace agbsf2::mp2k
@@ -27,20 +26,11 @@ class Mp2kMusic : public Music
 {
 public:
     // Keeps a reference to `rom`, which has to outlive this.
-    Mp2kMusic(const Rom& rom, DriverInfo info) : rom_(rom), info_(std::move(info))
+    Mp2kMusic(const Rom& rom, DriverInfo info)
+        : Music("MP2K, Nintendo's MusicPlayer2000 sound driver", info.log, info.warnings),
+          rom_(rom),
+          info_(std::move(info))
     {
-        log_.push_back("MP2K, Nintendo's MusicPlayer2000 sound driver");
-        log_.insert(log_.end(), info_.log.begin(), info_.log.end());
-    }
-
-    const std::vector<std::string>& Log() const override
-    {
-        return log_;
-    }
-
-    const std::vector<std::string>& Warnings() const override
-    {
-        return info_.warnings;
     }
 
     int SongCount() const override
@@ -58,12 +48,12 @@ public:
     bool HasSong(int song) const override
     {
         SongHeader header;
-        return ReadSongHeader(rom_, SongAddress(rom_, info_, song), header) && header.track_count > 0;
+        return ReadSong(rom_, info_, song, header);
     }
 
     SongReport InspectSong(int song, const ConvertSettings& settings) const override
     {
-        SongReport r = Report(mp2k::InspectSong(rom_, info_, song, OptionsFor(settings)));
+        SongReport r = mp2k::InspectSong(rom_, info_, song, settings);
         r.address = SongAddress(rom_, info_, song);
 
         return r;
@@ -71,7 +61,7 @@ public:
 
     SongReport ConvertSong(int song, const ConvertSettings& settings) override
     {
-        return Report(mp2k::ConvertSong(rom_, info_, song, OptionsFor(settings), shared_.get()));
+        return mp2k::ConvertSong(rom_, info_, song, settings, shared_.get());
     }
 
     bool SupportsVoiceChannels() const override
@@ -89,8 +79,7 @@ public:
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
         Sf2File& f = shared_->File();
-        f.name = rom_.Title();
-        f.comment = "Instruments for " + rom_.Title() + ", extracted by " + kProgramName;
+        f.SetTitle(rom_.Title());
 
         return f.Write(path, error);
     }
@@ -150,41 +139,8 @@ public:
     }
 
 private:
-    // Returns the conversion options for the settings.
-    static ConvertOptions OptionsFor(const ConvertSettings& settings)
-    {
-        ConvertOptions opt;
-        opt.loops = settings.loops;
-        opt.track_mask = uint16_t(settings.track_mask);
-        opt.frame_timing = settings.frame_timing;
-        opt.voice_channels = settings.voice_channels;
-        opt.out_dir = settings.out_dir;
-        opt.base_name = settings.base_name;
-
-        return opt;
-    }
-
-    // Returns a song's summary as a report.
-    static SongReport Report(const SongSummary& sum)
-    {
-        SongReport r;
-        r.ok = sum.ok;
-        r.silent = sum.silent;
-        r.seconds = sum.seconds;
-        r.loop_start = sum.loop_start;
-        r.loop_end = sum.loop_end;
-        r.tracks = sum.tracks;
-        r.bpm = sum.bpm;
-        r.midi_path = sum.midi_path;
-        r.sf2_path = sum.sf2_path;
-        r.warnings = sum.warnings;
-
-        return r;
-    }
-
     const Rom& rom_;
     DriverInfo info_;
-    std::vector<std::string> log_;
     std::unique_ptr<SoundfontBuilder> shared_;
 };
 

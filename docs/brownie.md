@@ -174,7 +174,7 @@ it isn't running, and Timer 0.
 |---|---|---|
 | `E0` | envelope | release: the envelope goes on from this envelope's first step at the next frame; ends the reading |
 | `E1` | set | the sample set |
-| `E2` | mode | the mixer's mode: 0 mixes voices 0 and 1 only, and turns channels 10-13 off; anything else mixes all five |
+| `E2` | mode | the mixer's mode: 0 mixes voices 0 and 1 only, and clears the flags of channels 10-12 and of the 14th record; anything else mixes all five |
 | `E3` | | brings the sound back after a fade out (see [Fades](#fades)); ends the per-frame routine |
 | `E4`-`E7`, `EB`, `EF` | | nothing |
 | `E8` | | a sound effect gives the music its PSG channel back, clearing bit 1 of the music channel 4 below |

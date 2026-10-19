@@ -5,12 +5,14 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
 
+#include "gba.h"
 #include "rd2/driver.h"
 #include "rom.h"
 
@@ -44,20 +46,29 @@ constexpr uint8_t kSquare2Type = 2;
 constexpr uint8_t kWaveType = 3;
 constexpr uint8_t kNoiseType = 4;
 
-// A write to a sound register.
-struct RegisterWrite
-{
-    uint32_t address = 0;
-    uint8_t size = 0; // in bytes
-    uint32_t value = 0;
-};
+// The pitch index that plays a sample at its rate, a square at middle C and the wave at C3.
+constexpr int kUnityIndex = 0x30;
+
+// The last pitch index in the driver's tables. For a note above them, the driver reads the entry after it.
+constexpr int kLastIndex = 0x77;
+
+// The note that drums and instruments with a sample for each key play, whatever the key.
+constexpr uint8_t kFixedNote = 0x30;
+
+// The pan that plays a voice on both sides alike.
+constexpr uint8_t kCentre = 0x40;
+
+// The states of a voice, as the driver keeps them in the voice's byte 0x01.
+constexpr uint8_t kVoiceFree = 0;
+constexpr uint8_t kVoicePlaying = 1;
+constexpr uint8_t kVoiceReleased = 2;
 
 // The driver's record of a voice, with each field's offset. The links are voice and track numbers, where the driver
 // keeps addresses.
 struct Voice
 {
     uint8_t type = kSampleType; // 0x00
-    uint8_t state = 0;          // 0x01: 0 free, 1 playing, 2 released
+    uint8_t state = kVoiceFree; // 0x01
     int track = -1;             // 0x04: the track slot that plays it
     uint8_t priority = 0;       // 0x08
     uint8_t note = 0;           // 0x09: the note as the track gave it, before its transpose
@@ -120,7 +131,7 @@ struct Track
     uint8_t velocity = 0x7F;                    // 0x48
     uint8_t legato = 0;                         // 0x49: C5 and C6
     uint8_t mute = 0;                           // 0x4A
-    uint8_t pan = 0x40;                         // 0x4B: C3
+    uint8_t pan = kCentre;                      // 0x4B: C3
     uint8_t echo = 0;                           // 0x4C: E3
     uint8_t volume = 0x80;                      // 0x4D: E0
     uint8_t volume2 = 0x80;                     // 0x4E
@@ -167,23 +178,61 @@ struct Lookup
 // Returns what instrument `instrument` of bank `bank` (an index into the driver's banks) gives a note.
 Lookup LookUpInstrument(const Rom& rom, const DriverInfo& info, uint16_t bank, uint16_t instrument, uint8_t note);
 
+// Returns the address of bank `bank`. The offsets of its instruments count from there.
+uint32_t BankAddress(const Rom& rom, const DriverInfo& info, uint16_t bank);
+
+// Returns the address of the table of samples of the sample set that bank `bank` plays.
+uint32_t SampleTable(const Rom& rom, const DriverInfo& info, uint16_t bank);
+
 // Returns the address of sample `index` of the sample set that bank `bank` plays.
 uint32_t SampleAddress(const Rom& rom, const DriverInfo& info, uint16_t bank, uint32_t index);
+
+// Returns the driver's pitch index for `note` on a region with `tuning`: the note less the tuning, plus kUnityIndex,
+// kept from 0 up to the entry past the tables.
+int PitchIndex(uint8_t note, uint8_t tuning);
+
+// Each returns a field of a region. Region 0 is the driver's region in RAM for instruments with a sample for each key:
+// a sample voice's, with no flags and no release, tuned to play kFixedNote at the sample's rate.
+uint8_t RegionType(const Rom& rom, uint32_t region);
+uint8_t RegionFlags(const Rom& rom, uint32_t region);
+uint8_t RegionRelease(const Rom& rom, uint32_t region);
+uint8_t RegionTuning(const Rom& rom, uint32_t region);
+uint8_t RegionSweep(const Rom& rom, uint32_t region);
+
+// The region flag that leaves the game's change to the tempo out of a note's length.
+constexpr uint8_t kNoTempoAdjustFlag = 0x10;
+
+// Returns true if a square or noise region has a table of duties or widths at halfword 2 (flag 0x01). Without one,
+// halfword 2 is the duty or width.
+bool HasPsgTable(const Rom& rom, uint32_t region);
+
+// Returns the entry for frame `frame` of a note from a square's table of duties or a noise voice's table of widths. The
+// table is a halfword count, then a byte for each frame from the note's first. The last entry stays after that.
+uint8_t PsgTableEntry(const Rom& rom, uint32_t table, uint32_t frame);
+
+// Returns the last entry of a table of duties or widths. The voice holds it after the others.
+uint8_t LastPsgTableEntry(const Rom& rom, uint32_t table);
+
+// Returns the NR43 that the noise table gives pitch index `index`. An index past the table gets the table's last entry.
+uint8_t NoiseTableEntry(const Rom& rom, const DriverInfo& info, uint32_t index);
+
+// The target time of a jump to a command that the track hasn't read before.
+constexpr uint64_t kUnreadTarget = ~uint64_t(0);
 
 // Something that happened in a frame, for the conversion.
 struct Event
 {
     enum Kind : uint8_t
     {
-        kNote,        // a note on: `voice` plays it, or -1 if it got no voice; `id` numbers it
-        kRelease,     // the release of `voice`'s note
-        kStop,        // `voice`'s note stopped: it was taken by another note, its sample ended, or it faded out
-        kVolume,      // the player's volume (EA) is now `value`
-        kPan,         // the track's pan (C3) is now `value`
-        kTrackVolume, // the track's volume (E0) is now `value`
-        kJump,        // F0: the track went to `value`
-        kTrackStart,  // F8: the track started track `value`
-        kTrackEnd,    // the track ended
+        kNote,         // a note on: `voice` plays it, or -1 if it got no voice; `id` numbers it
+        kRelease,      // the release of `voice`'s note
+        kStop,         // `voice`'s note stopped: it was taken by another note, its sample ended, or it faded out
+        kPlayerVolume, // the player's volume (EA) is now `value`
+        kPan,          // the track's pan (C3) is now `value`
+        kTrackVolume,  // the track's volume (E0) is now `value`
+        kJump,         // F0: the track went to `value`
+        kTrackStart,   // F8: the track started track `value`
+        kTrackEnd,     // the track ended
     };
 
     // The part of the frame it happened in.
@@ -201,7 +250,7 @@ struct Event
     uint32_t id = 0;    // the note's number, counted from 1
     uint64_t units = 0; // the track's time when it read the command, in 1/150 ticks from the sequence's start
     uint32_t value = 0;
-    uint64_t target_units = ~uint64_t(0); // a jump's: the time the track first read the command it goes to, if it has
+    uint64_t target_units = kUnreadTarget; // a jump's: the time the track first read the command it goes to
 
     // A note's settings.
     uint8_t key = 0; // the note after the track's transpose
@@ -273,6 +322,12 @@ public:
         return elapsed_;
     }
 
+    // Returns the player's tempo with the game's change to it, at least 0. Each frame adds it to Elapsed().
+    int FrameTempo() const
+    {
+        return std::max(0, int(player_.tempo) + player_.tempo_adjust);
+    }
+
     const std::vector<std::string>& Warnings() const
     {
         return warnings_;
@@ -287,10 +342,17 @@ private:
     int AllocateTrack() const;
     void FreeTrack(int slot);
     void ReleaseTrackVoices(int slot);
-    int RunTrack(int slot);
+    bool RunTrack(int slot);
+    void PlayNote(int slot, uint8_t op);
+    void StartTrackFrom(int slot, uint32_t at);
     uint32_t ReadVarLength(Track& t);
     void NoteOn(int slot, uint8_t note, uint8_t velocity, uint32_t length);
+    uint32_t NoteFrames(uint32_t region, uint32_t length) const;
+    int TakeVoice(int slot, uint8_t given, const Lookup& lk);
+    void StartSlide(Track& t, Voice& x, uint8_t note, uint8_t tuning, uint32_t frames);
+    void SetVoiceSound(const Track& t, Voice& x, const Lookup& lk);
     void SetBank(Track& t, uint16_t bank);
+    uint16_t BankOf(const Track& t) const;
     void StopPlayer();
 
     // The voices.
@@ -301,15 +363,25 @@ private:
     void InsertActive(int v);
     void LinkToTrack(int slot, int v);
     void UnlinkFromTrack(int v);
+    const Track& TrackOf(const Voice& v) const;
     void Release(int v);
     void StopVoice(int v);
     uint32_t PitchStep(uint8_t type, uint8_t note, uint8_t tuning) const;
     int32_t EnvelopeStep(Voice& v);
     uint32_t FramePitch(Voice& v);
+    uint32_t Bend(const Voice& v, const Track& t, uint32_t pitch) const;
+    uint32_t ApplyLfo(Voice& v, const Track& t, uint32_t pitch);
     uint32_t SampleLevel(Voice& v);
     uint8_t PsgEnvelope(Voice& v, bool panned);
+    uint32_t PsgLevel(const Voice& v, bool panned) const;
     void UpdatePsgVoices();
+    void WritePan(int channel, uint8_t pan);
+    void FadeReleasedWave(int index, uint8_t pan);
+    uint8_t FrameDuty(const Voice& v) const;
+    void WriteChannel(const Voice& v, uint32_t pitch, uint8_t envelope, uint8_t duty);
     void StartPsgVoice(Voice& v, uint8_t envelope);
+    uint8_t FirstDuty(const Voice& v) const;
+    uint8_t NoiseShape(uint32_t pitch) const;
     void UpdateSampleVoices();
     bool MixVoice(Voice& v, uint32_t step);
 
@@ -317,15 +389,9 @@ private:
     void Write(uint32_t address, uint8_t size, uint32_t value);
     uint32_t ReadBack(uint32_t address, uint8_t size) const;
 
-    // Region fields: the driver's region of a sample for each key is in RAM.
-    uint8_t RegionType(uint32_t region) const;
-    uint8_t RegionFlags(uint32_t region) const;
-    uint8_t RegionRelease(uint32_t region) const;
-    uint8_t RegionTuning(uint32_t region) const;
-    uint8_t RegionSweep(uint32_t region) const;
-
     const Rom& rom_;
     const DriverInfo& info_;
+    const RevisionTraits& traits_; // TraitsOf(info_.revision)
     int sequence_ = 0;
     bool valid_ = false;
     bool started_ = false;

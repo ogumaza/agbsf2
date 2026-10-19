@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.20)
-project(agbsf2 VERSION 1.6.2 LANGUAGES CXX)
+project(agbsf2 VERSION 1.6.3 LANGUAGES CXX)
 
 # The name of the macOS droplet app.
 set(AGBSF2_APP_NAME Agbsf2)
@@ -34,12 +34,17 @@ endif()
 add_subdirectory(externals/xsflib EXCLUDE_FROM_ALL)
 
 add_library(agbsf2_core STATIC
+    src/arm.cpp
     src/beat_grid.cpp
+    src/beat_midi.cpp
     src/inflate.cpp
+    src/midi.cpp
     src/music.cpp
+    src/psg.cpp
     src/rom.cpp
     src/sf2.cpp
     src/song_banks.cpp
+    src/thumb.cpp
     src/brownie/convert.cpp
     src/brownie/driver.cpp
     src/brownie/music.cpp
@@ -58,24 +63,25 @@ add_library(agbsf2_core STATIC
     src/krawall/music.cpp
     src/krawall/player.cpp
     src/krawall/song.cpp
+    src/krawall/soundfont.cpp
     src/mp2k/convert.cpp
     src/mp2k/driver.cpp
     src/mp2k/music.cpp
     src/mp2k/sequencer.cpp
     src/mp2k/song.cpp
     src/mp2k/soundfont.cpp
-    src/rare/convert.cpp
-    src/rare/driver.cpp
-    src/rare/music.cpp
-    src/rare/sequencer.cpp
-    src/rare/song.cpp
-    src/rare/soundfont.cpp
     src/quintet/convert.cpp
     src/quintet/driver.cpp
     src/quintet/music.cpp
     src/quintet/sequencer.cpp
     src/quintet/song.cpp
     src/quintet/soundfont.cpp
+    src/rare/convert.cpp
+    src/rare/driver.cpp
+    src/rare/music.cpp
+    src/rare/sequencer.cpp
+    src/rare/song.cpp
+    src/rare/soundfont.cpp
     src/rd2/convert.cpp
     src/rd2/driver.cpp
     src/rd2/music.cpp
@@ -86,8 +92,8 @@ add_library(agbsf2_core STATIC
     src/ubimilan/driver.cpp
     src/ubimilan/music.cpp
     src/ubimilan/sequencer.cpp
+    src/ubimilan/song.cpp
     src/ubimilan/soundfont.cpp
-    src/thumb.cpp
 )
 target_include_directories(agbsf2_core PUBLIC src)
 target_link_libraries(agbsf2_core PUBLIC seqlib::seqlib xsflib::psf_container)

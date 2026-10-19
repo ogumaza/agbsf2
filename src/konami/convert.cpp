@@ -15,12 +15,15 @@
 #include <utility>
 
 #include "beat_grid.h"
+#include "beat_midi.h"
 #include "files.h"
+#include "gba.h"
 #include "konami/seqformat.h"
 #include "konami/sequencer.h"
 #include "midi.h"
 #include "music.h"
 #include "program.h"
+#include "psg.h"
 #include "sf2.h"
 #include "song_banks.h"
 
@@ -32,19 +35,15 @@ namespace
 constexpr int kVelocity = 127;   // every note's velocity, as CC11 carries the loudness (see LevelsToControllers())
 constexpr int kTailFrames = 120; // frames the last notes ring for when every track ends without stopping the song
 
-// The MIDI file's ticks in a quarter note: several to a frame at the tempos that songs have.
-constexpr uint16_t kQuarterTicks = 480;
-
 // The number of entries in the driver's PSG frequency table: one for each 1/32 semitone of notes 0 to 83 (C2 to B8).
 // Other data follows it.
 constexpr int kPsgFreqEntries = 84 * 32;
 
 // Returns the pitch that frequency register value `x` (0-2047) plays, to the nearest 1/32 semitone from PSG note 0. A
-// square channel plays 131072 / (2048 - x) Hz, and its note 0 is C2. The wave channel plays an octave lower, and so is
-// its note 0.
+// square channel's note 0 is C2. The wave channel plays an octave lower. Its note 0 is an octave lower too.
 int RegisterPitch(int x)
 {
-    return int(std::lround(384 * std::log2(131072.0 / (2048 - x) / kC2)));
+    return int(std::lround(384 * std::log2(SquareHz(x) / kC2)));
 }
 
 const char* const kPsgNames[kPsgTracks] = {"Square 1", "Square 2", "Wave", "Noise"};
@@ -57,14 +56,6 @@ std::string TrackName(int t)
     }
 
     return "Voice " + std::to_string(t - kPsgTracks);
-}
-
-std::string TwoDigits(int n)
-{
-    char b[16];
-    std::snprintf(b, sizeof b, "%02d", n);
-
-    return b;
 }
 
 // Shared settings for one frame: echo, plus PSG master volume and wave RAM selection in Dungeon Dice Monsters.
@@ -174,15 +165,6 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops,
     return sim;
 }
 
-// The sound source that plays a note.
-enum class Kind
-{
-    kSquare,
-    kWave,
-    kNoise,
-    kSample
-};
-
 // A track event for MIDI conversion.
 struct Event
 {
@@ -213,12 +195,103 @@ struct Levels
     double left = 0, right = 0;
 };
 
-// Turns one track's per-frame driver output into note, level, bend and echo events, following what the driver's output
-// stage does with it.
-class TrackRenderer
+// Writes the events of one track's notes, and holds the state of the note that's playing. The renderers of the
+// output stages build on it.
+class NoteWriter
 {
 public:
-    TrackRenderer(const Rom& rom, const DriverInfo& info, int track) : rom_(rom), info_(info), t_(track)
+    // Ends any active note at frame `f`.
+    void NoteOff(uint32_t f, std::vector<Event>& out)
+    {
+        if (on_)
+        {
+            out.push_back(Event{Event::kNoteOff, f});
+        }
+
+        on_ = false;
+    }
+
+protected:
+    NoteWriter(const Rom& rom, const DriverInfo& info, int track) : rom_(rom), info_(info), t_(track)
+    {
+    }
+
+    // Starts a note. Any note that's playing has to be ended first.
+    void NoteOn(uint32_t f, Kind kind, int param, int note, int dev, Levels lv, std::vector<Event>& out)
+    {
+        Event e{Event::kNoteOn, f};
+        e.kind = kind;
+        e.param = param;
+        e.note = note;
+        e.dev = dev;
+        e.level_l = lv.left;
+        e.level_r = lv.right;
+        out.push_back(e);
+        on_ = true;
+    }
+
+    // Updates the active note's levels and, if `bend` is true, its pitch.
+    void Update(uint32_t f, int dev, Levels lv, bool bend, std::vector<Event>& out) const
+    {
+        if (!on_)
+        {
+            return;
+        }
+
+        if (bend)
+        {
+            Event e{Event::kBend, f};
+            e.dev = dev;
+            out.push_back(e);
+        }
+
+        Event e{Event::kLevels, f};
+        e.level_l = lv.left;
+        e.level_r = lv.right;
+        out.push_back(e);
+    }
+
+    // Changes the levels of the sample note that's playing to `lv` at frame `f`, if they differ.
+    void ChangeLevels(uint32_t f, Levels lv, std::vector<Event>& out)
+    {
+        if (lv.left == levels_.left && lv.right == levels_.right)
+        {
+            return;
+        }
+
+        levels_ = lv;
+        Event e{Event::kLevels, f};
+        e.level_l = lv.left;
+        e.level_r = lv.right;
+        out.push_back(e);
+    }
+
+    // Warns, the first time only, that the track skips the notes of invalid sample `sample`.
+    void SkipInvalidSample(int sample, std::vector<std::string>& warnings)
+    {
+        if (skipped_.insert(sample).second)
+        {
+            warnings.push_back("track " + std::to_string(t_) + ": notes of invalid sample " + std::to_string(sample) +
+                               " skipped");
+        }
+    }
+
+    const Rom& rom_;
+    const DriverInfo& info_;
+    int t_;
+    bool on_ = false;
+    int note_ = 0;          // the note number that bends of the note that's playing are measured from
+    int key_ = 0;           // older revisions and Dungeon Dice Monsters: the sample of the note that's playing
+    Levels levels_;         // older revisions and Dungeon Dice Monsters: the levels of the sample note that's playing
+    std::set<int> skipped_; // invalid samples whose notes were skipped, with a warning the first time
+};
+
+// Turns one track's per-frame driver output into note, level, bend and echo events in the Ultimate Masters, WCT 2004,
+// Rave Master and Eternal Duelist revisions, following what the revision's output stage does with it.
+class TrackRenderer : public NoteWriter
+{
+public:
+    TrackRenderer(const Rom& rom, const DriverInfo& info, int track) : NoteWriter(rom, info, track)
     {
         // SOUNDCNT_L starts as 0xBB77: squares and noise on both sides, wave off until used.
         left_ = right_ = track != 2;
@@ -229,28 +302,6 @@ public:
     void Frame(uint32_t f, const TrackOutput& o, const FrameState& state, std::vector<Event>& out,
                std::vector<std::string>& warnings)
     {
-        if (info_.revision == Revision::kDungeonDiceMonsters)
-        {
-            switch (t_)
-            {
-            case 0:
-            case 1:
-                SquareDungeonDice(f, o, state, out);
-                break;
-            case 2:
-                WaveDungeonDice(f, o, state, out);
-                break;
-            case 3:
-                NoiseDungeonDice(f, o, state, out);
-                break;
-            default:
-                SampleDungeonDice(f, o, out, warnings);
-                break;
-            }
-
-            return;
-        }
-
         const bool wct2004 = info_.revision == Revision::kWct2004;
         if (!IsPsgTrack(t_))
         {
@@ -267,7 +318,7 @@ public:
                 out.push_back(e);
             }
 
-            if (info_.revision != Revision::kUltimateMasters)
+            if (OlderOutputStage(info_.revision))
             {
                 SampleOlder(f, o, out, warnings);
                 return;
@@ -306,17 +357,6 @@ public:
         }
     }
 
-    // Ends any active note at frame `f`.
-    void NoteOff(uint32_t f, std::vector<Event>& out)
-    {
-        if (on_)
-        {
-            out.push_back(Event{Event::kNoteOff, f});
-        }
-
-        on_ = false;
-    }
-
 private:
     // The frequency that the driver's square or wave output writes.
     struct PsgFrequency
@@ -348,41 +388,6 @@ private:
         }
 
         return fr;
-    }
-
-    // Starts a note. Any note that's playing has to be ended first.
-    void NoteOn(uint32_t f, Kind kind, int param, int note, int dev, Levels lv, std::vector<Event>& out)
-    {
-        Event e{Event::kNoteOn, f};
-        e.kind = kind;
-        e.param = param;
-        e.note = note;
-        e.dev = dev;
-        e.level_l = lv.left;
-        e.level_r = lv.right;
-        out.push_back(e);
-        on_ = true;
-    }
-
-    // Updates the active note's levels and, if `bend` is true, its pitch.
-    void Update(uint32_t f, int dev, Levels lv, bool bend, std::vector<Event>& out) const
-    {
-        if (!on_)
-        {
-            return;
-        }
-
-        if (bend)
-        {
-            Event e{Event::kBend, f};
-            e.dev = dev;
-            out.push_back(e);
-        }
-
-        Event e{Event::kLevels, f};
-        e.level_l = lv.left;
-        e.level_r = lv.right;
-        out.push_back(e);
     }
 
     // Mirrors the Ultimate Masters revision's PSG output stage, which sets the sides a channel plays on as it writes
@@ -442,7 +447,7 @@ private:
                 // load the wave on every output, from the record's wave number, which a bend or a legato note leaves at
                 // 0. MIDI can only play a new wave as a new note.
                 const int row = (o.b2 << 4) + o.vol; // the driver's wave-table row
-                const bool reload = info_.revision != Revision::kUltimateMasters && on_ && row != row_;
+                const bool reload = OlderOutputStage(info_.revision) && on_ && row != row_;
                 if (o.vol == 0)
                 {
                     NoteOff(f, out);
@@ -511,10 +516,9 @@ private:
                     NoteOn(f, Kind::kSample, o.key, o.note_pitch >> 5, dev, lv, out);
                     levels_written = true;
                 }
-                else if (skipped_.insert(o.key).second)
+                else
                 {
-                    warnings.push_back("track " + std::to_string(t_) + ": notes of invalid sample " +
-                                       std::to_string(o.key) + " skipped");
+                    SkipInvalidSample(o.key, warnings);
                 }
             }
             else if (o.flags & kOutPitch)
@@ -551,10 +555,9 @@ private:
                 NoteOn(f, Kind::kSample, o.key, note_, o.pitch - 32 * note_, lv, out);
                 levels_ = lv;
             }
-            else if (skipped_.insert(o.key).second)
+            else
             {
-                warnings.push_back("track " + std::to_string(t_) + ": notes of invalid sample " +
-                                   std::to_string(o.key) + " skipped");
+                SkipInvalidSample(o.key, warnings);
             }
 
             return;
@@ -577,16 +580,64 @@ private:
         }
 
         const bool every_frame = info_.revision == Revision::kWct2004;
-        if ((every_frame || o.trig) && (lv.left != levels_.left || lv.right != levels_.right))
+        if (every_frame || o.trig)
         {
-            levels_ = lv;
-            Event e{Event::kLevels, f};
-            e.level_l = lv.left;
-            e.level_r = lv.right;
-            out.push_back(e);
+            ChangeLevels(f, lv, out);
         }
     }
 
+    // Returns how much higher sample `key` plays than sample `playing` at the same pitch, in 1/32 semitones.
+    int StepDeviation(int key, int playing) const
+    {
+        const SampleInfo s = info_.Sample(rom_, key);
+        const SampleInfo p = info_.Sample(rom_, playing);
+        if (key == playing || !s.valid || !p.valid || s.step == p.step || !s.step || !p.step)
+        {
+            return 0;
+        }
+
+        return int(std::lround(384.0 * std::log2(double(s.step) / p.step)));
+    }
+
+    bool left_ = true, right_ = true;
+    int level_ = 0;
+    int row_ = -1;   // the wave-table row of the wave note that's playing
+    int noise_ = -1; // the NR43 value of the noise note that's playing
+    int echo_ = 0;
+};
+
+// Turns one track's per-frame driver output into note, level and bend events in the Dungeon Dice Monsters revision,
+// following what its output stage does with it.
+class DungeonDiceRenderer : public NoteWriter
+{
+public:
+    DungeonDiceRenderer(const Rom& rom, const DriverInfo& info, int track) : NoteWriter(rom, info, track)
+    {
+    }
+
+    // Adds the events of frame `f` to `out`, from the track's output record and the frame's other settings.
+    void Frame(uint32_t f, const TrackOutput& o, const FrameState& state, std::vector<Event>& out,
+               std::vector<std::string>& warnings)
+    {
+        switch (t_)
+        {
+        case 0:
+        case 1:
+            Square(f, o, state, out);
+            break;
+        case 2:
+            Wave(f, o, state, out);
+            break;
+        case 3:
+            Noise(f, o, state, out);
+            break;
+        default:
+            Sample(f, o, out, warnings);
+            break;
+        }
+    }
+
+private:
     // Returns the levels of a PSG channel at `level` on each side, scaled by the PSG's volume on that side, which the
     // Dungeon Dice Monsters revision sets with NR50.
     static Levels ScaledLevels(double level, const FrameState& state)
@@ -598,15 +649,14 @@ private:
     // with bit 15 set to restart the channel, or a noise setting.
     uint16_t FrequencyEntry(int pitch) const
     {
-        const uint32_t a = uint32_t(int64_t(info_.psg_freq_table) + 2 * int64_t(pitch));
-        return info_.psg_freq_table && rom_.Contains(a, 2) ? rom_.U16(a) : 0;
+        return TableEntry(rom_, info_.psg_freq_table, pitch).value_or(0);
     }
 
     // Plays the note that the Dungeon Dice Monsters revision's square, wave or noise channel sounds at the end of frame
     // `f`: `sound` (a duty, wave row or noise note) at frequency register `x`, from a note command's write or a restart
     // if `new_note`, at levels `lv`, or nothing if `lv` is 0 on both sides. A note goes on while the channel plays the
     // same sound, and a new one starts where the sound changes, since MIDI can only change it with a new note.
-    void PlayDungeonDice(uint32_t f, Kind kind, int sound, int x, bool new_note, Levels lv, std::vector<Event>& out)
+    void Play(uint32_t f, Kind kind, int sound, int x, bool new_note, Levels lv, std::vector<Event>& out)
     {
         const int pitch = kind == Kind::kNoise ? 0 : RegisterPitch(x);
         if (lv.left <= 0 && lv.right <= 0)
@@ -630,7 +680,7 @@ private:
     // frequency table entry has bit 15 set, as all the table's entries do, but only a note command's write starts a new
     // note. The others, such as vibrato's, change the note that's playing. The envelope that FB gives a square channel
     // is left out.
-    void SquareDungeonDice(uint32_t f, const TrackOutput& o, const FrameState& state, std::vector<Event>& out)
+    void Square(uint32_t f, const TrackOutput& o, const FrameState& state, std::vector<Event>& out)
     {
         bool new_note = false;
         if (o.Any())
@@ -641,17 +691,17 @@ private:
             register_ = entry & 0x7FF;
             duty_ = o.b2 >> 6;
             sounding_ = level_ && (sounding_ || restart);
-            new_note = restart && o.trig && (o.flags & 1);
+            new_note = restart && o.trig && (o.flags & kOutDungeonDiceNote);
         }
 
         const double level = sounding_ ? double(kPsgLevelPerVolume * level_) : 0;
-        PlayDungeonDice(f, Kind::kSquare, duty_, register_, new_note, ScaledLevels(level, state), out);
+        Play(f, Kind::kSquare, duty_, register_, new_note, ScaledLevels(level, state), out);
     }
 
     // Mirrors the Dungeon Dice Monsters revision's wave channel output, which writes the channel's frequency without
     // restarting it, and its volume code from the wave volume table. A wave command loads the wave RAM at once, which
     // restarts the channel at frequency 0 until the next write.
-    void WaveDungeonDice(uint32_t f, const TrackOutput& o, const FrameState& state, std::vector<Event>& out)
+    void Wave(uint32_t f, const TrackOutput& o, const FrameState& state, std::vector<Event>& out)
     {
         bool new_note = false;
         if (state.wave_loads != wave_loads_)
@@ -663,23 +713,20 @@ private:
 
         if (o.Any())
         {
-            const uint32_t a = info_.wave_volume_table + 2 * uint32_t(o.vol);
-            const uint16_t nr32 = info_.wave_volume_table && rom_.Contains(a, 2) ? rom_.U16(a) : (o.vol ? 0x2000 : 0);
-            constexpr double kShares[4] = {0, 1, 0.5, 0.25}; // the output level for each value of NR32 bits 13-14
-            wave_share_ = nr32 & 0x8000 ? 0.75 : kShares[(nr32 >> 13) & 3];
+            const uint16_t nr32 = TableEntry(rom_, info_.wave_volume_table, o.vol).value_or(o.vol ? 0x2000 : 0);
+            wave_share_ = WaveShare(nr32);
             register_ = FrequencyEntry(o.pitch) & 0x7FF;
-            new_note |= o.trig && (o.flags & 1);
+            new_note |= o.trig && (o.flags & kOutDungeonDiceNote);
         }
 
         const int row = (state.wave << 4) | 15;
-        PlayDungeonDice(f, Kind::kWave, row, register_, new_note, ScaledLevels(kWaveRowLevel * wave_share_, state),
-                        out);
+        Play(f, Kind::kWave, row, register_, new_note, ScaledLevels(kWaveRowLevel * wave_share_, state), out);
     }
 
     // Mirrors the Dungeon Dice Monsters revision's noise channel output. A write restarts the channel when the noise
     // setting has bit 15 set, and a restart is a new note. The noise notes are entries of the frequency table from note
     // 72's on.
-    void NoiseDungeonDice(uint32_t f, const TrackOutput& o, const FrameState& state, std::vector<Event>& out)
+    void Noise(uint32_t f, const TrackOutput& o, const FrameState& state, std::vector<Event>& out)
     {
         bool new_note = false;
         if (o.Any())
@@ -694,7 +741,7 @@ private:
         }
 
         const double level = sounding_ ? double(kPsgLevelPerVolume * level_) : 0;
-        PlayDungeonDice(f, Kind::kNoise, noise_note_, 0, new_note, ScaledLevels(level, state), out);
+        Play(f, Kind::kNoise, noise_note_, 0, new_note, ScaledLevels(level, state), out);
     }
 
     // Returns the pitch offset of `period` from the sample's native period `own`, in 1/32 semitones. A timer period of
@@ -706,14 +753,13 @@ private:
 
     // Mirrors the Dungeon Dice Monsters voice update. Every frame sets the voice's level from its track's volume. A
     // flagged record starts a note at the sample's rate or the rate from the sample period table; volume 0 stops the
-    // voice. Flag 0x40 instead treats the record's pitch as a timer period and changes the playing note's rate. On
-    // hardware this also changes the other voice sharing the FIFO. agbsf2 doesn't model that change.
-    void SampleDungeonDice(uint32_t f, const TrackOutput& o, std::vector<Event>& out,
-                           std::vector<std::string>& warnings)
+    // voice. kOutDungeonDicePeriod instead treats the record's pitch as a timer period and changes the playing note's
+    // rate. On hardware this also changes the other voice sharing the FIFO. agbsf2 doesn't model that change.
+    void Sample(uint32_t f, const TrackOutput& o, std::vector<Event>& out, std::vector<std::string>& warnings)
     {
         const double level = info_.VoiceLevel(rom_, o.vol, 0);
         const Levels lv{level, level};
-        if (o.flags & 0x40)
+        if (o.flags & kOutDungeonDicePeriod)
         {
             if (on_)
             {
@@ -726,8 +772,7 @@ private:
         {
             NoteOff(f, out);
             const SampleInfo s = info_.Sample(rom_, o.b2);
-            const uint32_t a = uint32_t(int64_t(info_.sample_period_table) + 2 * int64_t(o.pitch));
-            const uint32_t period = info_.sample_period_table && rom_.Contains(a, 2) ? rom_.U16(a) : 0;
+            const uint32_t period = TableEntry(rom_, info_.sample_period_table, o.pitch).value_or(0);
             if (o.vol == 0)
             {
                 return;
@@ -741,51 +786,22 @@ private:
                 levels_ = lv;
                 NoteOn(f, Kind::kSample, o.b2, note_, pitch - 32 * note_, lv, out);
             }
-            else if (skipped_.insert(o.b2).second)
+            else
             {
-                warnings.push_back("track " + std::to_string(t_) + ": notes of invalid sample " + std::to_string(o.b2) +
-                                   " skipped");
+                SkipInvalidSample(o.b2, warnings);
             }
 
             return;
         }
 
-        if (on_ && (lv.left != levels_.left || lv.right != levels_.right))
+        if (on_)
         {
-            levels_ = lv;
-            Event e{Event::kLevels, f};
-            e.level_l = lv.left;
-            e.level_r = lv.right;
-            out.push_back(e);
+            ChangeLevels(f, lv, out);
         }
     }
 
-    // Returns how much higher sample `key` plays than sample `playing` at the same pitch, in 1/32 semitones.
-    int StepDeviation(int key, int playing) const
-    {
-        const SampleInfo s = info_.Sample(rom_, key);
-        const SampleInfo p = info_.Sample(rom_, playing);
-        if (key == playing || !s.valid || !p.valid || s.step == p.step || !s.step || !p.step)
-        {
-            return 0;
-        }
-
-        return int(std::lround(384.0 * std::log2(double(s.step) / p.step)));
-    }
-
-    const Rom& rom_;
-    const DriverInfo& info_;
-    int t_;
-    bool on_ = false;
-    bool left_ = true, right_ = true;
     int level_ = 0;
-    int note_ = 0;   // the square, wave or older revisions' sample note that's playing
-    int key_ = 0;    // older revisions: the sample of the note that's playing
-    int row_ = -1;   // the wave-table row of the wave note that's playing
-    int noise_ = -1; // the NR43 value of the noise note that's playing
-    Levels levels_;  // older revisions: the levels of the sample note that's playing
-    int echo_ = 0;
-    std::set<int> skipped_; // invalid samples whose notes were skipped, with a warning the first time
+    int noise_ = -1; // the NR43 value of the channel's last noise setting
 
     // PSG channel state and current sound after the Dungeon Dice Monsters driver's register writes.
     bool sounding_ = false;
@@ -805,7 +821,7 @@ struct Placement
 };
 
 // A key range of a preset, and the sample it plays.
-struct Zone
+struct KeyZone
 {
     int sample = -1; // SF2 sample
     int lo = 0, hi = 127;
@@ -817,7 +833,7 @@ struct Zone
 // Key layout of one DS track: the preset and key that play each (sample, semitone).
 struct TrackKeymap
 {
-    std::vector<std::vector<Zone>> presets;
+    std::vector<std::vector<KeyZone>> presets;
     std::map<std::pair<int, int>, Placement> notes;
 };
 
@@ -844,9 +860,9 @@ int FreeKey(const std::set<int>& taken, int want)
 }
 
 // Returns true if no zone covers any of the keys lo to hi.
-bool RangeFree(const std::vector<Zone>& zones, int lo, int hi)
+bool RangeFree(const std::vector<KeyZone>& zones, int lo, int hi)
 {
-    for (const Zone& z : zones)
+    for (const KeyZone& z : zones)
     {
         if (z.lo <= hi && lo <= z.hi)
         {
@@ -859,23 +875,23 @@ bool RangeFree(const std::vector<Zone>& zones, int lo, int hi)
 
 // Widens a preset's melodic zones over the free keys next to them, so the preset is playable: the keys between two
 // zones are split halfway, and the outer zones grow by up to an octave.
-void WidenMelodicZones(std::vector<Zone>& zones)
+void WidenMelodicZones(std::vector<KeyZone>& zones)
 {
-    std::vector<Zone*> mel;
-    for (Zone& z : zones)
+    std::vector<KeyZone*> mel;
+    for (KeyZone& z : zones)
     {
         if (z.melodic)
         {
             mel.push_back(&z);
         }
     }
-    std::sort(mel.begin(), mel.end(), [](const Zone* a, const Zone* b) { return a->lo < b->lo; });
+    std::sort(mel.begin(), mel.end(), [](const KeyZone* a, const KeyZone* b) { return a->lo < b->lo; });
 
     // Split the keys between two zones halfway, measured from where the lower zone ended before it grew.
     int prev_hi = 0;
     for (size_t i = 0; i < mel.size(); i++)
     {
-        Zone& z = *mel[i];
+        KeyZone& z = *mel[i];
         const int floor_key = i == 0 ? std::max(0, z.lo - 12) : (prev_hi + z.lo) / 2 + 1;
         const int ceil_key = i + 1 == mel.size() ? std::min(127, z.hi + 12) : (z.hi + mel[i + 1]->lo) / 2;
         prev_hi = z.hi;
@@ -930,7 +946,7 @@ TrackKeymap BuildKeymap(const std::map<int, std::set<int>>& usage, SoundfontBuil
                 continue;
             }
 
-            Zone z;
+            KeyZone z;
             z.sample = sf.DsSample(s);
             z.lo = lo;
             z.hi = hi;
@@ -1007,7 +1023,7 @@ TrackKeymap BuildKeymap(const std::map<int, std::set<int>>& usage, SoundfontBuil
             }
         }
 
-        Zone z;
+        KeyZone z;
         z.sample = sf.DsSample(s);
         z.lo = z.hi = where.key;
         z.root = std::min(where.key - k, 127);
@@ -1016,32 +1032,13 @@ TrackKeymap BuildKeymap(const std::map<int, std::set<int>>& usage, SoundfontBuil
         km.notes[{s, k}] = where;
     }
 
-    for (std::vector<Zone>& zones : km.presets)
+    for (std::vector<KeyZone>& zones : km.presets)
     {
         WidenMelodicZones(zones);
     }
 
     return km;
 }
-
-// Returns a zone that plays SF2 sample `sample` on keys lo to hi, with `root` as the key of its own pitch.
-sf2::Zone MakeZone(int sample, int lo, int hi, int root, bool loop)
-{
-    sf2::Zone z;
-    z.generators.push_back(sf2::Generator::Range(sf2::kKeyRange, lo, hi));
-    z.generators.push_back(sf2::Generator::Value(sf2::kOverridingRootKey, root));
-    z.generators.push_back(sf2::Generator::Value(sf2::kSampleModes, loop ? 1 : 0));
-    z.generators.push_back(sf2::Generator::Value(sf2::kSampleId, sample));
-
-    return z;
-}
-
-// A preset's bank and program number.
-struct ProgramRef
-{
-    int bank = 0;
-    int program = 0;
-};
 
 // The older revisions' PSG output in one frame: the record that their output stage hands each PSG channel, and the
 // sides each channel plays on.
@@ -1140,20 +1137,37 @@ std::vector<Wct2004Psg> Wct2004PsgOutput(const Rom& rom, const DriverInfo& info,
 std::array<std::vector<Event>, kTracks> RenderTracks(const Rom& rom, const DriverInfo& info, const Simulation& sim,
                                                      std::vector<std::string>& warnings)
 {
+    std::array<std::vector<Event>, kTracks> events;
+    const uint32_t end_frame = uint32_t(sim.frames.size());
+
+    if (info.revision == Revision::kDungeonDiceMonsters)
+    {
+        for (int t = 0; t < kTracks; t++)
+        {
+            DungeonDiceRenderer r(rom, info, t);
+            for (uint32_t f = 0; f < end_frame; f++)
+            {
+                r.Frame(f, sim.frames[f][t], sim.state[f], events[t], warnings);
+            }
+            r.NoteOff(end_frame, events[t]);
+        }
+
+        return events;
+    }
+
+    const bool older = OlderOutputStage(info.revision);
     std::vector<Wct2004Psg> psg;
-    if (info.revision != Revision::kUltimateMasters && info.revision != Revision::kDungeonDiceMonsters)
+    if (older)
     {
         psg = Wct2004PsgOutput(rom, info, sim);
     }
 
-    std::array<std::vector<Event>, kTracks> events;
-    const uint32_t end_frame = uint32_t(sim.frames.size());
     for (int t = 0; t < kTracks; t++)
     {
         TrackRenderer r(rom, info, t);
         for (uint32_t f = 0; f < end_frame; f++)
         {
-            if (!psg.empty() && IsPsgTrack(t))
+            if (older && IsPsgTrack(t))
             {
                 const Wct2004Psg& p = psg[f];
                 r.PsgFrame(f, p.records[size_t(t)], p.left[size_t(t)], p.right[size_t(t)], events[t]);
@@ -1226,7 +1240,7 @@ struct Usage
 };
 
 // Collects sound usage for the tracks selected by `track_mask`.
-Usage CollectUsage(const std::array<std::vector<Event>, kTracks>& events, uint16_t track_mask)
+Usage CollectUsage(const std::array<std::vector<Event>, kTracks>& events, uint32_t track_mask)
 {
     Usage u;
     for (int t = 0; t < kTracks; t++)
@@ -1272,13 +1286,13 @@ Usage CollectUsage(const std::array<std::vector<Event>, kTracks>& events, uint16
 // The locations of a song's instruments in the SoundFont.
 struct Programs
 {
-    std::map<int, ProgramRef> duty;      // by duty cycle
-    std::map<int, ProgramRef> wave;      // by wave row, wave << 4 | volume
-    std::vector<ProgramRef> noise;       // the noise presets
+    std::map<int, BankProgram> duty;     // by duty cycle
+    std::map<int, BankProgram> wave;     // by wave row, wave << 4 | volume
+    std::vector<BankProgram> noise;      // the noise presets
     std::map<int, Placement> noise_keys; // noise note -> its preset and key
     std::array<TrackKeymap, kTracks> keymaps;
-    std::array<std::vector<ProgramRef>, kTracks> tracks; // the presets of each DS track
-    bool fits = true;                                    // every preset found a free program
+    std::array<std::vector<BankProgram>, kTracks> tracks; // the presets of each DS track
+    bool fits = true;                                     // every preset found a free program
 };
 
 // Adds a preset for each instrument the song uses, in the banks and programs that the SoundFont gives song `song`, and
@@ -1300,13 +1314,13 @@ Programs AddPresets(const Usage& usage, SoundfontBuilder& sf, const Rom& rom, co
                                          uint16_t(slot ? slot->program : 0), int(file.instruments.size()) - 1);
         file.presets.push_back(p);
 
-        return ProgramRef{p.bank, p.program};
+        return BankProgram{p.bank, p.program};
     };
 
     for (int d : usage.duties)
     {
         const int s = sf.SquareSample(d);
-        programs.duty[d] = add_preset(std::string("Square ") + kDutyNames[d], {MakeZone(s, 0, 127, 60, true)});
+        programs.duty[d] = add_preset(SquareName(d), {RootKeyZone(s, true, 0, 127, 60)});
     }
 
     for (int row : usage.waves)
@@ -1314,8 +1328,7 @@ Programs AddPresets(const Usage& usage, SoundfontBuilder& sf, const Rom& rom, co
         const int w = row >> 4, vol = row & 15;
         const int s = sf.WaveSample(w, vol);
         const int root = std::clamp(sf.WaveKey(w, 36), 0, 127);
-        programs.wave[row] =
-            add_preset("Wave " + TwoDigits(w) + " vol " + std::to_string(vol), {MakeZone(s, 0, 127, root, true)});
+        programs.wave[row] = add_preset(WaveName(w, vol), {RootKeyZone(s, true, 0, 127, root)});
     }
 
     // Each noise note gets a key of its own: the one 36 above its number, or failing that the nearest free key above
@@ -1343,7 +1356,7 @@ Programs AddPresets(const Usage& usage, SoundfontBuilder& sf, const Rom& rom, co
         noise_taken[size_t(where.preset)].insert(where.key);
         programs.noise_keys[n] = where;
         const int sample = sf.NoiseSample(info.NoiseSetting(rom, n));
-        noise_zones[size_t(where.preset)].push_back(MakeZone(sample, where.key, where.key, where.key, true));
+        noise_zones[size_t(where.preset)].push_back(RootKeyZone(sample, true, where.key, where.key, where.key));
     }
 
     for (size_t p = 0; p < noise_zones.size(); p++)
@@ -1364,9 +1377,9 @@ Programs AddPresets(const Usage& usage, SoundfontBuilder& sf, const Rom& rom, co
         for (size_t p = 0; p < presets.size(); p++)
         {
             std::vector<sf2::Zone> zones;
-            for (const Zone& z : presets[p])
+            for (const KeyZone& z : presets[p])
             {
-                zones.push_back(MakeZone(z.sample, z.lo, z.hi, z.root, z.loop));
+                zones.push_back(RootKeyZone(z.sample, z.loop, z.lo, z.hi, z.root));
             }
 
             std::string name = TrackName(t);
@@ -1385,7 +1398,7 @@ Programs AddPresets(const Usage& usage, SoundfontBuilder& sf, const Rom& rom, co
 // Preset and MIDI key for a note.
 struct NoteSound
 {
-    ProgramRef program;
+    BankProgram program;
     int key = 0;
 };
 
@@ -1442,23 +1455,16 @@ std::array<int, kTracks> AssignChannels(const std::array<bool, kTracks>& used)
     return channel;
 }
 
-// Returns the MIDI tick of a place `quarters` quarter notes into the song.
-uint32_t QuarterTick(double quarters)
-{
-    return uint32_t(std::lround(std::max(0.0, quarters) * kQuarterTicks));
-}
-
 // Writes the conductor track: the title and the tempo map, the game and song it's from, its loop, and the driver's echo
-// settings, which MIDI can't express. `song_tick` gives a frame's tick on the song's beat, and `loop_tick` the tick of
-// a loop marker on a frame.
-void WriteConductor(MidiTrack& conductor, const std::string& title, const BeatGrid& grid, const Rom& rom,
-                    const DriverInfo& info, int song, const Simulation& sim,
-                    const std::function<uint32_t(double)>& song_tick, const std::function<uint32_t(double)>& loop_tick)
+// settings, which MIDI can't express. `ticks` gives the grid's tempos and the ticks of frames. The track's events at
+// tick 0 come in another order than WriteBeatConductor()'s. That function would change the files.
+void WriteConductor(MidiTrack& conductor, const std::string& title, const BeatTicks& ticks, const Rom& rom,
+                    const DriverInfo& info, int song, const Simulation& sim)
 {
     conductor.Name(title);
-    for (const BeatGrid::Tempo& t : grid.Tempos())
+    for (const BeatGrid::Tempo& t : ticks.Grid().Tempos())
     {
-        conductor.Tempo(QuarterTick(t.quarter), uint32_t(std::lround(t.frames * kFrameSeconds * 1e6)));
+        conductor.Tempo(QuarterTick(t.quarter), uint32_t(std::lround(FrameSeconds(t.frames) * 1e6)));
     }
     conductor.TimeSignature(0, 4, 2);
 
@@ -1473,9 +1479,9 @@ void WriteConductor(MidiTrack& conductor, const std::string& title, const BeatGr
     // player that keeps its tempo when it jumps back would otherwise play the loop's start at.
     if (sim.loop_end >= 0)
     {
-        conductor.Meta(loop_tick(sim.loop_start), 0x06, "loopStart");
-        conductor.Meta(loop_tick(sim.loop_end), 0x06, "loopEnd");
-        conductor.RepeatTempo(loop_tick(sim.loop_start));
+        conductor.Meta(ticks.Marker(sim.loop_start), 0x06, "loopStart");
+        conductor.Meta(ticks.Marker(sim.loop_end), 0x06, "loopEnd");
+        conductor.RepeatTempo(ticks.Marker(sim.loop_start));
     }
 
     int last_fb = -1, last_delay = -1;
@@ -1491,14 +1497,14 @@ void WriteConductor(MidiTrack& conductor, const std::string& title, const BeatGr
         {
             std::snprintf(text, sizeof text, "echo: delay %.0f ms, feedback %d/256 (sent as CC91 reverb)",
                           e.delay * 32 * 1000.0 / info.mix_rate, e.feedback);
-            conductor.Meta(song_tick(f), 0x01, text);
+            conductor.Meta(ticks.Song(f), 0x01, text);
         }
 
         last_fb = e.feedback;
         last_delay = e.delay;
     }
 
-    conductor.SetEnd(song_tick(double(sim.frames.size())));
+    conductor.SetEnd(ticks.Song(double(sim.frames.size())));
 }
 
 // Writes one track's events on MIDI channel `ch`, sending program changes and controllers where they change, and where
@@ -1508,7 +1514,7 @@ void WriteTrack(MidiTrack& mt, int ch, int range, const std::vector<Event>& even
                 const std::function<NoteSound(const Event&)>& sound_of, const std::function<uint32_t(double)>& tick_of)
 {
     // The first note's preset is selected before anything plays, and the controllers start reset.
-    ProgramRef program;
+    BankProgram program;
     for (const Event& e : events)
     {
         if (e.type == Event::kNoteOn)
@@ -1547,7 +1553,7 @@ void WriteTrack(MidiTrack& mt, int ch, int range, const std::vector<Event>& even
 
     auto set_bend = [&](uint32_t tick, int dev)
     {
-        const int v = std::clamp(8192 + int(std::lround(dev * 8192.0 / (32.0 * range))), 0, 16383);
+        const int v = FixedBendValue(dev, 32, range);
         if (v != bend)
         {
             mt.PitchBend(tick, ch, bend = v);
@@ -1626,98 +1632,53 @@ void WriteTrack(MidiTrack& mt, int ch, int range, const std::vector<Event>& even
     }
 }
 
-// Converts a song, writing its files if `write` is set.
-SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertOptions& opt, SoundfontBuilder* shared,
-                bool write)
+// Simulates the song for its conversion. The marked loop starts at the song's second pass if the first pass plays
+// unlike the second. That happens, for example, when the tracks come back to their loop points with the volume or pan
+// that the loop's end left them. A delay at the start of a loop point plays only in the later passes. It moves its
+// track's notes there. The comparison of passes times each track's notes from its first note and misses the move.
+Simulation MarkedSimulation(const Rom& rom, const DriverInfo& info, int song, int loops)
 {
-    // The marked loop starts at the song's second pass if its first plays unlike it, as when the tracks come back to
-    // their loop points with the volume or pan that the loop's end left them. A delay at the start of a loop point
-    // plays only in the later passes. It moves its track's notes there. The comparison of passes times each track's
-    // notes from its first note and misses the move.
-    SongSummary sum;
-    Simulation sim = Simulate(rom, info, song, opt.loops, false);
+    Simulation sim = Simulate(rom, info, song, loops, false);
     if (sim.loop_end >= 0 &&
         (sim.delayed_loop_point || !FirstPassRepeats(rom, info, Simulate(rom, info, song, 2, false))))
     {
-        sim = Simulate(rom, info, song, opt.loops, true);
-    }
-    sum.warnings = sim.warnings;
-    if (sim.frames.empty())
-    {
-        return sum;
+        sim = Simulate(rom, info, song, loops, true);
     }
 
-    const uint32_t end_frame = uint32_t(sim.frames.size());
-    sum.frames = end_frame;
-    sum.loop_start_frame = sim.loop_start;
-    sum.loop_end_frame = sim.loop_end;
+    return sim;
+}
 
-    const std::array<std::vector<Event>, kTracks> events = RenderTracks(rom, info, sim, sum.warnings);
-    const Usage usage = CollectUsage(events, opt.track_mask);
-    sum.tracks = int(std::count(usage.used.begin(), usage.used.end(), true));
-    sum.silent = sum.tracks == 0; // placeholder entries, such as a "no music" song, play no notes at all
-    if (sum.silent || !write)
+// Copies the presets that track `t` plays in `events` into the drum bank. Some players force channel 10 to that bank.
+void CopyDrumPresets(int t, const std::vector<Event>& events, const Programs& programs, SoundfontBuilder& sf)
+{
+    std::set<std::pair<int, int>> used; // (bank, program) of each of the track's presets
+    for (const Event& e : events)
     {
-        sum.ok = true;
-        return sum;
-    }
-
-    // With a SoundFont shared by all songs, SongBanks gives each song's presets their bank and programs.
-    std::unique_ptr<SoundfontBuilder> own;
-    SoundfontBuilder& sf = shared ? *shared : *(own = std::make_unique<SoundfontBuilder>(rom, info));
-    const SoundfontBuilder::Checkpoint before = sf.Save();
-    const std::string prefix = shared ? "S" + TwoDigits(song) + " " : "";
-    const Programs programs = AddPresets(usage, sf, rom, info, shared ? song : 0, prefix);
-    if (!programs.fits)
-    {
-        const size_t preset_count = sf.File().presets.size() - before.presets;
-        sf.Restore(before);
-        sum.warnings.push_back("needs " + std::to_string(preset_count) +
-                               " presets, more than the SoundFont's banks have free" +
-                               (shared ? "; convert the song without --single-sf2" : ""));
-        return sum;
-    }
-
-    // Some players force channel 10 to the drum bank, so the presets of the track on it get a copy there, to be found
-    // either way. Copies of every preset would clash when there are more than 128.
-    const std::array<int, kTracks> channel = AssignChannels(usage.used);
-    const auto drum_channel = std::find(channel.begin(), channel.end(), 9);
-    if (drum_channel != channel.end())
-    {
-        if (shared)
+        if (e.type == Event::kNoteOn)
         {
-            sum.warnings.push_back("a 16th channel is needed; channel 10 may play from the drum bank");
-        }
-        else
-        {
-            const int t = int(drum_channel - channel.begin());
-            std::set<std::pair<int, int>> used; // (bank, program) of each of the track's presets
-            for (const Event& e : events[size_t(t)])
-            {
-                if (e.type == Event::kNoteOn)
-                {
-                    const ProgramRef p = Resolve(programs, sf, t, e).program;
-                    used.insert({p.bank, p.program});
-                }
-            }
-
-            std::vector<sf2::Preset>& presets = sf.File().presets;
-            const size_t count = presets.size();
-            for (size_t i = 0; i < count; i++)
-            {
-                if (used.count({presets[i].bank, presets[i].program}))
-                {
-                    sf2::Preset copy = presets[i];
-                    copy.bank = 128;
-                    presets.push_back(copy);
-                }
-            }
+            const BankProgram p = Resolve(programs, sf, t, e).program;
+            used.insert({p.bank, p.program});
         }
     }
 
-    // The song's beat, from the frames on which every track's notes start, whichever tracks the conversion includes, so
-    // that conversions of different tracks line up, and from the song's start. Each pass through the loop starts again
-    // on the beat.
+    std::vector<sf2::Preset>& presets = sf.File().presets;
+    const size_t count = presets.size();
+    for (size_t i = 0; i < count; i++)
+    {
+        if (used.count({presets[i].bank, presets[i].program}))
+        {
+            sf2::Preset copy = presets[i];
+            copy.bank = kDrumBank;
+            presets.push_back(copy);
+        }
+    }
+}
+
+// Returns the song's beat. The beat comes from the song's start and from the frames on which every track's notes start,
+// whichever tracks the conversion includes. Conversions of different tracks then line up. Each pass through the loop
+// starts again on the beat. The song ends at frame `end_frame`.
+BeatGrid SongGrid(const std::array<std::vector<Event>, kTracks>& events, const Simulation& sim, uint32_t end_frame)
+{
     std::vector<std::vector<uint32_t>> starts(kTracks);
     for (int t = 0; t < kTracks; t++)
     {
@@ -1733,36 +1694,125 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
             starts[size_t(t)].insert(starts[size_t(t)].begin(), 0);
         }
     }
+
     std::vector<uint32_t> hints;
     const int length = sim.loop_end - sim.loop_start;
     for (int f = sim.first_loop_end; length > 0 && f < int(end_frame); f += length)
     {
         hints.push_back(uint32_t(f));
     }
-    const BeatGrid grid(starts, hints);
-    sum.bpm = 60 / (grid.Tempos().front().frames * kFrameSeconds);
+
+    return BeatGrid(starts, hints);
+}
+
+// Writes the song's MIDI file to the folder and under the base name in `settings`. Writes the SoundFont `sf` there too,
+// titled `title`, unless `sf` is null. Adds each file's path to `report`. Sets report.ok if every file is written.
+// Otherwise adds the error to report.warnings.
+void WriteSongFiles(const ConvertSettings& settings, const std::string& number, const std::string& title,
+                    const MidiFile& midi, SoundfontBuilder* sf, SongReport& report)
+{
+    const std::string stem = SongStem(settings, number);
+    std::string error;
+    report.midi_path = stem + ".mid";
+    if (!WriteFile(report.midi_path, midi.Encode(), error))
+    {
+        report.warnings.push_back(error);
+        return;
+    }
+
+    if (sf)
+    {
+        Sf2File& file = sf->File();
+        file.SetTitle(title);
+        report.sf2_path = stem + ".sf2";
+        if (!file.Write(report.sf2_path, error))
+        {
+            report.warnings.push_back(error);
+            return;
+        }
+    }
+
+    report.ok = true;
+}
+
+// Converts a song, writing its files if `write` is set.
+SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings,
+               SoundfontBuilder* shared, bool write)
+{
+    SongReport report;
+    const Simulation sim = MarkedSimulation(rom, info, song, settings.loops);
+    report.warnings = sim.warnings;
+    if (sim.frames.empty())
+    {
+        return report;
+    }
+
+    const uint32_t end_frame = uint32_t(sim.frames.size());
+    report.seconds = FrameSeconds(end_frame);
+    if (sim.loop_end >= 0)
+    {
+        report.loop_start = FrameSeconds(sim.loop_start);
+        report.loop_end = FrameSeconds(sim.loop_end);
+    }
+
+    const std::array<std::vector<Event>, kTracks> events = RenderTracks(rom, info, sim, report.warnings);
+    const Usage usage = CollectUsage(events, settings.track_mask);
+    report.tracks = int(std::count(usage.used.begin(), usage.used.end(), true));
+    report.silent = report.tracks == 0; // placeholder entries, such as a "no music" song, play no notes at all
+    if (report.silent || !write)
+    {
+        report.ok = true;
+        return report;
+    }
+
+    // With a SoundFont shared by all songs, SongBanks gives each song's presets their bank and programs.
+    std::unique_ptr<SoundfontBuilder> own;
+    SoundfontBuilder& sf = shared ? *shared : *(own = std::make_unique<SoundfontBuilder>(rom, info));
+    const SoundfontBuilder::Checkpoint before = sf.Save();
+    const std::string number = SongNumber(song, 0);
+    const std::string prefix = shared ? "S" + number + " " : "";
+    const Programs programs = AddPresets(usage, sf, rom, info, shared ? song : 0, prefix);
+    if (!programs.fits)
+    {
+        const size_t preset_count = sf.File().presets.size() - before.presets;
+        sf.Restore(before);
+        report.warnings.push_back("needs " + std::to_string(preset_count) +
+                                  " presets, more than the SoundFont's banks have free" +
+                                  (shared ? "; convert the song without --single-sf2" : ""));
+        return report;
+    }
+
+    // Some players force channel 10 to the drum bank, so the presets of the track on it get a copy there, to be found
+    // either way. Copies of every preset would clash when there are more than 128.
+    const std::array<int, kTracks> channel = AssignChannels(usage.used);
+    const auto drum_channel = std::find(channel.begin(), channel.end(), kDrumChannel);
+    if (drum_channel != channel.end())
+    {
+        if (shared)
+        {
+            report.warnings.push_back("a 16th channel is needed; channel 10 may play from the drum bank");
+        }
+        else
+        {
+            const int t = int(drum_channel - channel.begin());
+            CopyDrumPresets(t, events[size_t(t)], programs, sf);
+        }
+    }
+
+    const BeatGrid grid = SongGrid(events, sim, end_frame);
+    report.bpm = 60 / FrameSeconds(grid.Tempos().front().frames);
 
     // Each event goes on the beat, or on the driver's frame, up to the song's end.
-    const auto song_tick = [&](double frame)
-    {
-        return QuarterTick(opt.frame_timing ? grid.Quarters(frame) : grid.Snap(frame));
-    };
-
-    // A loop marker comes no later than any track's events from its frame on.
-    const auto loop_tick = [&](double frame)
-    {
-        return QuarterTick(opt.frame_timing ? grid.Quarters(frame) : grid.Marker(frame));
-    };
-
-    const uint32_t end_tick = song_tick(end_frame);
+    const BeatTicks ticks(grid, settings.frame_timing);
+    const uint32_t end_tick = ticks.Song(end_frame);
 
     // The loop's start, from which each track writes its settings again, unless the loop starts with the song.
-    const uint32_t loop_start = sim.loop_end >= 0 ? loop_tick(sim.loop_start) : 0;
+    const uint32_t loop_start = sim.loop_end >= 0 ? ticks.Marker(sim.loop_start) : 0;
     const std::optional<uint32_t> loop = loop_start > 0 ? std::optional(loop_start) : std::nullopt;
 
-    MidiFile midi(kQuarterTicks);
-    const std::string title = rom.Title() + " #" + TwoDigits(song);
-    WriteConductor(midi.AddTrack(), title, grid, rom, info, song, sim, song_tick, loop_tick);
+    MidiFile midi(kBeatQuarterTicks);
+    const std::string title = rom.Title() + " #" + number;
+    WriteConductor(midi.AddTrack(), title, ticks, rom, info, song, sim);
 
     for (int t = 0; t < kTracks; t++)
     {
@@ -1783,51 +1833,28 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
         };
         const auto tick_of = [&](double frame)
         {
-            return std::min(end_tick, QuarterTick(opt.frame_timing ? grid.Quarters(frame) : grid.Quarters(t, frame)));
+            return ticks.Channel(t, frame, end_tick);
         };
         WriteTrack(mt, channel[size_t(t)], range, events[size_t(t)], loop, sound_of, tick_of);
         mt.SetEnd(end_tick);
     }
 
-    const std::string stem =
-        Utf8(PathFromUtf8(opt.out_dir) / PathFromUtf8(SafeFileName(opt.base_name) + "_" + TwoDigits(song)));
-    std::string error;
-    sum.midi_path = stem + ".mid";
-    if (!WriteFile(sum.midi_path, midi.Encode(), error))
-    {
-        sum.warnings.push_back(error);
-        return sum;
-    }
+    WriteSongFiles(settings, number, title, midi, shared ? nullptr : &sf, report);
 
-    if (!shared)
-    {
-        Sf2File& file = sf.File();
-        file.name = title;
-        file.comment = "Instruments for " + title + ", extracted by " + kProgramName;
-        sum.sf2_path = stem + ".sf2";
-        if (!file.Write(sum.sf2_path, error))
-        {
-            sum.warnings.push_back(error);
-            return sum;
-        }
-    }
-
-    sum.ok = true;
-
-    return sum;
+    return report;
 }
 
 } // namespace
 
-SongSummary InspectSong(const Rom& rom, const DriverInfo& info, int song, const ConvertOptions& opt)
+SongReport InspectSong(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings)
 {
-    return Run(rom, info, song, opt, nullptr, false);
+    return Run(rom, info, song, settings, nullptr, false);
 }
 
-SongSummary ConvertSong(const Rom& rom, const DriverInfo& info, int song, const ConvertOptions& opt,
-                        SoundfontBuilder* shared)
+SongReport ConvertSong(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings,
+                       SoundfontBuilder* shared)
 {
-    return Run(rom, info, song, opt, shared, true);
+    return Run(rom, info, song, settings, shared, true);
 }
 
 bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::string& path, std::string& error)
@@ -1875,14 +1902,7 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
                 return;
             }
 
-            std::string bytes;
-            for (uint32_t i = 0; i < c.length; i++)
-            {
-                char b[4];
-                std::snprintf(b, sizeof b, "%02X ", rom.U8(c.addr + i));
-                bytes += b;
-            }
-
+            const std::string bytes = HexBytes(rom, c.addr, c.length);
             std::snprintf(line, sizeof line, "0x%08X  %6u  %-14s  %-44s", c.addr, frame, bytes.c_str(),
                           Describe(c, t, info.revision).c_str());
             pending = line;
@@ -1900,8 +1920,7 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
         }
     }
 
-    // Written as bytes, so the listing has LF line endings on every platform.
-    return WriteFile(path, std::vector<uint8_t>(text.begin(), text.end()), error);
+    return WriteTextFile(path, text, error);
 }
 
 } // namespace agbsf2::konami

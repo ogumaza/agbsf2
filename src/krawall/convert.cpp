@@ -17,6 +17,7 @@
 
 #include "files.h"
 #include "krawall/player.h"
+#include "krawall/soundfont.h"
 #include "midi.h"
 #include "music.h"
 #include "program.h"
@@ -26,15 +27,6 @@ namespace agbsf2::krawall
 {
 namespace
 {
-
-// Every note's velocity, as CC11 carries the loudness (see LevelsToControllers()).
-constexpr int kVelocity = 127;
-
-// The widest pitch bend range the MIDI files set, in semitones.
-constexpr int kMaxBendRange = 96;
-
-// The MIDI channel that General MIDI players keep for drums, which the tracks leave out.
-constexpr int kDrumChannel = 9;
 
 // Target tempo range in BPM, with the upper bound excluded. Doubling the rows per beat halves the tempo, so exactly one
 // power-of-two choice falls within a twofold range.
@@ -55,20 +47,11 @@ constexpr double kTuningCents = 3;
 // The longest conversion, in seconds.
 constexpr uint64_t kMaxSeconds = 60 * 60;
 
-// The note that the player plays a sample at its rate on, C-4, and the MIDI key that the SoundFont gives it.
-constexpr uint32_t kRootNote = 48;
-constexpr int kRootKey = 60;
-
-// The points of a sample that follow its end in the SoundFont, so that a synth that reads past the end of a loop reads
-// the loop's start.
-constexpr uint32_t kGuardPoints = 8;
-
 // Maps module channel `c` to MIDI channels in order, skipping the drum channel, and from the 16th module channel on,
 // reuses them from the beginning.
 int MidiChannel(int c)
 {
-    const int n = c % 15;
-    return n < kDrumChannel ? n : n + 1;
+    return MelodicChannel(c % 15);
 }
 
 // A channel's mixer channel after a tick.
@@ -93,7 +76,7 @@ struct TickData
     bool row = false;    // a row starts on the tick
     int order = 0;       // the row's order
     int pattern_row = 0; // the row's number in its pattern
-    int speed = 0;       // the ticks of its row
+    int speed = 0;       // the ticks of its row, at least 1
     std::array<Voice, kPlayerChannels> voices;
 };
 
@@ -116,6 +99,30 @@ struct Simulation
     std::vector<std::string> warnings;
 };
 
+// Returns a channel's mixer channel after a tick. `scale` is the output's level for a mixer level of 1, where 128 is
+// full scale.
+Voice VoiceOf(const Player& player, const DriverInfo& info, const Channel& ch, double scale)
+{
+    Voice v;
+    v.playing = player.Sounding(ch);
+    if (!v.playing)
+    {
+        return v;
+    }
+
+    const MixChannel& m = player.MixerOf(ch);
+    v.handle = ch.handle;
+    v.moves = m.moves;
+    v.sample = m.sample;
+    v.sample_index = m.sample_index;
+    v.offset = m.pos - m.start;
+    v.rate = std::fabs(double(m.inc)) * info.mix_rate / 65536.0;
+    v.left = m.left * scale;
+    v.right = (info.stereo ? m.right : m.left) * scale;
+
+    return v;
+}
+
 // Runs the model until a row revisits an earlier module position with the same speed, tempo and pattern-loop state, and
 // the module has played the loop between them `loops` times in all. With `second`, the loop starts at the module's
 // second pass through it, and the module plays the first pass before it. A song of a module that separates songs with
@@ -123,7 +130,7 @@ struct Simulation
 Simulation Simulate(const Rom& rom, const DriverInfo& info, const ModuleSong& song, int loops, bool second)
 {
     Simulation sim;
-    Player player(rom, info, song.module, song.song >= 0 ? kModeLoop | kModeSong : kModeLoop, std::max(song.song, 0));
+    Player player(rom, info, song);
     sim.channels = player.Module().channels;
     sim.mix_rate = info.mix_rate;
     if (!player.Valid())
@@ -156,24 +163,7 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, const ModuleSong& so
         d.speed = std::max(player.Speed(), 1);
         for (int c = 0; c < sim.channels; c++)
         {
-            const Channel& ch = player.Channels()[size_t(c)];
-            const MixChannel& m = player.Mixer()[ch.handle & 0x1F];
-            Voice& v = d.voices[size_t(c)];
-            v.playing =
-                ch.handle != 0 && (ch.handle & 0xFF) < uint32_t(kMixChannels) && m.handle == ch.handle && m.status == 1;
-            if (!v.playing)
-            {
-                continue;
-            }
-
-            v.handle = ch.handle;
-            v.moves = m.moves;
-            v.sample = m.sample;
-            v.sample_index = m.sample_index;
-            v.offset = m.pos - m.start;
-            v.rate = std::fabs(double(m.inc)) * info.mix_rate / 65536.0;
-            v.left = m.left * scale;
-            v.right = (info.stereo ? m.right : m.left) * scale;
+            d.voices[size_t(c)] = VoiceOf(player, info, player.Channels()[size_t(c)], scale);
         }
 
         // The first row that comes back to an earlier row's place starts the loop's second pass.
@@ -528,7 +518,7 @@ Timing MakeTiming(const Simulation& sim)
     std::set<uint32_t> stretched;
     for (const auto& entry : speeds)
     {
-        const uint32_t s = uint32_t(std::max(entry.first, 1));
+        const uint32_t s = uint32_t(entry.first);
         const uint32_t need = std::lcm(scale, s / std::gcd(s, main));
         if (!SameGrid(s, main) && 2 * kMaxBeatRows * main * need <= 32767)
         {
@@ -542,7 +532,7 @@ Timing MakeTiming(const Simulation& sim)
     for (const TickData& d : sim.ticks)
     {
         t.ticks.push_back(at);
-        const uint32_t s = uint32_t(std::max(d.speed, 1));
+        const uint32_t s = uint32_t(d.speed);
         at += stretched.count(s) ? main * scale / s : scale;
     }
     t.ticks.push_back(at);
@@ -556,7 +546,7 @@ Timing MakeTiming(const Simulation& sim)
     uint32_t tempo = 0;
     for (size_t i = 0; i < sim.ticks.size(); i++)
     {
-        const uint32_t s = uint32_t(std::max(sim.ticks[i].speed, 1));
+        const uint32_t s = uint32_t(sim.ticks[i].speed);
         const double stretch = stretched.count(s) ? double(s) / main : 1;
         const double seconds = double(sim.ticks[i].length) / sim.mix_rate * t.meter.quarter_ticks / scale * stretch;
         const uint32_t micros = uint32_t(std::lround(seconds * 1e6));
@@ -582,12 +572,6 @@ void BarSignature(MidiTrack& conductor, uint32_t tick, size_t ticks, const Meter
         pow2++;
     }
     conductor.TimeSignature(tick, int(ticks / note), pow2);
-}
-
-// Returns the pitch bend value for `bend` semitones with a bend range of `range`.
-int BendValue(double bend, int range)
-{
-    return std::clamp(8192 + int(std::lround(bend / range * 8192)), 0, 16383);
 }
 
 // Writes the MIDI file: a conductor track with the tempo map, then a track for each channel that plays notes.
@@ -654,36 +638,9 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
                 widest = std::max(widest, std::fabs(s.bend));
             }
         }
-        const int range = widest > 0.005 ? std::clamp(int(std::ceil(widest - 1e-9)), 2, kMaxBendRange) : 0;
+        const int range = BendRangeFor(widest, kSmallBend);
 
-        int program = list[0].program;
-        mt.Bank(0, ch, program / 128);
-        mt.Program(0, ch, program % 128);
-        mt.Control(0, ch, cc::kVolume, 127);
-        mt.Control(0, ch, cc::kPan, 64);
-        mt.Control(0, ch, cc::kExpression, 0);
-        mt.Control(0, ch, cc::kReverb, 0);
-        mt.Control(0, ch, cc::kChorus, 0);
-        if (range)
-        {
-            mt.BendRange(0, ch, range);
-            mt.PitchBend(0, ch, 8192);
-        }
-
-        // A player that jumps back to the loop's start keeps the settings that the loop's end left, so they're all
-        // written again from the channel's first event there.
-        int cc10 = 64, cc11 = 0, bend = 8192;
-        bool before_loop = loop_start > 0;
-        const auto forget = [&](uint32_t at)
-        {
-            if (before_loop && at >= loop_start)
-            {
-                before_loop = false;
-                program = -1;
-                cc10 = cc11 = bend = -1;
-            }
-        };
-
+        ChannelWriter writer(mt, ch, list[0].program, NumberedPreset(list[0].program), range, loop_start);
         for (const Note& n : list)
         {
             const uint32_t on = timing.ticks[n.on];
@@ -693,43 +650,17 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
                 continue;
             }
 
-            forget(on);
-            if (n.program != program)
-            {
-                if (program < 0 || n.program / 128 != program / 128)
-                {
-                    mt.Bank(on, ch, n.program / 128);
-                }
-
-                program = n.program;
-                mt.Program(on, ch, program % 128);
-            }
+            writer.SetProgram(on, n.program, NumberedPreset(n.program));
 
             // Each tick's levels and bend.
             for (const Sound& s : n.sounds)
             {
                 const uint32_t at = timing.ticks[s.tick];
-                forget(at);
-                int n10 = cc10, n11 = cc11;
-                LevelsToControllers(s.left, s.right, n10, n11);
-                if (n10 != cc10)
-                {
-                    mt.Control(at, ch, cc::kPan, cc10 = n10);
-                }
-                if (n11 != cc11)
-                {
-                    mt.Control(at, ch, cc::kExpression, cc11 = n11);
-                }
-
-                const int v = range ? BendValue(s.bend, range) : 8192;
-                if (range && v != bend)
-                {
-                    mt.PitchBend(at, ch, bend = v);
-                }
+                writer.SetLevels(at, s.left, s.right);
+                writer.SetBend(at, s.bend);
             }
 
-            mt.NoteOn(on, ch, n.key, kVelocity);
-            mt.NoteOff(off, ch, n.key);
+            writer.Note(on, off, n.key);
         }
     }
 
@@ -737,29 +668,29 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
 }
 
 // Converts a module, writing its files if `write` is set.
-SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertOptions& opt, InstrumentSet* shared,
-                bool write)
+SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings, InstrumentSet* shared,
+               bool write)
 {
-    SongSummary sum;
+    SongReport report;
     if (song < 0 || size_t(song) >= info.songs.size())
     {
-        sum.warnings.push_back("there's no module " + std::to_string(song));
-        return sum;
+        report.warnings.push_back("there's no module " + std::to_string(song));
+        return report;
     }
 
     // The marked loop starts at the module's second pass if its first plays unlike it, as when the channels come back
     // to the loop with the pan or volume that its end left them.
     const ModuleSong& entry = info.songs[size_t(song)];
     const uint32_t module = entry.module;
-    Simulation sim = Simulate(rom, info, entry, opt.loops, false);
+    Simulation sim = Simulate(rom, info, entry, settings.loops, false);
     if (sim.plan.loops && !FirstPassRepeats(rom, info, Simulate(rom, info, entry, 2, false)))
     {
-        sim = Simulate(rom, info, entry, opt.loops, true);
+        sim = Simulate(rom, info, entry, settings.loops, true);
     }
-    sum.warnings = sim.warnings;
+    report.warnings = sim.warnings;
     if (sim.ticks.empty())
     {
-        return sum;
+        return report;
     }
 
     // The notes of each channel chosen.
@@ -768,34 +699,34 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
     std::vector<std::vector<Note>> notes(size_t(sim.channels));
     for (int c = 0; c < sim.channels; c++)
     {
-        if ((opt.track_mask >> c) & 1)
+        if ((settings.track_mask >> c) & 1)
         {
             notes[size_t(c)] = MakeNotes(rom, info, sim, c, instruments);
-            sum.tracks += notes[size_t(c)].empty() ? 0 : 1;
+            report.tracks += notes[size_t(c)].empty() ? 0 : 1;
         }
     }
 
     if (sim.channels > 15)
     {
-        sum.warnings.push_back("the module has " + std::to_string(sim.channels) +
-                               " channels, so the 16th and later share MIDI channels with the first");
+        report.warnings.push_back("the module has " + std::to_string(sim.channels) +
+                                  " channels, so the 16th and later share MIDI channels with the first");
     }
 
     const Timing timing = MakeTiming(sim);
     const double rate = sim.mix_rate;
-    sum.seconds = double(sim.ticks[sim.plan.end].time) / rate;
+    report.seconds = double(sim.ticks[sim.plan.end].time) / rate;
     if (sim.plan.loops)
     {
-        sum.loop_start = double(sim.ticks[sim.plan.loop_start].time) / rate;
-        sum.loop_end = double(sim.ticks[sim.plan.loop_end].time) / rate;
+        report.loop_start = double(sim.ticks[sim.plan.loop_start].time) / rate;
+        report.loop_end = double(sim.ticks[sim.plan.loop_end].time) / rate;
     }
-    sum.bpm = 60e6 / timing.tempos.front().second;
+    report.bpm = 60e6 / timing.tempos.front().second;
 
-    sum.silent = sum.tracks == 0;
-    if (sum.silent || !write)
+    report.silent = report.tracks == 0;
+    if (report.silent || !write)
     {
-        sum.ok = true;
-        return sum;
+        report.ok = true;
+        return report;
     }
 
     // The files' names and titles, and the MIDI file's description. The description names the module by its place in
@@ -814,147 +745,45 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
         std::snprintf(about, sizeof about, "%s (%s) song %d of module %d at 0x%08X, converted by %s",
                       rom.Title().c_str(), rom.GameCode().c_str(), entry.song, place, unsigned(module), kProgramName);
     }
-    const std::string stem = Utf8(PathFromUtf8(opt.out_dir) / PathFromUtf8(SafeFileName(opt.base_name) + "_" + number));
+    const std::string stem = SongStem(settings, number);
 
     std::string error;
-    sum.midi_path = stem + ".mid";
-    if (!WriteMidi(sum.midi_path, title, about, sim, timing, notes, error))
+    report.midi_path = stem + ".mid";
+    if (!WriteMidi(report.midi_path, title, about, sim, timing, notes, error))
     {
-        sum.warnings.push_back(error);
-        return sum;
+        report.warnings.push_back(error);
+        return report;
     }
 
     // The module's SoundFont, unless the instruments go in a shared one.
     if (!shared)
     {
         Sf2File file = own.Build(rom, info);
-        file.name = title;
-        file.comment = "Instruments for " + title + ", extracted by " + kProgramName;
-        sum.sf2_path = stem + ".sf2";
-        if (!file.Write(sum.sf2_path, error))
+        file.SetTitle(title);
+        report.sf2_path = stem + ".sf2";
+        if (!file.Write(report.sf2_path, error))
         {
-            sum.warnings.push_back(error);
-            return sum;
+            report.warnings.push_back(error);
+            return report;
         }
     }
 
-    sum.ok = true;
+    report.ok = true;
 
-    return sum;
+    return report;
 }
 
 } // namespace
 
-int InstrumentSet::Program(uint32_t sample, int index, uint32_t offset)
+SongReport InspectSong(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings)
 {
-    const auto key = std::make_pair(sample, offset);
-    auto it = programs_.find(key);
-    if (it == programs_.end())
-    {
-        it = programs_.emplace(key, Instrument{index, int(programs_.size())}).first;
-    }
-
-    return it->second.program;
+    return Run(rom, info, song, settings, nullptr, false);
 }
 
-Sf2File InstrumentSet::Build(const Rom& rom, const DriverInfo& info) const
+SongReport ConvertSong(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings,
+                       InstrumentSet* shared)
 {
-    Sf2File f;
-    std::map<uint32_t, int> samples;
-    for (const auto& [key, inst] : programs_)
-    {
-        const auto [header, offset] = key;
-        char name[32];
-        std::snprintf(name, sizeof name, "Sample %03d", inst.index);
-
-        // The game's sample: 8-bit points, unsigned, from its header's end. A loop back and forth plays its points
-        // backwards after them, so the SoundFont's sample loops over both.
-        auto it = samples.find(header);
-        if (it == samples.end())
-        {
-            sf2::Sample s;
-            s.name = name;
-            s.sample_rate = SampleRate(rom, info, header);
-            s.original_key = uint8_t(kRootKey);
-
-            const uint32_t data = header + 0x12;
-            const uint32_t end = rom.U32(header + 4);
-            const uint32_t length = end > data && rom.Contains(data, end - data) ? end - data : 0;
-            for (uint32_t i = 0; i < length; i++)
-            {
-                s.data.push_back(int16_t((rom.U8(data + i) - 128) * 256));
-            }
-
-            const uint32_t loop_length = rom.U32(header);
-            const uint8_t loop = rom.U8(header + 0x10);
-            if (loop && loop_length > 0 && loop_length <= length)
-            {
-                s.loop_start = length - loop_length;
-                if (loop == 2)
-                {
-                    for (uint32_t i = 0; i < loop_length; i++)
-                    {
-                        s.data.push_back(s.data[length - 1 - i]);
-                    }
-                }
-                s.loop_end = uint32_t(s.data.size());
-                for (uint32_t i = 0; i < kGuardPoints; i++)
-                {
-                    s.data.push_back(s.data[s.loop_start + i % (s.loop_end - s.loop_start)]);
-                }
-            }
-
-            if (s.data.empty())
-            {
-                s.data.push_back(0);
-            }
-
-            f.samples.push_back(std::move(s));
-            it = samples.emplace(header, int(f.samples.size()) - 1).first;
-        }
-
-        // A note that starts within the sample starts its zone there.
-        const sf2::Sample& sample = f.samples[size_t(it->second)];
-        sf2::Zone z;
-        z.generators.push_back(sf2::Generator::Range(sf2::kKeyRange, 0, 127));
-        if (offset)
-        {
-            z.generators.push_back(sf2::Generator::Value(sf2::kStartAddrsOffset, int(offset % 32768)));
-            if (offset >= 32768)
-            {
-                z.generators.push_back(sf2::Generator::Value(sf2::kStartAddrsCoarseOffset, int(offset / 32768)));
-            }
-            std::snprintf(name, sizeof name, "Sample %03d +%u", inst.index, unsigned(offset));
-        }
-        z.generators.push_back(sf2::Generator::Value(sf2::kSampleModes, Looped(sample) ? 1 : 0));
-        z.generators.push_back(sf2::Generator::Value(sf2::kSampleId, it->second));
-
-        f.instruments.push_back(MakeInstrument(name, {z}));
-        f.presets.push_back(MakePreset(name, uint16_t(inst.program / 128), uint16_t(inst.program % 128),
-                                       int(f.instruments.size()) - 1));
-    }
-
-    return f;
-}
-
-uint32_t SampleRate(const Rom& rom, const DriverInfo& info, uint32_t sample)
-{
-    // C-4's period, scaled by the sample's fine tune, divides the clock of the Amiga's periods.
-    const int fine_tune = rom.S8(sample + 0xC);
-    const uint32_t factor = rom.U16(info.fine_tunes + 2 * uint32_t(32 + (fine_tune >> 2)));
-    const uint32_t period = (rom.U16(info.periods + 2 * kRootNote) * factor) >> 15;
-    return period ? 14317456 / period : 8363;
-}
-
-SongSummary InspectSong(const Rom& rom, const DriverInfo& info, int song, const ConvertOptions& opt)
-{
-    return Run(rom, info, song, opt, nullptr, false);
-}
-
-SongSummary ConvertSong(const Rom& rom, const DriverInfo& info, int song, const ConvertOptions& opt,
-                        InstrumentSet* shared)
-{
-    return Run(rom, info, song, opt, shared, true);
+    return Run(rom, info, song, settings, shared, true);
 }
 
 } // namespace agbsf2::krawall

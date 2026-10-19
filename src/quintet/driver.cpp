@@ -2,6 +2,7 @@
 
 #include "quintet/driver.h"
 
+#include <iterator>
 #include <optional>
 #include <string>
 #include <vector>
@@ -18,11 +19,44 @@ namespace
 constexpr int kMaxSongs = 1024;
 constexpr int kMaxSamples = 128;
 
+// The code that tells the revisions apart, in Revision's order. Detection takes the first revision whose play routine
+// it finds.
+struct RevisionCode
+{
+    // The play routine. It resets the channels from its table of them, and in the J revision, the sound effects'
+    // channels from theirs, with their banks.
+    const char* play;
+
+    // The code that loads the variable of the noise macros, and the halfword of its ldr. The routine that gives the
+    // driver bank 0's macros stores them in the variable, and the one for bank 1 in the word after it.
+    const char* macro_variable;
+    int macro_ldr;
+
+    // The routine that loads a sample file.
+    const char* loader;
+
+    // What the log adds after the play routine.
+    const char* label;
+};
+
+constexpr RevisionCode kRevisionCode[2] = {
+    {"B5F0 1C07 2400 4Exx 4Dxx CE01 Fxxx Fxxx CD01", "0600 0E03 1C19 48xx 7800 2800 D0xx 48xx 6802", 7,
+     "B570 1C02 48xx 2500 024C 237F", ""},
+    {"B5F0 1C07 2500 4Exx 00AC CE01 2100 Fxxx Fxxx 48xx 1824 6820",
+     "B510 0600 0E03 48xx 6802 1C14 3490 2000 6020 2B00 D0xx 49xx 7B52 0090 1840", 11,
+     "B570 4Bxx 008A 18D2 1C03 6013 48xx 2200 024D 247F", ", J revision"},
+};
+
+// The stores in the routines that give the driver a table. The first puts the table in a variable: str r0, [r1]. The
+// second puts it in the word after the variable: str r0, [r1, #4].
+constexpr uint16_t kStoreInVariable = 0x6008;
+constexpr uint16_t kStoreAfterVariable = 0x6048;
+
 // Returns the literal that the ldr at halfword `index` of the first match of `pattern` loads, or 0 if there's no match.
 uint32_t FindLiteral(const Rom& rom, const char* pattern, int index)
 {
-    const std::vector<uint32_t> hits = FindThumb(rom, ParseThumbPattern(pattern));
-    return hits.empty() ? 0 : ThumbLiteral(rom, hits[0] + 2 * uint32_t(index));
+    const uint32_t at = FindFirstThumb(rom, pattern);
+    return at ? ThumbLiteral(rom, at + 2 * uint32_t(index)) : 0;
 }
 
 // Returns the address that the game's lookup of a file gives, where the instruction before the bl at `call` is
@@ -66,15 +100,16 @@ uint32_t TableFromSetter(const Rom& rom, uint32_t setter)
     return 0;
 }
 
-// Finds the routine that stores r0 in the driver's variable `variable`: ldr r1, =variable; str r0, [r1]; bx lr.
-uint32_t FindSetter(const Rom& rom, uint32_t variable)
+// Finds the routine that stores r0 with `store` in the driver's variable `variable`: ldr r1, =variable; store; bx lr.
+uint32_t FindSetter(const Rom& rom, uint32_t variable, uint16_t store)
 {
     if (!variable)
     {
         return 0;
     }
 
-    for (uint32_t at : FindThumb(rom, ParseThumbPattern("4901 6008 4770")))
+    const std::vector<ThumbPattern> setter = {{0x4901, 0xFFFF}, {store, 0xFFFF}, {0x4770, 0xFFFF}};
+    for (uint32_t at : FindThumb(rom, setter))
     {
         if (ThumbLiteral(rom, at) == variable)
         {
@@ -126,29 +161,11 @@ std::vector<uint32_t> ReadSampleList(const Rom& rom, uint32_t samples)
 }
 
 // Returns the game's bank 0 and bank 1 tables that it gives the driver by storing them in `variable` and the word after
-// it, the J revision's arrays of noise macro tables. Either is 0 if it isn't found.
+// it: the noise macros' tables. Either is 0 if it isn't found.
 std::array<uint32_t, 2> BankTables(const Rom& rom, uint32_t variable)
 {
-    std::array<uint32_t, 2> tables = {};
-    if (!variable)
-    {
-        return tables;
-    }
-
-    // ldr r1, =variable; str r0, [r1] (or [r1, #4]); bx lr.
-    for (int bank = 0; bank < 2; bank++)
-    {
-        for (uint32_t at : FindThumb(rom, ParseThumbPattern(bank ? "4901 6048 4770" : "4901 6008 4770")))
-        {
-            if (ThumbLiteral(rom, at) == variable)
-            {
-                tables[size_t(bank)] = TableFromSetter(rom, at);
-                break;
-            }
-        }
-    }
-
-    return tables;
+    return {TableFromSetter(rom, FindSetter(rom, variable, kStoreInVariable)),
+            TableFromSetter(rom, FindSetter(rom, variable, kStoreAfterVariable))};
 }
 
 // Returns the game's sample files for banks 0 and 1, from the routines that pass each to the driver's sample loader
@@ -193,103 +210,60 @@ std::vector<uint32_t> ReadSongList(const Rom& rom, uint32_t songs, int limit)
     return list;
 }
 
-} // namespace
-
-bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info, std::string& error)
+// Finds the driver's play routine and the revision that it comes from. info.play stays 0, and the revision A, if no
+// revision's routine is found.
+void FindPlayRoutine(const Rom& rom, DriverInfo& info)
 {
-    info = DriverInfo();
-    error.clear();
-
-    // The driver's play routine resets the channels from its table of them, and in the J revision, the sound effects'
-    // channels from theirs, with their banks.
-    const std::vector<uint32_t> plays_a =
-        FindThumb(rom, ParseThumbPattern("B5F0 1C07 2400 4Exx 4Dxx CE01 Fxxx Fxxx CD01"));
-    const std::vector<uint32_t> plays_j =
-        FindThumb(rom, ParseThumbPattern("B5F0 1C07 2500 4Exx 00AC CE01 2100 Fxxx Fxxx 48xx 1824 6820"));
-    info.revision = plays_a.empty() && !plays_j.empty() ? Revision::kJ : Revision::kA;
-    info.play = !plays_a.empty() ? plays_a[0] : !plays_j.empty() ? plays_j[0] : 0;
-    if (!info.play && !overrides.song_table)
+    for (size_t r = 0; r < std::size(kRevisionCode); r++)
     {
-        return false;
+        const uint32_t play = FindFirstThumb(rom, kRevisionCode[r].play);
+        if (play)
+        {
+            info.revision = Revision(r);
+            info.play = play;
+            return;
+        }
     }
+}
 
-    // The tables in the driver's code.
+// Finds the tables in the driver's code. Returns false and sets `error` if one of them isn't in the ROM.
+bool FindCodeTables(const Rom& rom, DriverInfo& info, std::string& error)
+{
     info.length_table = FindLiteral(rom, "2x0D DD00 E1xx 2x0C DD00 E1xx 48xx 18xx 7801 20C0 0040", 6);
     info.frequency_table = FindLiteral(rom, "2E53 DD00 2653 4Dxx 1C30 210C", 3);
     info.pcm_pitch_table = FindLiteral(rom, "2A34 DD00 2234 48xx 0051", 3);
     info.lfo_table = FindLiteral(rom, "48xx 0411 1409 1809 2000 5608", 0);
 
-    const struct
+    const RomTable tables[] = {{info.length_table, 13, "length"},
+                               {info.frequency_table, kFrequencyEntries * 2, "frequency"},
+                               {info.pcm_pitch_table, kPcmPitchEntries * 2, "PCM pitch"},
+                               {info.lfo_table, 256, "LFO"}};
+    if (const char* missing = MissingTable(rom, tables))
     {
-        const char* name;
-        uint32_t address;
-        uint32_t size;
-    } tables[] = {{"length", info.length_table, 13},
-                  {"frequency", info.frequency_table, 84 * 2},
-                  {"PCM pitch", info.pcm_pitch_table, 53 * 2},
-                  {"LFO", info.lfo_table, 256}};
-    for (const auto& t : tables)
-    {
-        if (!rom.Contains(t.address, t.size))
-        {
-            error = std::string(info.play ? "found Quintet's sound driver, but not its "
-                                          : "no Quintet sound driver found, so it has no ") +
-                    t.name + " table";
-            return false;
-        }
-    }
-
-    // The game gives the driver its wave table, noise macros and samples through routines that store them in the
-    // driver's variables, which the routines that use them load. The A revision's music only ever reads bank 0.
-    const uint32_t wave_variable = FindLiteral(rom, "B530 0600 0E02 48xx 6801 1C05 2900", 3);
-    info.waves = TableFromSetter(rom, FindSetter(rom, wave_variable));
-    std::vector<uint32_t> loaders;
-    if (info.revision == Revision::kA)
-    {
-        const uint32_t macro_variable = FindLiteral(rom, "0600 0E03 1C19 48xx 7800 2800 D0xx 48xx 6802", 7);
-        info.macros[0] = TableFromSetter(rom, FindSetter(rom, macro_variable));
-        loaders = FindThumb(rom, ParseThumbPattern("B570 1C02 48xx 2500 024C 237F"));
-    }
-    else
-    {
-        info.macros = BankTables(
-            rom, FindLiteral(rom, "B510 0600 0E03 48xx 6802 1C14 3490 2000 6020 2B00 D0xx 49xx 7B52 0090 1840", 11));
-        loaders = FindThumb(rom, ParseThumbPattern("B570 4Bxx 008A 18D2 1C03 6013 48xx 2200 024D 247F"));
-    }
-
-    info.samples = SampleFiles(rom, loaders.empty() ? 0 : loaders[0]);
-    if (info.revision == Revision::kA)
-    {
-        info.samples[1] = 0;
-    }
-
-    // The songs.
-    if (overrides.song_table)
-    {
-        info.songs = overrides.song_table;
-        info.log.push_back("music file at " + Hex(info.songs) + " (user supplied)");
-    }
-    else
-    {
-        info.songs = FindSongs(rom, info.play);
-        if (!info.songs)
-        {
-            error = "found Quintet's sound driver, but not the game's music file";
-            return false;
-        }
-
-        info.log.push_back("music file at " + Hex(info.songs) + " (from the game's play-song code)");
-    }
-
-    info.song_addresses = ReadSongList(rom, info.songs, overrides.song_count ? overrides.song_count : kMaxSongs);
-    if (info.song_addresses.empty())
-    {
-        error = "the music file at " + Hex(info.songs) + " has no songs";
+        error = std::string(info.play ? "found Quintet's sound driver, but not its "
+                                      : "no Quintet sound driver found, so it has no ") +
+                missing + " table";
         return false;
     }
-    if (overrides.song_count && int(info.song_addresses.size()) < overrides.song_count)
+
+    return true;
+}
+
+// Finds the tables that the game gives the driver. Also lists the samples in each bank's sample file.
+void FindGameFiles(const Rom& rom, DriverInfo& info)
+{
+    // The game gives the driver its wave table, noise macros and samples through routines that store them in the
+    // driver's variables, which the routines that use them load. The A revision's music only ever reads bank 0. Its
+    // bank 1 holds the sound effects' macros and samples.
+    const uint32_t wave_variable = FindLiteral(rom, "B530 0600 0E02 48xx 6801 1C05 2900", 3);
+    info.waves = TableFromSetter(rom, FindSetter(rom, wave_variable, kStoreInVariable));
+    const RevisionCode& code = kRevisionCode[size_t(info.revision)];
+    info.macros = BankTables(rom, FindLiteral(rom, code.macro_variable, code.macro_ldr));
+    info.samples = SampleFiles(rom, FindFirstThumb(rom, code.loader));
+    if (!TraitsOf(info.revision).banks)
     {
-        info.warnings.push_back("the music file has only " + std::to_string(info.song_addresses.size()) + " songs");
+        info.macros[1] = 0;
+        info.samples[1] = 0;
     }
 
     for (size_t bank = 0; bank < 2; bank++)
@@ -299,8 +273,47 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
             info.sample_addresses[bank] = ReadSampleList(rom, info.samples[bank]);
         }
     }
+}
 
-    // Report what was found, and what wasn't.
+// Finds the music file and lists its songs. `overrides` may give the music file instead. Returns false and sets `error`
+// if there's no music file or it has no songs.
+bool FindMusicFile(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info, std::string& error)
+{
+    if (overrides.song_table)
+    {
+        info.music_file = overrides.song_table;
+        info.log.push_back("music file at " + Hex(info.music_file) + " (user supplied)");
+    }
+    else
+    {
+        info.music_file = FindSongs(rom, info.play);
+        if (!info.music_file)
+        {
+            error = "found Quintet's sound driver, but not the game's music file";
+            return false;
+        }
+
+        info.log.push_back("music file at " + Hex(info.music_file) + " (from the game's play-song code)");
+    }
+
+    info.song_addresses = ReadSongList(rom, info.music_file, overrides.song_count ? overrides.song_count : kMaxSongs);
+    if (info.song_addresses.empty())
+    {
+        error = "the music file at " + Hex(info.music_file) + " has no songs";
+        return false;
+    }
+    if (overrides.song_count && int(info.song_addresses.size()) < overrides.song_count)
+    {
+        info.warnings.push_back("the music file has only " + std::to_string(info.song_addresses.size()) + " songs");
+    }
+
+    return true;
+}
+
+// Logs what detection found: the songs, the play routine and the tables. Adds a warning for each of the game's tables
+// that detection didn't find.
+void ReportDetection(DriverInfo& info)
+{
     auto found = [](uint32_t address)
     {
         return address ? Hex(address) : std::string("not found");
@@ -314,10 +327,10 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
     };
 
     info.log.push_back(std::to_string(info.song_addresses.size()) + " songs, play routine at " + Hex(info.play) +
-                       (info.revision == Revision::kJ ? ", J revision" : ""));
+                       kRevisionCode[size_t(info.revision)].label);
     info.log.push_back("wave table " + found(info.waves) + ", noise macros " + found(info.macros[0]) +
                        ", PCM samples " + samples(0));
-    if (info.revision == Revision::kJ)
+    if (TraitsOf(info.revision).banks)
     {
         info.log.push_back("the sound effects' noise macros " + found(info.macros[1]) + ", PCM samples " + samples(1));
     }
@@ -336,7 +349,32 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
     {
         info.warnings.push_back("the game's PCM samples weren't found, so the PCM channels play silence");
     }
+}
 
+} // namespace
+
+bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info, std::string& error)
+{
+    info = DriverInfo();
+    error.clear();
+
+    FindPlayRoutine(rom, info);
+    if (!info.play && !overrides.song_table)
+    {
+        return false;
+    }
+    if (!FindCodeTables(rom, info, error))
+    {
+        return false;
+    }
+
+    FindGameFiles(rom, info);
+    if (!FindMusicFile(rom, overrides, info, error))
+    {
+        return false;
+    }
+
+    ReportDetection(info);
     return true;
 }
 

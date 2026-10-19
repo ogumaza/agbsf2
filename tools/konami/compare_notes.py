@@ -54,12 +54,13 @@ from pathlib import Path
 
 from unicorn import UC_HOOK_MEM_WRITE
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for tools/conversion.py, gbarom.py and psg_model.py
+# For conversion.py, gbarom.py, psg_model.py and traces.py, in tools/
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import conversion
-from compare_trace import parse_range
 from driver_emu import DriverEmulator
 from gbarom import ROM_BASE, load_rom
 from psg_model import DUTY
+from traces import parse_range
 
 LEVEL_TOLERANCE_DB = 1.5
 PSG_TRACKS = {'Square 1': 0, 'Square 2': 1, 'Wave': 2, 'Noise': 3}

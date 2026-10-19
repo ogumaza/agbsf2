@@ -13,7 +13,9 @@
 #include <vector>
 
 #include "beat_grid.h"
+#include "beat_midi.h"
 #include "files.h"
+#include "gba.h"
 #include "midi.h"
 #include "music.h"
 #include "program.h"
@@ -25,41 +27,22 @@ namespace agbsf2::ubimilan
 namespace
 {
 
-constexpr uint16_t kQuarterTicks = 480;
-
-// The longest that a song plays: an hour.
-constexpr uint32_t kMaxFrames = 60 * 60 * 60;
-
-// The sequence channels that play notes, in the order of the MIDI file's tracks, and the tracks' names: the PSG's
-// three, then channel 9.
+// The sequence channels that play notes, in the order of the MIDI file's tracks: the PSG's three, then channel 9.
 constexpr std::array<int, 4> kChannels = {0, 1, 2, kKitChannel};
-const char* const kChannelNames[4] = {"Square 1", "Square 2", "Wave", "Kit"};
 
 // The MIDI channel of each of those channels. Channel 9 plays on MIDI channel 11. Players treat notes on MIDI channel
 // 10 as drums, and some ignore their note-offs or their samples' loops. The kit's notes require both.
-constexpr std::array<int, 4> kMidiChannels = {0, 1, 2, 10};
+constexpr std::array<int, kChannels.size()> kMidiChannels = {0, 1, 2, 10};
 
-// Returns the seconds that `frames` frames last.
-double FrameSeconds(double frames)
-{
-    return frames * double(kFrameCycles) / double(kSecondCycles);
-}
-
-// The conversion's length and loop, in frames.
-struct Plan
-{
-    bool loops = false;
-    uint32_t loop_start = 0;
-    uint32_t loop_end = 0;
-    uint32_t end = 0;
-};
+// The notes of each of those channels.
+using ChannelNotes = std::array<std::vector<Note>, kChannels.size()>;
 
 // What the model played, up to the conversion's end.
 struct Simulation
 {
     std::vector<Note> notes;
-    std::vector<uint32_t> segment_starts;
-    Plan plan;
+    std::vector<uint32_t> sequence_starts;
+    FramePlan plan;
     std::vector<std::string> warnings;
 };
 
@@ -70,26 +53,24 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops,
 {
     Simulation sim;
     Sequencer seq(rom, info, song);
-    MusicPiece piece;
-    ReadMusic(rom, info, song, piece);
-    const bool looping = piece.flags & 1;
-    const size_t count = piece.segments.size();
+    const bool looping = seq.Piece().Loops();
+    const size_t count = seq.Piece().sequences.size();
     const size_t passes = size_t(std::max(loops, 1)) + (second ? 1 : 0);
     bool done = false;
     while (!done && seq.Frame() < kMaxFrames)
     {
         seq.Step();
-        done = looping ? seq.SegmentStarts().size() > passes * count : !seq.Playing();
+        done = looping ? seq.SequenceStarts().size() > passes * count : !seq.Playing();
     }
 
-    sim.segment_starts = seq.SegmentStarts();
+    sim.sequence_starts = seq.SequenceStarts();
     sim.warnings = seq.Warnings();
     if (looping && done)
     {
         sim.plan.loops = true;
-        sim.plan.loop_start = sim.segment_starts[second ? count : 0];
-        sim.plan.loop_end = sim.segment_starts[(second ? 2 : 1) * count];
-        sim.plan.end = sim.segment_starts[passes * count];
+        sim.plan.loop_start = sim.sequence_starts[second ? count : 0];
+        sim.plan.loop_end = sim.sequence_starts[(second ? 2 : 1) * count];
+        sim.plan.end = sim.sequence_starts[passes * count];
     }
     else
     {
@@ -137,6 +118,19 @@ bool FirstPassRepeats(const Simulation& sim)
     return passes.Alike();
 }
 
+// Plays a song for the conversion, with `loops` passes of its loop. A piece that loops whose first pass plays unlike
+// the next marks its second pass.
+Simulation SimulateConversion(const Rom& rom, const DriverInfo& info, int song, int loops)
+{
+    Simulation sim = Simulate(rom, info, song, loops, false);
+    if (sim.plan.loops && !FirstPassRepeats(Simulate(rom, info, song, 2, false)))
+    {
+        sim = Simulate(rom, info, song, loops, true);
+    }
+
+    return sim;
+}
+
 // Returns the place of a sequence channel in kChannels, or -1 if it plays no notes.
 int ChannelIndex(int channel)
 {
@@ -157,11 +151,11 @@ int ChannelIndex(int channel)
 int Velocity(const Note& n)
 {
     double level = 0;
-    if (n.channel == kKitChannel && n.key > kLastNoiseKey)
+    if (PlaysKit(n.channel, n.key))
     {
         level = n.velocity / 64.0;
     }
-    else if (n.channel == 2)
+    else if (n.channel == kWaveChannel)
     {
         static const double kWaveLevels[4] = {0, 1, 0.5, 0.25};
         level = kWaveLevels[(n.envelope >> 5) & 3];
@@ -176,160 +170,53 @@ int Velocity(const Note& n)
     return level > 0 ? std::clamp(int(std::lround(level * 127)), 1, 127) : 0;
 }
 
-// Returns the MIDI tick of a place `quarters` quarter notes into the song.
-uint32_t QuarterTick(double quarters)
+// Returns the notes that sound on the sequence channels whose bits `track_mask` sets, and adds their instruments to
+// `instruments`. Adds a warning to `warnings` if a PSG note has an envelope. The conversion leaves envelopes out.
+ChannelNotes ChooseNotes(const Simulation& sim, uint32_t track_mask, InstrumentSet& instruments,
+                         std::vector<std::string>& warnings)
 {
-    return uint32_t(std::lround(std::max(0.0, quarters) * kQuarterTicks));
-}
-
-// Writes the MIDI file: a conductor track with the tempo map, then a track for each channel that plays notes. Each
-// event goes on the song's beat, or with `frame_timing`, on the frame the driver plays it in. Each channel plays on its
-// MIDI channel in kMidiChannels and in the bank numbered after it.
-bool WriteMidi(const std::string& path, const std::string& title, const std::string& about, const Plan& plan,
-               const BeatGrid& grid, bool frame_timing, const std::array<std::vector<Note>, 4>& notes,
-               std::string& error)
-{
-    // The song's end is on the beat.
-    const auto song_tick = [&](double frame)
-    {
-        return QuarterTick(frame_timing ? grid.Quarters(frame) : grid.Snap(frame));
-    };
-
-    // A loop marker comes no later than any channel's events from its frame on.
-    const auto loop_tick = [&](double frame)
-    {
-        return QuarterTick(frame_timing ? grid.Quarters(frame) : grid.Marker(frame));
-    };
-
-    const uint32_t end = song_tick(plan.end);
-    const auto tick = [&](int c, double frame)
-    {
-        return std::min(end, QuarterTick(frame_timing ? grid.Quarters(frame) : grid.Quarters(c, frame)));
-    };
-
-    MidiFile midi(kQuarterTicks);
-    MidiTrack& conductor = midi.AddTrack();
-    conductor.Name(title);
-    conductor.Meta(0, 0x01, about);
-    conductor.TimeSignature(0, 4, 2);
-    for (const BeatGrid::Tempo& t : grid.Tempos())
-    {
-        conductor.Tempo(QuarterTick(t.quarter), uint32_t(std::lround(FrameSeconds(t.frames) * 1e6)));
-    }
-
-    // The beat's tempo at the loop's start is given again after the marker. The loop's end can have another, which a
-    // player that keeps its tempo when it jumps back would otherwise play the loop's start at.
-    if (plan.loops)
-    {
-        conductor.Meta(loop_tick(plan.loop_start), 0x06, "loopStart");
-        conductor.Meta(loop_tick(plan.loop_end), 0x06, "loopEnd");
-        conductor.RepeatTempo(loop_tick(plan.loop_start));
-    }
-    conductor.SetEnd(end);
-
-    // From the loop's start, each channel gives its bank and program again, unless the loop starts with the song.
-    const uint32_t loop_start = plan.loops ? loop_tick(plan.loop_start) : 0;
-    for (size_t c = 0; c < notes.size(); c++)
-    {
-        if (notes[c].empty())
-        {
-            continue;
-        }
-
-        MidiTrack& mt = midi.AddTrack();
-        mt.Name(kChannelNames[c]);
-        mt.SetEnd(end);
-        const int ch = kChannels[c];
-        const int midi_channel = kMidiChannels[c];
-        int bank = -1;
-        int program = -1;
-        bool restated = loop_start == 0;
-        for (const Note& n : notes[c])
-        {
-            const uint32_t on = tick(int(c), n.on);
-            const uint32_t off = std::max(on + 1, tick(int(c), n.off));
-            if (!restated && on >= loop_start)
-            {
-                bank = program = -1;
-                restated = true;
-            }
-            if (bank != ch)
-            {
-                mt.Bank(on, midi_channel, ch);
-                bank = ch;
-            }
-            if (program != n.program)
-            {
-                mt.Program(on, midi_channel, n.program);
-                program = n.program;
-            }
-            mt.NoteOn(on, midi_channel, n.key, Velocity(n));
-            mt.NoteOff(off, midi_channel, n.key);
-        }
-    }
-
-    return WriteFile(path, midi.Encode(), error);
-}
-
-// Converts a song, or with `write` false, works out what the conversion would be.
-SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertOptions& opt, InstrumentSet* shared,
-                bool write)
-{
-    SongSummary sum;
-    MusicPiece piece;
-    if (!ReadMusic(rom, info, song, piece))
-    {
-        sum.warnings.push_back("its list of sequences can't be read");
-        return sum;
-    }
-
-    // A piece that loops whose first pass plays unlike the next marks its second pass.
-    Simulation sim = Simulate(rom, info, song, opt.loops, false);
-    if (sim.plan.loops && !FirstPassRepeats(Simulate(rom, info, song, 2, false)))
-    {
-        sim = Simulate(rom, info, song, opt.loops, true);
-    }
-    sum.warnings = sim.warnings;
-
-    // The notes that sound on the chosen channels, and their instruments.
-    std::array<std::vector<Note>, 4> notes;
-    InstrumentSet own;
-    InstrumentSet& instruments = shared ? *shared : own;
+    ChannelNotes notes;
     bool envelopes = false;
     for (const Note& n : sim.notes)
     {
         const int c = ChannelIndex(n.channel);
-        if (c < 0 || !(opt.track_mask & (1 << n.channel)) || !Velocity(n))
+        if (c < 0 || !(track_mask & (1 << n.channel)) || !Velocity(n))
         {
             continue;
         }
 
         notes[size_t(c)].push_back(n);
-        if (n.channel == kKitChannel)
+        if (PlaysKit(n.channel, n.key))
         {
-            if (n.key > kLastNoiseKey)
-            {
-                instruments.AddKitKey(n.program, n.key, n.sample);
-            }
-            else
-            {
-                instruments.AddNoiseKey(n.program, n.key, uint8_t(n.control));
-            }
+            instruments.AddKitKey(n.program, n.key, n.sample);
+        }
+        else if (PlaysNoise(n.channel, n.key))
+        {
+            instruments.AddNoiseKey(n.program, n.key, n.control);
+        }
+        else if (n.channel == kWaveChannel)
+        {
+            instruments.AddWave(n.program);
         }
         else
         {
-            instruments.AddPsg(n.channel, n.program, n.channel == 2 ? n.control : n.duty);
+            instruments.AddSquare(n.channel, n.program, n.duty);
         }
-        envelopes = envelopes || (n.channel != 2 && (n.envelope & 7));
+        envelopes = envelopes || (n.channel != kWaveChannel && (n.envelope & 7));
     }
     if (envelopes)
     {
-        sum.warnings.push_back("some PSG notes have an envelope, which the conversion leaves out");
+        warnings.push_back("some PSG notes have an envelope, which the conversion leaves out");
     }
 
-    // The song's beat, from the frames on which every channel's notes start and end, whichever channels the
-    // conversion includes, so that conversions of different channels line up. Each channel's first event is the
-    // piece's start, as a rest, so that the files start with the piece, whatever silence comes before the first note.
+    return notes;
+}
+
+// Returns the song's beat. It comes from the frames on which every channel's notes start and end, including the
+// channels that the conversion leaves out. Conversions of different channels then line up. Each channel's first event
+// is a rest at the piece's start. The files then start where the piece starts, even when it starts with silence.
+BeatGrid SongGrid(const Simulation& sim)
+{
     std::vector<std::vector<uint32_t>> starts(kChannels.size());
     for (const Note& n : sim.notes)
     {
@@ -348,27 +235,111 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
     {
         std::sort(frames.begin(), frames.end());
     }
-    std::vector<uint32_t> hints = sim.segment_starts;
-    hints.erase(std::remove_if(hints.begin(), hints.end(), [&](uint32_t f) { return f >= sim.plan.end; }), hints.end());
-    const BeatGrid grid(starts, hints);
 
+    std::vector<uint32_t> hints = sim.sequence_starts;
+    hints.erase(std::remove_if(hints.begin(), hints.end(), [&](uint32_t f) { return f >= sim.plan.end; }), hints.end());
+
+    return BeatGrid(starts, hints);
+}
+
+// Writes to `mt` the track of the channel at place `c` in kChannels. The channel plays `notes`. The track holds its
+// name, its end at tick `end`, and the notes at the ticks that `ticks` gives them. The channel plays on its MIDI
+// channel in kMidiChannels, in the bank that PresetBank() gives it. Unless the loop starts with the song, the channel
+// gives its bank and program again at its first note from tick `loop_start`.
+void WriteChannel(MidiTrack& mt, size_t c, const std::vector<Note>& notes, const BeatTicks& ticks, uint32_t loop_start,
+                  uint32_t end)
+{
+    mt.Name(ChannelName(kChannels[c]));
+    mt.SetEnd(end);
+    const int preset_bank = PresetBank(kChannels[c]);
+    const int midi_channel = kMidiChannels[c];
+    int bank = -1;
+    int program = -1;
+    bool restated = loop_start == 0;
+    for (const Note& n : notes)
+    {
+        const uint32_t on = ticks.Channel(int(c), n.on, end);
+        const uint32_t off = std::max(on + 1, ticks.Channel(int(c), n.off, end));
+        if (!restated && on >= loop_start)
+        {
+            bank = program = -1;
+            restated = true;
+        }
+        if (bank != preset_bank)
+        {
+            mt.Bank(on, midi_channel, preset_bank);
+            bank = preset_bank;
+        }
+        if (program != n.program)
+        {
+            mt.Program(on, midi_channel, n.program);
+            program = n.program;
+        }
+        mt.NoteOn(on, midi_channel, n.key, Velocity(n));
+        mt.NoteOff(off, midi_channel, n.key);
+    }
+}
+
+// Writes the MIDI file: a conductor track with the tempo map, then a track for each channel that plays notes. Each
+// event goes on the song's beat, or with `frame_timing`, on the frame the driver plays it in.
+bool WriteMidi(const std::string& path, const std::string& title, const std::string& about, const FramePlan& plan,
+               const BeatGrid& grid, bool frame_timing, const ChannelNotes& notes, std::string& error)
+{
+    const BeatTicks ticks(grid, frame_timing);
+    const uint32_t end = ticks.Song(plan.end);
+    MidiFile midi(kBeatQuarterTicks);
+    WriteBeatConductor(midi.AddTrack(), title, about, ticks, plan, end);
+
+    const uint32_t loop_start = plan.loops ? ticks.Marker(plan.loop_start) : 0;
+    for (size_t c = 0; c < notes.size(); c++)
+    {
+        if (!notes[c].empty())
+        {
+            WriteChannel(midi.AddTrack(), c, notes[c], ticks, loop_start, end);
+        }
+    }
+
+    return WriteFile(path, midi.Encode(), error);
+}
+
+// Converts a song, or with `write` false, works out what the conversion would be.
+SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings, InstrumentSet* shared,
+               bool write)
+{
+    SongReport report;
+    MusicPiece piece;
+    if (!ReadMusic(rom, info, song, piece))
+    {
+        report.warnings.push_back("its list of sequences can't be read");
+        return report;
+    }
+
+    // The model's notes, those that the files hold and their instruments, and the song's beat. The simulation's
+    // warnings come first.
+    const Simulation sim = SimulateConversion(rom, info, song, settings.loops);
+    report.warnings = sim.warnings;
+    InstrumentSet own;
+    const ChannelNotes notes = ChooseNotes(sim, settings.track_mask, shared ? *shared : own, report.warnings);
+    const BeatGrid grid = SongGrid(sim);
+
+    // The tracks that play notes, the length, the loop and the first tempo.
     for (const std::vector<Note>& list : notes)
     {
-        sum.tracks += list.empty() ? 0 : 1;
+        report.tracks += list.empty() ? 0 : 1;
     }
-    sum.seconds = FrameSeconds(sim.plan.end);
+    report.seconds = FrameSeconds(sim.plan.end);
     if (sim.plan.loops)
     {
-        sum.loop_start = FrameSeconds(sim.plan.loop_start);
-        sum.loop_end = FrameSeconds(sim.plan.loop_end);
+        report.loop_start = FrameSeconds(sim.plan.loop_start);
+        report.loop_end = FrameSeconds(sim.plan.loop_end);
     }
-    sum.bpm = 60 / FrameSeconds(grid.Tempos().front().frames);
+    report.bpm = 60 / FrameSeconds(grid.Tempos().front().frames);
 
-    sum.silent = sum.tracks == 0;
-    if (sum.silent || !write)
+    report.silent = report.tracks == 0;
+    if (report.silent || !write)
     {
-        sum.ok = true;
-        return sum;
+        report.ok = true;
+        return report;
     }
 
     // The files' names and titles, and the MIDI file's description.
@@ -377,14 +348,14 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
     char about[160];
     std::snprintf(about, sizeof about, "%s (%s) music %d, resource %d at 0x%08X, converted by %s", rom.Title().c_str(),
                   rom.GameCode().c_str(), song, info.songs[size_t(song)], unsigned(piece.address), kProgramName);
-    const std::string stem = Utf8(PathFromUtf8(opt.out_dir) / PathFromUtf8(SafeFileName(opt.base_name) + "_" + number));
+    const std::string stem = SongStem(settings, number);
 
     std::string error;
-    sum.midi_path = stem + ".mid";
-    if (!WriteMidi(sum.midi_path, title, about, sim.plan, grid, opt.frame_timing, notes, error))
+    report.midi_path = stem + ".mid";
+    if (!WriteMidi(report.midi_path, title, about, sim.plan, grid, settings.frame_timing, notes, error))
     {
-        sum.warnings.push_back(error);
-        return sum;
+        report.warnings.push_back(error);
+        return report;
     }
 
     // The song's SoundFont, unless the instruments go in a shared one.
@@ -393,111 +364,33 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
         Sf2File file;
         for (const std::string& w : own.Build(rom, info, file))
         {
-            sum.warnings.push_back(w);
+            report.warnings.push_back(w);
         }
-        file.name = title;
-        file.comment = "Instruments for " + title + ", extracted by " + kProgramName;
-        sum.sf2_path = stem + ".sf2";
-        if (!file.Write(sum.sf2_path, error))
+        file.SetTitle(title);
+        report.sf2_path = stem + ".sf2";
+        if (!file.Write(report.sf2_path, error))
         {
-            sum.warnings.push_back(error);
-            return sum;
+            report.warnings.push_back(error);
+            return report;
         }
     }
 
-    sum.ok = true;
+    report.ok = true;
 
-    return sum;
+    return report;
 }
 
 } // namespace
 
-SongSummary InspectSong(const Rom& rom, const DriverInfo& info, int song, const ConvertOptions& opt)
+SongReport InspectSong(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings)
 {
-    return Run(rom, info, song, opt, nullptr, false);
+    return Run(rom, info, song, settings, nullptr, false);
 }
 
-SongSummary ConvertSong(const Rom& rom, const DriverInfo& info, int song, const ConvertOptions& opt,
-                        InstrumentSet* shared)
+SongReport ConvertSong(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings,
+                       InstrumentSet* shared)
 {
-    return Run(rom, info, song, opt, shared, true);
-}
-
-bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::string& path, std::string& error)
-{
-    MusicPiece piece;
-    if (!ReadMusic(rom, info, song, piece))
-    {
-        error = "its list of sequences can't be read";
-        return false;
-    }
-
-    // Each sequence's commands, with the frame each plays on from the sequence's start: a countdown of n puts the next
-    // command n + 1 frames later, or on the same frame if it's 0. The piece's first sequence starts before the first
-    // frame's step, so its first countdown puts its first command n frames in.
-    std::string out;
-    char line[160];
-    std::snprintf(line, sizeof line, "music %d: resource %d at 0x%08X, flags %d (%s)\n", song, info.songs[size_t(song)],
-                  unsigned(piece.address), piece.flags, piece.flags & 1 ? "loops" : "plays once");
-    out += line;
-    for (size_t i = 0; i < piece.segments.size(); i++)
-    {
-        const int id = piece.segments[i];
-        const uint32_t address = ResourceAddress(rom, info, id);
-        std::snprintf(line, sizeof line, "\nsequence %d at 0x%08X\n", id, unsigned(address));
-        out += line;
-        if (!address || rom.U8(address) != kSequence)
-        {
-            out += "  not a sequence\n";
-            continue;
-        }
-
-        uint32_t at = address + 4;
-        uint32_t wait = rom.U16(at);
-        at += 2;
-        uint32_t frame = i == 0 ? wait : wait ? wait + 1 : 0;
-        while (rom.Contains(at, 1))
-        {
-            const int status = rom.U8(at);
-            const int kind = status & 0xF0;
-            std::snprintf(line, sizeof line, "  %6u  0x%08X  ", unsigned(frame), unsigned(at));
-            out += line;
-            at++;
-            if (status == 0xFC)
-            {
-                out += "FC end\n";
-                break;
-            }
-            if (kind == 0x90 || kind == 0x80)
-            {
-                std::snprintf(line, sizeof line, "%02X %s channel %d key %d velocity %d\n", unsigned(status),
-                              kind == 0x90 ? "note on" : "note off", status & 0xF, rom.U8(at), rom.U8(at + 1));
-                at += 2;
-            }
-            else if (kind == 0xC0)
-            {
-                std::snprintf(line, sizeof line, "%02X program channel %d: %d\n", unsigned(status), status & 0xF,
-                              rom.U8(at));
-                at++;
-            }
-            else if (kind == 0xE0)
-            {
-                std::snprintf(line, sizeof line, "%02X nothing\n", unsigned(status));
-            }
-            else
-            {
-                std::snprintf(line, sizeof line, "%02X unknown, on which the game resets\n", unsigned(status));
-                out += line;
-                break;
-            }
-            out += line;
-            wait = rom.U16(at);
-            at += 2;
-            frame += wait ? wait + 1 : 0;
-        }
-    }
-
-    return WriteFile(path, std::vector<uint8_t>(out.begin(), out.end()), error);
+    return Run(rom, info, song, settings, shared, true);
 }
 
 } // namespace agbsf2::ubimilan

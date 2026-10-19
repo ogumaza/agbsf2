@@ -4,7 +4,6 @@
 
 #include "music.h"
 
-#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <memory>
@@ -16,7 +15,6 @@
 #include "krawall/driver.h"
 #include "krawall/player.h"
 #include "krawall/song.h"
-#include "program.h"
 #include "sf2.h"
 
 namespace agbsf2::krawall
@@ -47,20 +45,9 @@ class KrawallMusic : public Music
 {
 public:
     // Keeps a reference to `rom`, which has to outlive this.
-    KrawallMusic(const Rom& rom, DriverInfo info) : rom_(rom), info_(std::move(info))
+    KrawallMusic(const Rom& rom, DriverInfo info)
+        : Music("Krawall", info.log, info.warnings), rom_(rom), info_(std::move(info))
     {
-        log_.push_back("Krawall");
-        log_.insert(log_.end(), info_.log.begin(), info_.log.end());
-    }
-
-    const std::vector<std::string>& Log() const override
-    {
-        return log_;
-    }
-
-    const std::vector<std::string>& Warnings() const override
-    {
-        return info_.warnings;
     }
 
     int SongCount() const override
@@ -81,7 +68,7 @@ public:
 
     SongReport InspectSong(int song, const ConvertSettings& settings) const override
     {
-        SongReport r = Report(krawall::InspectSong(rom_, info_, song, OptionsFor(settings)));
+        SongReport r = krawall::InspectSong(rom_, info_, song, settings);
         r.address = Address(song);
 
         return r;
@@ -89,15 +76,7 @@ public:
 
     SongReport ConvertSong(int song, const ConvertSettings& settings) override
     {
-        SongReport r = Report(krawall::ConvertSong(rom_, info_, song, OptionsFor(settings), shared_.get()));
-        r.address = Address(song);
-
-        return r;
-    }
-
-    bool SupportsVoiceChannels() const override
-    {
-        return false;
+        return krawall::ConvertSong(rom_, info_, song, settings, shared_.get());
     }
 
     // The shared SoundFont numbers the instruments of every module together.
@@ -109,8 +88,7 @@ public:
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
         Sf2File f = shared_->Build(rom_, info_);
-        f.name = rom_.Title();
-        f.comment = "Instruments for " + rom_.Title() + ", extracted by " + kProgramName;
+        f.SetTitle(rom_.Title());
 
         return f.Write(path, error);
     }
@@ -129,9 +107,7 @@ public:
             return false;
         }
 
-        const ModuleSong& entry = info_.songs[size_t(song)];
-        Player player(rom_, info_, entry.module, entry.song >= 0 ? kModeLoop | kModeSong : kModeLoop,
-                      std::max(entry.song, 0));
+        Player player(rom_, info_, info_.songs[size_t(song)]);
         if (!player.Valid())
         {
             warnings.insert(warnings.end(), player.Warnings().begin(), player.Warnings().end());
@@ -176,38 +152,8 @@ private:
         return song >= 0 && song < SongCount() ? info_.songs[size_t(song)].module : 0;
     }
 
-    static ConvertOptions OptionsFor(const ConvertSettings& settings)
-    {
-        ConvertOptions opt;
-        opt.loops = settings.loops;
-        opt.track_mask = settings.track_mask;
-        opt.out_dir = settings.out_dir;
-        opt.base_name = settings.base_name;
-
-        return opt;
-    }
-
-    // Returns a module's summary as a report.
-    static SongReport Report(const SongSummary& sum)
-    {
-        SongReport r;
-        r.ok = sum.ok;
-        r.silent = sum.silent;
-        r.seconds = sum.seconds;
-        r.loop_start = sum.loop_start;
-        r.loop_end = sum.loop_end;
-        r.tracks = sum.tracks;
-        r.bpm = sum.bpm;
-        r.midi_path = sum.midi_path;
-        r.sf2_path = sum.sf2_path;
-        r.warnings = sum.warnings;
-
-        return r;
-    }
-
     const Rom& rom_;
     DriverInfo info_;
-    std::vector<std::string> log_;
     std::unique_ptr<InstrumentSet> shared_;
 };
 

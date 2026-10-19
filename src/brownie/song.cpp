@@ -2,8 +2,10 @@
 
 #include "brownie/song.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <iterator>
 #include <map>
 #include <string>
 #include <vector>
@@ -15,15 +17,8 @@ namespace agbsf2::brownie
 namespace
 {
 
-// The most commands DumpSong() lists for a channel.
+// The most commands ListChannel() lists.
 constexpr int kMaxListedCommands = 20000;
-
-constexpr const char* kChannelNames[13] = {
-    "square 1",     "square 2",  "wave",      "noise",     "effect square 1", "effect square 2", "effect wave",
-    "effect noise", "samples 1", "samples 2", "samples 3", "samples 4",       "samples 5"};
-
-// The Magical Vacation revision's sample channels: the music's on FIFO A and FIFO B, and the sound effects'.
-constexpr const char* kVacationSampleNames[4] = {"samples 1", "samples 2", "effect samples 1", "effect samples 2"};
 
 std::string Format(const char* format, int a, int b = 0)
 {
@@ -33,8 +28,107 @@ std::string Format(const char* format, int a, int b = 0)
     return text;
 }
 
-// Returns the command that byte `b` runs in revision `r`: in the Magical Vacation revision, E2-E9 are F2-F9 again and
-// EF is FF.
+// Returns the listing of channel `ch`: a heading, and then each command as the driver plays it, up to the channel's
+// end or its loop.
+std::string ListChannel(const Rom& rom, const DriverInfo& info, const SongChannel& ch)
+{
+    const int c = ch.channel;
+    char line[320];
+    std::snprintf(line, sizeof line, "\n; ---- channel %d (%s) at 0x%08X ----\n", c, ChannelName(info.revision, c),
+                  unsigned(ch.data));
+    std::string text = line;
+
+    // The driver's state that the listing follows: the length of each note, its repeat, its call with its one return
+    // address, and the frame in which the channel first read each command.
+    uint32_t address = ch.data;
+    uint64_t frame = 1;
+    int length = 0, length_set = 0;
+    uint32_t loop_start = 0, return_to = 0;
+    int loop_count = 0;
+    std::map<uint32_t, uint64_t> listed;
+    for (int n = 0; n < kMaxListedCommands; n++)
+    {
+        listed.emplace(address, frame);
+
+        const Command cmd = DecodeCommand(rom, info, address, c);
+        const std::string bytes = HexBytes(rom, address, cmd.size);
+
+        std::string note = cmd.text;
+        const uint8_t b = CommandOf(info.revision, rom.U8(address));
+        const uint8_t arg = rom.U8(address + 1);
+        if (b >= 0x80 && b < 0xE0)
+        {
+            length = NoteLength(rom, info, b, length_set);
+            note += Format(": %d frames", length ? length : 256);
+        }
+        std::snprintf(line, sizeof line, "%08X %7llu  %-6s %s\n", unsigned(address),
+                      static_cast<unsigned long long>(frame), bytes.c_str(), note.c_str());
+        text += line;
+        if (cmd.end)
+        {
+            break;
+        }
+
+        // Follow the command as the driver does.
+        uint32_t next = address + cmd.size;
+        switch (b)
+        {
+        case 0xE3:
+            frame++;
+            break;
+
+        case 0xEE:
+            // The Magical Vacation revision's EE does nothing. NoteLength() leaves out the set there.
+            length_set = arg;
+            break;
+
+        case 0xF4:
+            loop_count = arg;
+            loop_start = next;
+            break;
+
+        case 0xF5:
+            loop_count = (loop_count - 1) & 0xFF;
+            next = loop_count ? loop_start : next;
+            break;
+
+        case 0xF6:
+            return_to = next;
+            next = rom.U32(ch.subroutines + 4 * uint32_t(arg));
+            break;
+
+        case 0xF7:
+            next = return_to;
+            break;
+
+        case 0xF8:
+            next = rom.U32(ch.subroutines + 4 * uint32_t(arg));
+            break;
+
+        default:
+            break;
+        }
+        if (cmd.waits)
+        {
+            frame += uint64_t(length ? length : 256);
+        }
+        address = next;
+
+        // A jump back to a command the channel has read is its loop.
+        if (b == 0xF8 && listed.count(address))
+        {
+            std::snprintf(line, sizeof line, "; goes back to 0x%08X, frame %llu\n", unsigned(address),
+                          static_cast<unsigned long long>(listed[address]));
+            text += line;
+            break;
+        }
+    }
+
+    return text;
+}
+
+} // namespace
+
 uint8_t CommandOf(Revision r, uint8_t b)
 {
     if (r != Revision::kMagicalVacation)
@@ -45,7 +139,15 @@ uint8_t CommandOf(Revision r, uint8_t b)
     return b >= 0xE2 && b <= 0xE9 ? uint8_t(b + 0x10) : b == 0xEF ? uint8_t(0xFF) : b;
 }
 
-} // namespace
+bool IsNoOp(Revision r, uint8_t b)
+{
+    if (r == Revision::kMagicalVacation)
+    {
+        return b == 0xE0 || b == 0xEA || b == 0xEB || b == 0xEE;
+    }
+
+    return (b >= 0xE4 && b <= 0xE7) || b == 0xEB || b == 0xEF;
+}
 
 Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, int channel)
 {
@@ -56,9 +158,9 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
     if (b < 0x80)
     {
         cmd.waits = true;
-        if ((channel & 3) == 3 && channel < 8)
+        if (KindOf(info.revision, channel) == ChannelKind::kNoise)
         {
-            cmd.text = Format("noise, NR43 %02X", ((b << 4) + (b >> 4)) & 0xFF);
+            cmd.text = Format("noise, NR43 %02X", NoiseNr43(b));
         }
         else
         {
@@ -72,18 +174,18 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
         return cmd;
     }
 
-    // The commands with an argument. In the Magical Vacation revision, E0, EA and EE have none, and do nothing.
-    static constexpr uint8_t kWithArgument[] = {0xE0, 0xE1, 0xE2, 0xEA, 0xEE, 0xF0, 0xF1, 0xF2,
-                                                0xF3, 0xF4, 0xF6, 0xF8, 0xF9, 0xFA, 0xFC, 0xFD};
-    for (uint8_t c : kWithArgument)
+    if (IsNoOp(info.revision, b))
     {
-        cmd.size = c == b ? 2 : cmd.size;
-    }
-    if (vacation && (b == 0xE0 || b == 0xEA || b == 0xEB || b == 0xEE))
-    {
-        cmd.size = 1;
         cmd.text = "nothing";
         return cmd;
+    }
+
+    // The commands with an argument.
+    static constexpr uint8_t kWithArgument[] = {0xE0, 0xE1, 0xE2, 0xEA, 0xEE, 0xF0, 0xF1, 0xF2,
+                                                0xF3, 0xF4, 0xF6, 0xF8, 0xF9, 0xFA, 0xFC, 0xFD};
+    if (std::find(std::begin(kWithArgument), std::end(kWithArgument), b) != std::end(kWithArgument))
+    {
+        cmd.size = 2;
     }
 
     switch (b)
@@ -208,6 +310,12 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
     return cmd;
 }
 
+uint8_t NoteLength(const Rom& rom, const DriverInfo& info, uint8_t b, int set)
+{
+    const int sets = info.revision == Revision::kMagicalVacation ? 0 : set;
+    return rom.U8(info.length_table + uint32_t(b & 0x7F) + 16 * uint32_t(sets));
+}
+
 bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::string& path, std::string& error)
 {
     std::vector<SongChannel> channels;
@@ -223,113 +331,15 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
                   "; %s (%s) sound %d\n; channels listed at 0x%08X\n; columns: address, frame, bytes, command\n"
                   "; each channel is listed as the driver plays it, repeats and calls included, up to its end or its "
                   "loop\n",
-                  rom.Title().c_str(), rom.GameCode().c_str(), song,
-                  unsigned(rom.U32(info.song_table + 4 * uint32_t(song))));
+                  rom.Title().c_str(), rom.GameCode().c_str(), song, unsigned(SongAddress(rom, info, song)));
     text += line;
 
-    const bool vacation = info.revision == Revision::kMagicalVacation;
     for (const SongChannel& ch : channels)
     {
-        const int c = ch.channel;
-        const char* name = vacation && c >= 8 ? kVacationSampleNames[c - 8] : kChannelNames[c];
-        std::snprintf(line, sizeof line, "\n; ---- channel %d (%s) at 0x%08X ----\n", c, name, unsigned(ch.data));
-        text += line;
-
-        // The driver's state that the listing follows: the length of each note, its repeat and its call, which has one
-        // place to return to, and the frame in which the channel first read each command.
-        uint32_t address = ch.data;
-        uint64_t frame = 1;
-        int length = 0, length_set = 0;
-        uint32_t loop_start = 0, return_to = 0;
-        int loop_count = 0;
-        std::map<uint32_t, uint64_t> listed;
-        for (int n = 0; n < kMaxListedCommands; n++)
-        {
-            listed.emplace(address, frame);
-
-            const Command cmd = DecodeCommand(rom, info, address, c);
-            std::string bytes;
-            for (uint32_t i = 0; i < cmd.size; i++)
-            {
-                char hex[4];
-                std::snprintf(hex, sizeof hex, "%02X ", rom.U8(address + i));
-                bytes += hex;
-            }
-
-            std::string note = cmd.text;
-            const uint8_t b = CommandOf(info.revision, rom.U8(address));
-            const uint8_t arg = rom.U8(address + 1);
-            if (b >= 0x80 && b < 0xE0)
-            {
-                length = rom.U8(info.length_table + uint32_t(b & 0x7F) + 16 * uint32_t(length_set));
-                note += Format(": %d frames", length ? length : 256);
-            }
-            std::snprintf(line, sizeof line, "%08X %7llu  %-6s %s\n", unsigned(address),
-                          static_cast<unsigned long long>(frame), bytes.c_str(), note.c_str());
-            text += line;
-            if (cmd.end)
-            {
-                break;
-            }
-
-            // Follow the command as the driver does.
-            uint32_t next = address + cmd.size;
-            switch (b)
-            {
-            case 0xE3:
-                frame++;
-                break;
-
-            case 0xEE:
-                // The Magical Vacation revision has one table of lengths, and its EE does nothing.
-                length_set = vacation ? 0 : arg;
-                break;
-
-            case 0xF4:
-                loop_count = arg;
-                loop_start = next;
-                break;
-
-            case 0xF5:
-                loop_count = (loop_count - 1) & 0xFF;
-                next = loop_count ? loop_start : next;
-                break;
-
-            case 0xF6:
-                return_to = next;
-                next = rom.U32(ch.subroutines + 4 * uint32_t(arg));
-                break;
-
-            case 0xF7:
-                next = return_to;
-                break;
-
-            case 0xF8:
-                next = rom.U32(ch.subroutines + 4 * uint32_t(arg));
-                break;
-
-            default:
-                break;
-            }
-            if (cmd.waits)
-            {
-                frame += uint64_t(length ? length : 256);
-            }
-            address = next;
-
-            // A jump back to a command the channel has read is its loop.
-            if (b == 0xF8 && listed.count(address))
-            {
-                std::snprintf(line, sizeof line, "; goes back to 0x%08X, frame %llu\n", unsigned(address),
-                              static_cast<unsigned long long>(listed[address]));
-                text += line;
-                break;
-            }
-        }
+        text += ListChannel(rom, info, ch);
     }
 
-    const std::vector<uint8_t> data(text.begin(), text.end());
-    return WriteFile(path, data, error);
+    return WriteTextFile(path, text, error);
 }
 
 } // namespace agbsf2::brownie

@@ -8,9 +8,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <string>
 #include <utility>
 
 #include "konami/driver.h"
+#include "psg.h"
 #include "rom.h"
 #include "sf2.h"
 #include "song_banks.h"
@@ -18,15 +20,21 @@
 namespace agbsf2::konami
 {
 
-// Level of a full-scale bipolar waveform, relative to a full-scale DirectSound sample, produced by a PSG channel at
-// volume v (0..15) on one side. The PSG outputs 0..v per channel, scaled x8 by the master volume and /4 by the 100% PSG
-// mix setting, while DirectSound FIFO samples are scaled x4. A PSG channel at volume v therefore matches a DirectSound
-// voice at level 2v.
-constexpr int kPsgLevelPerVolume = 2;
-
 // The fixed level that wave notes play at. Wave samples are the driver's pre-scaled wave RAM images (see WaveSample),
 // stored at half scale so any row fits without clipping.
 constexpr int kWaveRowLevel = 2 * kPsgLevelPerVolume * 15;
+
+// The sound source that plays a note.
+enum class Kind
+{
+    kSquare,
+    kWave,
+    kNoise,
+    kSample
+};
+
+// Returns the name of the sample of wave `wave` at volume `volume` (0-15). Its preset has the same name.
+std::string WaveName(int wave, int volume);
 
 // Builds and caches SoundFont samples from a ROM. The converter adds presets and instruments to the same file.
 class SoundfontBuilder
@@ -117,7 +125,7 @@ private:
     const int square_base_;
     Sf2File file_;
     SongBanks banks_;
-    std::map<std::pair<int, int>, int> cache_; // (kind, parameter) -> SF2 sample
+    std::map<std::pair<Kind, int>, int> cache_; // (kind, parameter) -> SF2 sample
     std::map<int, Pitch> pitch_;
 };
 

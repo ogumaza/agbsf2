@@ -152,9 +152,6 @@ class DriverEmulator:
             uc.reg_write(UC_ARM_REG_R0 + r, args[r] if r < len(args) else 0)
         uc.emu_start(address | (1 if thumb else 0), RETURN_TRAP, count=50_000_000)
 
-    def u32(self, address):
-        return struct.unpack('<I', self.uc.mem_read(address, 4))[0]
-
     def songs(self):
         """Returns the addresses of the pieces of music: the sound bank's resources whose first byte is 0, in order."""
         u16 = lambda a: struct.unpack_from('<H', self.rom, a - ROM_BASE)[0]

@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-#include "program.h"
+#include "gba.h"
 #include "quintet/convert.h"
 #include "quintet/driver.h"
 #include "quintet/sequencer.h"
@@ -23,31 +23,13 @@ namespace agbsf2::quintet
 namespace
 {
 
-// Prints a register write as driver_emu.py's trace does: frame, address, size in bytes and value.
-void PrintWrite(std::FILE* out, long long frame, const RegisterWrite& w)
-{
-    std::fprintf(out, "%lld %08x %d %0*x\n", frame, unsigned(w.address), int(w.size), 2 * int(w.size),
-                 unsigned(w.value));
-}
-
 class QuintetMusic : public Music
 {
 public:
     // Keeps a reference to `rom`, which has to outlive this.
-    QuintetMusic(const Rom& rom, DriverInfo info) : rom_(rom), info_(std::move(info))
+    QuintetMusic(const Rom& rom, DriverInfo info)
+        : Music("Quintet's sound driver", info.log, info.warnings), rom_(rom), info_(std::move(info))
     {
-        log_.push_back("Quintet's sound driver");
-        log_.insert(log_.end(), info_.log.begin(), info_.log.end());
-    }
-
-    const std::vector<std::string>& Log() const override
-    {
-        return log_;
-    }
-
-    const std::vector<std::string>& Warnings() const override
-    {
-        return info_.warnings;
     }
 
     int SongCount() const override
@@ -63,7 +45,7 @@ public:
     // Works out the song's length, loop points and channels with notes, using the conversion settings.
     SongReport InspectSong(int song, const ConvertSettings& settings) const override
     {
-        SongReport r = Report(quintet::InspectSong(rom_, info_, song, OptionsFor(song, settings)));
+        SongReport r = quintet::InspectSong(rom_, info_, song, settings);
         r.address = song >= 0 && song < SongCount() ? info_.song_addresses[size_t(song)] : 0;
 
         return r;
@@ -71,15 +53,7 @@ public:
 
     SongReport ConvertSong(int song, const ConvertSettings& settings) override
     {
-        SongReport r = Report(quintet::ConvertSong(rom_, info_, song, OptionsFor(song, settings), shared_.get()));
-        r.address = song >= 0 && song < SongCount() ? info_.song_addresses[size_t(song)] : 0;
-
-        return r;
-    }
-
-    bool SupportsVoiceChannels() const override
-    {
-        return false;
+        return quintet::ConvertSong(rom_, info_, song, settings, shared_.get());
     }
 
     // SongBanks gives each song's presets their bank and programs in the shared SoundFont.
@@ -91,8 +65,7 @@ public:
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
         Sf2File& f = shared_->File();
-        f.name = rom_.Title();
-        f.comment = "Instruments for " + rom_.Title() + ", extracted by " + kProgramName;
+        f.SetTitle(rom_.Title());
 
         return f.Write(path, error);
     }
@@ -133,41 +106,8 @@ public:
     }
 
 private:
-    // Returns the conversion options for `song`: the settings, and with a shared SoundFont the song's bank.
-    ConvertOptions OptionsFor(int song, const ConvertSettings& settings) const
-    {
-        ConvertOptions opt;
-        opt.loops = settings.loops;
-        opt.track_mask = uint16_t(settings.track_mask);
-        opt.frame_timing = settings.frame_timing;
-        opt.bank = shared_ ? song : 0;
-        opt.out_dir = settings.out_dir;
-        opt.base_name = settings.base_name;
-
-        return opt;
-    }
-
-    // Returns a song's summary as a report.
-    static SongReport Report(const SongSummary& sum)
-    {
-        SongReport r;
-        r.ok = sum.ok;
-        r.silent = sum.silent;
-        r.seconds = sum.seconds;
-        r.loop_start = sum.loop_start;
-        r.loop_end = sum.loop_end;
-        r.tracks = sum.tracks;
-        r.bpm = sum.bpm;
-        r.midi_path = sum.midi_path;
-        r.sf2_path = sum.sf2_path;
-        r.warnings = sum.warnings;
-
-        return r;
-    }
-
     const Rom& rom_;
     DriverInfo info_;
-    std::vector<std::string> log_;
     std::unique_ptr<SoundfontBuilder> shared_;
 };
 

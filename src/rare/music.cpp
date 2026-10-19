@@ -11,7 +11,6 @@
 #include <utility>
 #include <vector>
 
-#include "program.h"
 #include "rare/convert.h"
 #include "rare/driver.h"
 #include "rare/sequencer.h"
@@ -28,20 +27,9 @@ class RareMusic : public Music
 {
 public:
     // Keeps a reference to `rom`, which has to outlive this.
-    RareMusic(const Rom& rom, DriverInfo info) : rom_(rom), info_(std::move(info))
+    RareMusic(const Rom& rom, DriverInfo info)
+        : Music("Rare's sound driver", info.log, info.warnings), rom_(rom), info_(std::move(info))
     {
-        log_.push_back("Rare's sound driver");
-        log_.insert(log_.end(), info_.log.begin(), info_.log.end());
-    }
-
-    const std::vector<std::string>& Log() const override
-    {
-        return log_;
-    }
-
-    const std::vector<std::string>& Warnings() const override
-    {
-        return info_.warnings;
     }
 
     int SongCount() const override
@@ -58,7 +46,7 @@ public:
     // Calculates the tune's duration, loop points and note-playing tracks using the conversion settings.
     SongReport InspectSong(int song, const ConvertSettings& settings) const override
     {
-        SongReport r = Report(rare::InspectSong(rom_, info_, song, OptionsFor(song, settings)));
+        SongReport r = rare::InspectSong(rom_, info_, song, settings);
         r.address = TuneAddress(rom_, info_, song);
 
         return r;
@@ -66,12 +54,7 @@ public:
 
     SongReport ConvertSong(int song, const ConvertSettings& settings) override
     {
-        return Report(rare::ConvertSong(rom_, info_, song, OptionsFor(song, settings), shared_.get()));
-    }
-
-    bool SupportsVoiceChannels() const override
-    {
-        return false;
+        return rare::ConvertSong(rom_, info_, song, settings, shared_.get(), BankOf(song));
     }
 
     // The tunes that use the first tune's program map and instruments have their presets in bank 0, and each other pair
@@ -88,7 +71,7 @@ public:
             const auto key = std::make_pair(h.program_map, h.instruments);
             if (!banks.count(key))
             {
-                next += next == kDrumBank ? 1 : 0;
+                next = SkipDrumBank(next);
                 banks[key] = next++;
             }
 
@@ -101,8 +84,7 @@ public:
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
         Sf2File& f = shared_->File();
-        f.name = rom_.Title();
-        f.comment = "Instruments for " + rom_.Title() + ", extracted by " + kProgramName;
+        f.SetTitle(rom_.Title());
 
         return f.Write(path, error);
     }
@@ -147,41 +129,14 @@ public:
     }
 
 private:
-    // Returns the conversion options for `song`: the settings, and the song's bank in the shared SoundFont.
-    ConvertOptions OptionsFor(int song, const ConvertSettings& settings) const
+    // Returns the bank of `song`'s presets in the shared SoundFont, or 0 without one.
+    int BankOf(int song) const
     {
-        ConvertOptions opt;
-        opt.loops = settings.loops;
-        opt.track_mask = uint16_t(settings.track_mask);
-        opt.frame_timing = settings.frame_timing;
-        opt.bank = shared_ && song < int(banks_.size()) ? banks_[size_t(song)] : 0;
-        opt.out_dir = settings.out_dir;
-        opt.base_name = settings.base_name;
-
-        return opt;
-    }
-
-    // Returns a tune's summary as a report.
-    static SongReport Report(const SongSummary& sum)
-    {
-        SongReport r;
-        r.ok = sum.ok;
-        r.silent = sum.silent;
-        r.seconds = sum.seconds;
-        r.loop_start = sum.loop_start;
-        r.loop_end = sum.loop_end;
-        r.tracks = sum.tracks;
-        r.bpm = sum.bpm;
-        r.midi_path = sum.midi_path;
-        r.sf2_path = sum.sf2_path;
-        r.warnings = sum.warnings;
-
-        return r;
+        return shared_ && song < int(banks_.size()) ? banks_[size_t(song)] : 0;
     }
 
     const Rom& rom_;
     DriverInfo info_;
-    std::vector<std::string> log_;
     std::unique_ptr<SoundfontBuilder> shared_;
     std::vector<int> banks_; // each tune's bank in the shared SoundFont
 };

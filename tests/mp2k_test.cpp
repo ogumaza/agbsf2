@@ -31,7 +31,6 @@ namespace
 {
 
 using test::FullBendRange;
-using test::g_temp;
 using test::Le16;
 using test::MidiEvents;
 using test::ReadAll;
@@ -39,6 +38,7 @@ using test::ReadMidi;
 using test::ReadSf2;
 using test::Sf2Records;
 using test::TempPath;
+using test::TempSettings;
 
 // Addresses of the synthetic driver's parts in a test cartridge.
 constexpr uint32_t kInit = kRomBase + 0x100;          // the init's setting of the driver's mode
@@ -81,6 +81,13 @@ int LengthIndex(int ticks)
     }
 
     return -1;
+}
+
+// Appends `v` to `bytes` in little-endian byte order.
+void AppendLe32(std::vector<uint8_t>& bytes, uint32_t v)
+{
+    bytes.resize(bytes.size() + 4);
+    xsflib::StoreLe32(&bytes[bytes.size() - 4], v);
 }
 
 // A track's commands, with jumps to labels in the same track, which Bytes() turns into addresses.
@@ -192,11 +199,7 @@ public:
         std::vector<uint8_t> out = bytes_;
         for (const auto& [where, label] : fixups_)
         {
-            const uint32_t target = at + uint32_t(label);
-            for (int b = 0; b < 4; b++)
-            {
-                out[where + size_t(b)] = uint8_t(target >> (8 * b));
-            }
+            xsflib::StoreLe32(&out[where], at + uint32_t(label));
         }
 
         return out;
@@ -219,14 +222,14 @@ private:
 
 // A cartridge image being put together: a synthetic copy of the code patterns that detection reads, and songs, voices
 // and samples placed one after another.
-class Cart
+class Cart : public test::CartImage
 {
 public:
     // Makes a cartridge whose init gives the driver `mode`, with music players of the given track counts. Without
     // `code`, it has neither the init nor the routine that starts a song, and without `special`, its mixer doesn't play
     // reversed or compressed samples.
     explicit Cart(uint32_t mode = kMode, std::vector<int> players = {10, 3}, bool code = true, bool special = true)
-        : d_(0x40000, 0), next_(kData)
+        : CartImage(0x40000), next_(kData)
     {
         for (size_t p = 0; p < players.size(); p++)
         {
@@ -241,29 +244,12 @@ public:
         }
     }
 
-    void Put8(uint32_t a, uint8_t v)
-    {
-        d_[a - kRomBase] = v;
-    }
-
-    void Put16(uint32_t a, uint16_t v)
-    {
-        Put8(a, uint8_t(v));
-        Put8(a + 1, uint8_t(v >> 8));
-    }
-
-    void Put32(uint32_t a, uint32_t v)
-    {
-        Put16(a, uint16_t(v));
-        Put16(a + 2, uint16_t(v >> 16));
-    }
-
     // Places `bytes` at the next free address, aligned to `align`. Returns the address.
     uint32_t Place(const std::vector<uint8_t>& bytes, uint32_t align = 4)
     {
         next_ = (next_ + align - 1) & ~(align - 1);
         const uint32_t at = next_;
-        std::copy(bytes.begin(), bytes.end(), d_.begin() + (at - kRomBase));
+        PutBytes(at, bytes);
         next_ += uint32_t(bytes.size());
 
         return at;
@@ -272,19 +258,11 @@ public:
     // Places a sample that plays at `rate` for key 60, looping from `loop_start` to its end if that isn't -1.
     uint32_t Wave(const std::vector<int8_t>& pcm, uint32_t rate = 13379, int loop_start = -1)
     {
-        std::vector<uint8_t> bytes(16, 0);
-        auto word = [&](size_t at, uint32_t v)
-        {
-            for (int b = 0; b < 4; b++)
-            {
-                bytes[at + size_t(b)] = uint8_t(v >> (8 * b));
-            }
-        };
-
-        word(0, loop_start >= 0 ? 0x40000000u : 0);
-        word(4, rate * 1024);
-        word(8, loop_start >= 0 ? uint32_t(loop_start) : 0);
-        word(12, uint32_t(pcm.size()));
+        std::vector<uint8_t> bytes;
+        AppendLe32(bytes, loop_start >= 0 ? 0x40000000u : 0);
+        AppendLe32(bytes, rate * 1024);
+        AppendLe32(bytes, loop_start >= 0 ? uint32_t(loop_start) : 0);
+        AppendLe32(bytes, uint32_t(pcm.size()));
         bytes.insert(bytes.end(), pcm.begin(), pcm.end());
 
         return Place(bytes);
@@ -295,10 +273,7 @@ public:
     uint32_t Synth(uint8_t type, const std::vector<uint8_t>& params)
     {
         std::vector<uint8_t> bytes = {0, 0, 0, 0x40};
-        for (int b = 0; b < 4; b++)
-        {
-            bytes.push_back(uint8_t((13379 * 1024) >> (8 * b)));
-        }
+        AppendLe32(bytes, 13379 * 1024);
         bytes.resize(16, 0);
         bytes.push_back(0x80);
         bytes.push_back(type);
@@ -335,11 +310,8 @@ public:
     {
         std::vector<uint8_t> bytes(16, 0);
         bytes[0] = 1;
-        for (int b = 0; b < 4; b++)
-        {
-            bytes[4 + size_t(b)] = uint8_t((13379 * 1024) >> (8 * b));
-            bytes[12 + size_t(b)] = uint8_t(points >> (8 * b));
-        }
+        xsflib::StoreLe32(&bytes[4], 13379 * 1024);
+        xsflib::StoreLe32(&bytes[12], points);
         bytes.insert(bytes.end(), blocks.begin(), blocks.end());
 
         return Place(bytes);
@@ -382,10 +354,7 @@ public:
         std::fill(keys.begin(), keys.begin() + split + 1, uint8_t(0));
         const uint32_t key_table = Place(keys, 1);
         std::vector<uint8_t> voice = Voice(kVoiceKeySplit, table);
-        for (int b = 0; b < 4; b++)
-        {
-            voice[8 + size_t(b)] = uint8_t(key_table >> (8 * b));
-        }
+        xsflib::StoreLe32(&voice[8], key_table);
 
         return voice;
     }
@@ -405,10 +374,7 @@ public:
         std::vector<uint8_t> header = {uint8_t(tracks.size()), 0, priority, reverb};
         for (uint32_t v : words)
         {
-            for (int b = 0; b < 4; b++)
-            {
-                header.push_back(uint8_t(v >> (8 * b)));
-            }
+            AppendLe32(header, v);
         }
 
         const uint32_t header_at = Place(header);
@@ -418,14 +384,6 @@ public:
         songs_++;
 
         return header_at;
-    }
-
-    Rom ToRom() const
-    {
-        Rom r;
-        r.Assign(d_);
-
-        return r;
     }
 
 private:
@@ -457,7 +415,6 @@ private:
         }
     }
 
-    std::vector<uint8_t> d_;
     uint32_t next_;
     uint32_t songs_ = 0;
 };
@@ -506,6 +463,27 @@ std::vector<std::pair<int, int>> Selections(const MidiEvents& m, int channel)
     }
 
     return out;
+}
+
+// Returns the tempo events of a MIDI file's first track, as (tick, microseconds a quarter note).
+std::vector<std::pair<uint32_t, uint32_t>> Tempos(const MidiEvents& m)
+{
+    std::vector<std::pair<uint32_t, uint32_t>> out;
+    for (const auto& e : m.tracks[0].events)
+    {
+        if (e.bytes[0] == 0xFF && e.bytes[1] == 0x51)
+        {
+            out.push_back({uint32_t(e.tick), uint32_t((e.bytes[3] << 16) | (e.bytes[4] << 8) | e.bytes[5])});
+        }
+    }
+
+    return out;
+}
+
+// Returns true if `seconds` is the length of `frames` frames.
+bool AtFrames(double seconds, double frames)
+{
+    return std::fabs(seconds - frames / kFrameRate) < 1e-9;
 }
 
 // Runs a sequencer for `frames` frames, and returns the actions of the kind given.
@@ -769,7 +747,7 @@ void TestNotes()
     SEQLIB_REQUIRE_EQ(releases.size(), 3);
     SEQLIB_CHECK(ons[0].tick == 0 && ons[1].tick == 48 && ons[2].tick == 72);
     SEQLIB_CHECK(releases[0].tick == 24 && releases[1].tick == 60 && releases[2].tick == 87);
-    SEQLIB_CHECK(ons[0].a == 60 && ons[0].b == 100 && ons[0].program == 0 && ons[0].channel == 0);
+    SEQLIB_CHECK(ons[0].key == 60 && ons[0].velocity == 100 && ons[0].program == 0 && ons[0].channel == 0);
 }
 
 void TestChannels()
@@ -813,11 +791,11 @@ void TestChannels()
     {
         if (a.kind == Action::kNoteOn)
         {
-            ons.push_back({a.a, a.channel});
+            ons.push_back({a.key, a.channel});
         }
         if (a.kind == Action::kNoteDropped)
         {
-            dropped.push_back({a.a, int(a.tick)});
+            dropped.push_back({a.key, int(a.tick)});
         }
     }
 
@@ -936,18 +914,16 @@ void TestLoops()
     cart.Song({t}, voices);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "loops";
+    ConvertSettings opt = TempSettings("loops");
 
     const TrackLayout layout = ScanTrack(rom, rom.U32(rom.U32(kSongTable) + 8));
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(layout.loops && layout.loop_start == 12 && layout.loop_end == 36);
     SEQLIB_CHECK(r.ok && !r.silent);
-    SEQLIB_CHECK(std::fabs(r.loop_start - 12 / kFrameRate) < 1e-9);
-    SEQLIB_CHECK(std::fabs(r.loop_end - 36 / kFrameRate) < 1e-9);
-    SEQLIB_CHECK(std::fabs(r.seconds - 60 / kFrameRate) < 1e-9);
+    SEQLIB_CHECK(AtFrames(r.loop_start, 12));
+    SEQLIB_CHECK(AtFrames(r.loop_end, 36));
+    SEQLIB_CHECK(AtFrames(r.seconds, 60));
 
     const MidiEvents m = ReadMidi(r.midi_path);
     std::vector<std::pair<uint32_t, std::string>> markers;
@@ -987,16 +963,14 @@ void TestLoopStarts()
     cart.Song({first, middle, last}, voices);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "loop_starts";
+    ConvertSettings opt = TempSettings("loop_starts");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(r.ok && !r.silent);
-    SEQLIB_CHECK(std::fabs(r.loop_start - 16 / kFrameRate) < 1e-9);
-    SEQLIB_CHECK(std::fabs(r.loop_end - 64 / kFrameRate) < 1e-9);
-    SEQLIB_CHECK(std::fabs(r.seconds - 112 / kFrameRate) < 1e-9);
+    SEQLIB_CHECK(AtFrames(r.loop_start, 16));
+    SEQLIB_CHECK(AtFrames(r.loop_end, 64));
+    SEQLIB_CHECK(AtFrames(r.seconds, 112));
 }
 
 void TestLoopStartsAtSecondPass()
@@ -1013,11 +987,9 @@ void TestLoopStartsAtSecondPass()
     cart.Song({t}, voices);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "second_pass";
+    ConvertSettings opt = TempSettings("second_pass");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     const MidiEvents m = ReadMidi(r.midi_path);
     std::vector<std::pair<uint32_t, std::string>> markers;
@@ -1055,16 +1027,14 @@ void TestLoopLengths()
     cart.Song({three, four, once}, voices);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "loop_lengths";
+    ConvertSettings opt = TempSettings("loop_lengths");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(r.ok && !r.silent);
-    SEQLIB_CHECK(std::fabs(r.loop_start - 40 / kFrameRate) < 1e-9);
-    SEQLIB_CHECK(std::fabs(r.loop_end - 184 / kFrameRate) < 1e-9);
-    SEQLIB_CHECK(std::fabs(r.seconds - 328 / kFrameRate) < 1e-9);
+    SEQLIB_CHECK(AtFrames(r.loop_start, 40));
+    SEQLIB_CHECK(AtFrames(r.loop_end, 184));
+    SEQLIB_CHECK(AtFrames(r.seconds, 328));
 }
 
 void TestLoopAfterTie()
@@ -1084,18 +1054,16 @@ void TestLoopAfterTie()
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
 
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "loop_tie";
+    ConvertSettings opt = TempSettings("loop_tie");
 
-    const SongSummary held = ConvertSong(rom, info, 0, opt, nullptr);
-    const SongSummary ended = ConvertSong(rom, info, 1, opt, nullptr);
+    const SongReport held = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport ended = ConvertSong(rom, info, 1, opt, nullptr);
 
     SEQLIB_CHECK(held.ok && ended.ok);
-    SEQLIB_CHECK(std::fabs(held.loop_start - 96 / kFrameRate) < 1e-9);
-    SEQLIB_CHECK(std::fabs(held.loop_end - 120 / kFrameRate) < 1e-9);
-    SEQLIB_CHECK(std::fabs(ended.loop_start - 30 / kFrameRate) < 1e-9);
-    SEQLIB_CHECK(std::fabs(ended.loop_end - 54 / kFrameRate) < 1e-9);
+    SEQLIB_CHECK(AtFrames(held.loop_start, 96));
+    SEQLIB_CHECK(AtFrames(held.loop_end, 120));
+    SEQLIB_CHECK(AtFrames(ended.loop_start, 30));
+    SEQLIB_CHECK(AtFrames(ended.loop_end, 54));
 }
 
 // A track's volume is 100 when its loop starts the first time, and the loop sets 60 for its second note. In song 0 the
@@ -1126,13 +1094,11 @@ void TestLoopSettingsAgain()
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
 
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "loop_again";
+    ConvertSettings opt = TempSettings("loop_again");
 
     for (int song = 0; song < 3; song++)
     {
-        const SongSummary r = ConvertSong(rom, info, song, opt, nullptr);
+        const SongReport r = ConvertSong(rom, info, song, opt, nullptr);
 
         std::vector<std::pair<uint32_t, int>> volumes;
         for (const auto& [tick, bytes] : ReadMidi(r.midi_path).Find(0xB0))
@@ -1145,7 +1111,7 @@ void TestLoopSettingsAgain()
 
         const bool again =
             std::find(volumes.begin(), volumes.end(), std::make_pair(12 * kMidiTicks, 100)) != volumes.end();
-        SEQLIB_CHECK(r.ok && std::fabs(r.loop_start - 12 / kFrameRate) < 1e-9);
+        SEQLIB_CHECK(r.ok && AtFrames(r.loop_start, 12));
         SEQLIB_CHECK(again == (song < 2));
     }
 }
@@ -1164,12 +1130,10 @@ void TestHourLimit()
     cart.Song({t}, voices);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "hour";
+    ConvertSettings opt = TempSettings("hour");
     opt.loops = 100;
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     const auto cut_off = [](const std::string& w)
     {
@@ -1227,11 +1191,9 @@ void TestConversion()
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
 
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "convert";
+    ConvertSettings opt = TempSettings("convert");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(r.ok && !r.silent);
     SEQLIB_CHECK_EQ(r.tracks, 3);
@@ -1243,13 +1205,8 @@ void TestConversion()
     const MidiEvents m = ReadMidi(r.midi_path);
     SEQLIB_CHECK_EQ(m.division, 24 * kMidiTicks);
     SEQLIB_REQUIRE_EQ(m.tracks.size(), 4);
-    bool tempo = false;
-    for (const auto& e : m.tracks[0].events)
-    {
-        tempo = tempo || (e.bytes[0] == 0xFF && e.bytes[1] == 0x51 &&
-                          ((e.bytes[3] << 16) | (e.bytes[4] << 8) | e.bytes[5]) == 401825);
-    }
-    SEQLIB_CHECK(tempo);
+    const auto tempos = Tempos(m);
+    SEQLIB_CHECK(std::any_of(tempos.begin(), tempos.end(), [](const auto& t) { return t.second == 401825; }));
 
     const auto lead_notes = m.Find(0x90);
     SEQLIB_CHECK(lead_notes.size() == 1 && lead_notes[0].tick == 0 && lead_notes[0].bytes[1] == 60 &&
@@ -1340,11 +1297,9 @@ void TestSlowAttackAtEnd()
     cart.Song({track}, voices);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "slow_attack";
+    ConvertSettings opt = TempSettings("slow_attack");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(r.ok);
     std::vector<uint32_t> ons;
@@ -1366,11 +1321,9 @@ void TestTwoVoicesInATick()
               voices);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "two_voices";
+    ConvertSettings opt = TempSettings("two_voices");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(r.ok);
     std::vector<std::pair<int, int>> order;
@@ -1407,13 +1360,11 @@ void TestSharedSoundfont()
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
 
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "shared";
+    ConvertSettings opt = TempSettings("shared");
     SoundfontBuilder shared(rom, info);
 
-    const SongSummary first = ConvertSong(rom, info, 0, opt, &shared);
-    const SongSummary second = ConvertSong(rom, info, 1, opt, &shared);
+    const SongReport first = ConvertSong(rom, info, 0, opt, &shared);
+    const SongReport second = ConvertSong(rom, info, 1, opt, &shared);
 
     // Program 1 has the first song's voice in bank 0 and the second's in bank 1, the common voice has one preset, and
     // the drum bank has none.
@@ -1444,14 +1395,14 @@ void TestSharedPresets()
     const Rom rom = Cart().ToRom();
     const DriverInfo info;
     SoundfontBuilder sf(rom, info);
-    std::vector<PresetSlot> slots;
+    std::vector<BankProgram> slots;
 
     for (int i = 0; i < 129; i++)
     {
         slots.push_back(sf.SharedPreset(5, i));
     }
-    const PresetSlot again = sf.SharedPreset(5, 128);
-    const PresetSlot next = sf.SharedPreset(0, 200);
+    const BankProgram again = sf.SharedPreset(5, 128);
+    const BankProgram next = sf.SharedPreset(0, 200);
 
     // The 129th gets the first free program of bank 0, which it keeps, and the next one as program 0 gets bank 1.
     SEQLIB_CHECK(slots[0].bank == 0 && slots[0].program == 5);
@@ -1479,15 +1430,13 @@ void TestSharedDrumChannel()
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
 
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "drums";
+    ConvertSettings opt = TempSettings("drums");
     SoundfontBuilder shared(rom, info);
 
-    const SongSummary first = ConvertSong(rom, info, 0, opt, &shared);
-    const SongSummary second = ConvertSong(rom, info, 1, opt, &shared);
+    const SongReport first = ConvertSong(rom, info, 0, opt, &shared);
+    const SongReport second = ConvertSong(rom, info, 1, opt, &shared);
 
-    auto warns = [](const SongSummary& s)
+    auto warns = [](const SongReport& s)
     {
         return std::any_of(s.warnings.begin(), s.warnings.end(),
                            [](const std::string& w) { return w.find("drum bank") != std::string::npos; });
@@ -1546,12 +1495,10 @@ void TestVoiceChannels()
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
 
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "voices";
+    ConvertSettings opt = TempSettings("voices");
     opt.voice_channels = true;
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     // A track for each of the driver's 5 channels, named after it, after the conductor track.
     SEQLIB_CHECK(r.ok);
@@ -1634,12 +1581,10 @@ void TestVoiceChannelsDrums()
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
 
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "voice_drums";
+    ConvertSettings opt = TempSettings("voice_drums");
     opt.voice_channels = true;
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     // The noise note plays on channel 10, and its voice has a copy in the drum bank.
     SEQLIB_CHECK(r.ok);
@@ -1679,19 +1624,17 @@ void TestVoiceChannelsLoop()
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
 
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "voice_loop";
+    ConvertSettings opt = TempSettings("voice_loop");
     opt.voice_channels = true;
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     // The loop's first note, at tick 12, sets the channel's program, volume and pitch bend again, though the note
     // before it left them the same, since a player that jumps back to the loop's start comes from track 0's note.
     using Events = std::vector<seqlib::midi::Event>;
     SEQLIB_CHECK(r.ok);
-    SEQLIB_CHECK(std::fabs(r.loop_start - 6 / kFrameRate) < 1e-9);
-    SEQLIB_CHECK(std::fabs(r.loop_end - 54 / kFrameRate) < 1e-9);
+    SEQLIB_CHECK(AtFrames(r.loop_start, 6));
+    SEQLIB_CHECK(AtFrames(r.loop_end, 54));
     const MidiEvents m = ReadMidi(r.midi_path);
     Events volumes;
     for (const auto& e : m.Find(0xB0))
@@ -1730,11 +1673,9 @@ void TestCompressedSample()
     cart.Song({Track().Cmd(kCmdVoice, 0).Cmd(kCmdVol, 127).Note(24, 60, 127).Wait(24).Fine()}, voices);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "compressed";
+    ConvertSettings opt = TempSettings("compressed");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     // The sample holds the master volume of 12 too, at 13/16, so each of its points is 208 times the decoded one.
     const Sf2Records sf = ReadSf2(r.sf2_path);
@@ -1770,11 +1711,9 @@ void TestDroppedNotes()
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
 
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "dropped";
+    ConvertSettings opt = TempSettings("dropped");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     const MidiEvents m = ReadMidi(r.midi_path);
     SEQLIB_CHECK(r.ok && r.warnings.size() == 1 && r.warnings[0].find("1 note had no available sound channel") == 0);
@@ -1800,11 +1739,9 @@ void TestDoubledNote()
               voices);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "doubled";
+    ConvertSettings opt = TempSettings("doubled");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(r.ok && !r.silent);
     const MidiEvents m = ReadMidi(r.midi_path);
@@ -1816,21 +1753,6 @@ void TestDoubledNote()
         SEQLIB_CHECK(ons[0].tick == kMidiTicks && ons[0].bytes[1] == 60);
         SEQLIB_CHECK_EQ(offs[0].tick, 25 * kMidiTicks);
     }
-}
-
-// Returns the tempo events of a MIDI file's first track, as (tick, microseconds a quarter note).
-std::vector<std::pair<uint32_t, uint32_t>> Tempos(const MidiEvents& m)
-{
-    std::vector<std::pair<uint32_t, uint32_t>> out;
-    for (const auto& e : m.tracks[0].events)
-    {
-        if (e.bytes[0] == 0xFF && e.bytes[1] == 0x51)
-        {
-            out.push_back({uint32_t(e.tick), uint32_t((e.bytes[3] << 16) | (e.bytes[4] << 8) | e.bytes[5])});
-        }
-    }
-
-    return out;
 }
 
 // Returns the microseconds a quarter note lasts when a tick takes `frames` frames.
@@ -1859,19 +1781,17 @@ void TestTempoChange()
               voices);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "tempo";
+    ConvertSettings opt = TempSettings("tempo");
 
     Sequencer seq(rom, info, 0);
     const std::vector<Action> notes = Actions(seq, 10, Action::kNoteOn);
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(notes.size() == 1 && notes[0].tick == 3 && notes[0].frame == 3);
     const std::vector<std::pair<uint32_t, uint32_t>> kTempos = {
         {0, Micros(0.75)}, {2 * kMidiTicks, Micros(1.5)}, {3 * kMidiTicks, Micros(3)}};
     SEQLIB_CHECK(Tempos(ReadMidi(r.midi_path)) == kTempos);
-    SEQLIB_CHECK(std::fabs(r.seconds - (2 * 0.75 + 1.5 + 2 * 3) / kFrameRate) < 1e-9);
+    SEQLIB_CHECK(AtFrames(r.seconds, 2 * 0.75 + 1.5 + 2 * 3));
 }
 
 void TestPsgPitch()
@@ -1907,11 +1827,9 @@ void TestPsgPitch()
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
 
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "psg_pitch";
+    ConvertSettings opt = TempSettings("psg_pitch");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     const MidiEvents m = ReadMidi(r.midi_path);
     std::map<int, int> ranges;
@@ -1958,11 +1876,9 @@ void TestPsgRelease()
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
 
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "psg_release";
+    ConvertSettings opt = TempSettings("psg_release");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     const auto bends = ReadMidi(r.midi_path).Find(0xE0);
     const int kNoise = 8192 + int(std::lround(256.0 * 12.0 * std::log2(1.6) * 8192 / (9 * 256)));
@@ -1994,11 +1910,9 @@ void TestQuietPsg()
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
 
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "quiet";
+    ConvertSettings opt = TempSettings("quiet");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
     const auto ons = ReadMidi(r.midi_path).Find(0x90);
     SEQLIB_CHECK(ons.size() == 1 && ons[0].tick == 12 * kMidiTicks && ons[0].bytes[1] == 62);
@@ -2129,7 +2043,7 @@ void TestCamelotSequencer()
         {
             if (a.kind == Action::kNoteOn)
             {
-                ons.push_back({a.a, a.channel});
+                ons.push_back({a.key, a.channel});
             }
         }
         if (f == 0)
@@ -2242,11 +2156,9 @@ void TestCamelotConversion()
               voices, 0, 0, 0x80 | 10);
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(g_temp);
-    opt.base_name = "camelot";
+    ConvertSettings opt = TempSettings("camelot");
 
-    const SongSummary r = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
     const std::vector<int16_t> points = RenderSynth(rom, info, Synth::kPulse, pulse + 16, 13379, 64);
 
     SEQLIB_CHECK(r.ok && !r.silent);

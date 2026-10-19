@@ -38,6 +38,12 @@ constexpr int kFirstPsgChannel = kMaxDirectChannels;
 // The number of sound channels: the DirectSound channels and the four PSG channels.
 constexpr int kChannelCount = kMaxDirectChannels + 4;
 
+// The driver's tick: each frame adds the tempo to a counter. Each 150 in the counter is a tick.
+constexpr int kTickCounter = 150;
+
+// The tempo before a song sets one, in the driver's units: quarter notes a minute at 60 frames a second.
+constexpr int kDefaultTempo = 150;
+
 // A sound channel: one of the DirectSound mixer's, or one of the four PSG channels.
 struct Channel
 {
@@ -92,18 +98,19 @@ struct Action
         kRelease,     // the release of a channel's note
         kNoteEnd,     // the end of a channel's note: its sound ended, or a later note took the channel
         kAudible,     // the first time a channel's note got louder than silence
-        kVoice,       // a = the voice
-        kVolume,      // a = the track's volume, 0-127
-        kPan,         // a = the pan, with 64 the centre
+        kVoice,       // value = the voice
+        kVolume,      // value = the track's volume, 0-127
+        kPan,         // value = the pan, with 64 the centre
         kPitch,       // value = the pitch offset in 256ths of a semitone
         kTempo,       // value = the tempo, in quarter notes a minute at 60 frames a second
     };
 
     Kind kind = kNoteOn;
     uint8_t track = 0;
-    uint8_t a = 0;         // kNoteOn: the key
-    uint8_t b = 0;         // kNoteOn: the velocity
-    int32_t value = 0;     // kPitch: the pitch offset; kTempo: the tempo; kNoteOn: the key the note plays at
+    uint8_t key = 0;       // kNoteOn, kNoteDropped: the key
+    uint8_t velocity = 0;  // kNoteOn, kNoteDropped: the velocity
+    uint8_t play_key = 0;  // kNoteOn: the key the note plays at, after a drum kit
+    int32_t value = 0;     // kVoice, kVolume, kPan, kPitch and kTempo: the setting
     int32_t old_tempo = 0; // kTempo: the tempo before it, which the rest of this tick's progress counted at
     int32_t counter = 0;   // kTempo: the progress towards the next tick, in the tempo's units, after this one
     uint64_t tick = 0;     // the player's tick count when it happened
@@ -143,7 +150,7 @@ public:
     // Returns true once every track has ended.
     bool TracksEnded() const
     {
-        return (status_ & 0x80000000u) != 0;
+        return (status_ & kPlayerStopped) != 0;
     }
 
     // Returns true once every track has ended and every channel is silent.
@@ -225,6 +232,9 @@ private:
         uint8_t restate = 0; // the settings it reports where it next sets them
     };
 
+    // The player's status once every track has ended.
+    static constexpr uint32_t kPlayerStopped = 0x80000000u;
+
     // Runs a tick of track `t`: counts down its notes, runs its commands that are due and moves its LFO on.
     void RunTrack(int t);
 
@@ -246,6 +256,9 @@ private:
     // Sets a channel's volumes from its velocity and its track's volumes.
     void SetChannelVolume(Channel& c, const Track& track) const;
 
+    // Sets a channel's frequency from its key and its track's pitch.
+    void SetChannelPitch(Channel& c, const Track& track) const;
+
     // Updates the channels of tracks whose volume or pitch changed in the frame.
     void UpdateChannels();
 
@@ -260,7 +273,6 @@ private:
     int FindCamelotChannel(int t, int priority) const;
 
     void RunPsg();
-    void SetPsgVolume(Channel& c) const;
     void RunDirect();
     void MixChannel(Channel& c, const Wave& wave);
 
@@ -271,7 +283,15 @@ private:
     // time from RestateFrom()'s tick on.
     void ReportTrack(int t);
 
+    // Returns a track's pitch in 256ths of a semitone: its tune, bend and key shift, and the LFO's swing when it
+    // modulates the pitch.
+    static int32_t TrackPitch(const Track& track);
+
     void AddAction(Action action);
+
+    // Releases the note that track `t` plays on `channel`.
+    void ReleaseNote(int t, int channel);
+
     void EndNote(int channel, bool sounded);
 
     // Records that a channel's note is audible, the first time its envelope is above 0.
@@ -290,11 +310,11 @@ private:
     uint32_t status_ = 0;
     uint8_t priority_ = 0;
     uint64_t clock_ = 0;
-    uint16_t tempo_d_ = 150;
+    uint16_t tempo_d_ = kDefaultTempo;
     uint16_t tempo_u_ = 0x100;
-    uint16_t tempo_i_ = 150;
+    uint16_t tempo_i_ = kDefaultTempo;
     uint16_t tempo_c_ = 0;
-    std::array<uint8_t, 256> memory_ = {};
+    std::array<uint8_t, kMemAccSize> memory_ = {};
 
     uint8_t c15_ = 0; // the PSG envelopes' frame counter, 14 down to 0
     uint32_t frame_ = 0;
@@ -318,5 +338,33 @@ uint32_t SampleFrequency(const DriverInfo& info, uint32_t frequency, int key, in
 // Returns the frequency setting of PSG channel `channel` (1-4) for `key`, raised by `fine`/256 of a semitone, as the
 // driver's MidiKeyToCgbFreq works it out: the 11-bit register value for channels 1-3, or a noise setting for 4.
 uint32_t KeyToPsgFrequency(int channel, int key, int fine);
+
+// Returns how far the phase of a synth voice of Camelot's mixer moves on for each point of the mixer's output, at
+// `frequency` Hz. The phase moves 8 times as far as a sample's position would. A cycle of the wave therefore lasts 64
+// of a sample's points. The step wraps around at 32 bits.
+inline uint32_t SynthStep(uint32_t frequency, uint32_t step_scale)
+{
+    return (frequency * step_scale) << 3;
+}
+
+// Returns the point of a synth voice's saw wave at `phase`. The wave rises from -112 to 111 over a cycle, by three
+// quarters of a step for each of the phase's 256 steps, with a jump of 32 halfway.
+inline int32_t SawPoint(uint32_t phase)
+{
+    return int32_t(phase >> 24) - 0x70 - int32_t((phase >> 26) & 0x1F);
+}
+
+// Returns the saw wave's filter output for `point` after the output `last`: the point plus half the last output.
+inline int32_t FilterSaw(int32_t point, int32_t last)
+{
+    return point + (last >> 1);
+}
+
+// Returns how far the triangle wave that sets a pulse wave's duty moves on each frame: the fourth byte of the synth
+// voice's data at `data`, at the top of a word.
+inline uint32_t DutyStep(const Rom& rom, uint32_t data)
+{
+    return uint32_t(rom.U8(data + 3)) << 24;
+}
 
 } // namespace agbsf2::mp2k

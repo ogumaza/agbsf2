@@ -29,6 +29,7 @@ namespace
 {
 
 using test::FullBendRange;
+using test::LastWrite;
 using test::Le16;
 using test::Le32;
 using test::MidiEvents;
@@ -37,6 +38,7 @@ using test::ReadMidi;
 using test::ReadSf2;
 using test::Sf2Records;
 using test::TempPath;
+using test::TempSettings;
 
 // Addresses in a test cartridge: the init's setting of Timer 0 and its reload value, the per-frame routine's code that
 // detection reads and its literal pool, the command table and its routines, and the driver's tables.
@@ -84,11 +86,11 @@ struct TestChannel
 // A cartridge image being put together: a synthetic copy of the code patterns that detection reads, the driver's tables
 // and the sounds, for a revision of the driver. Sound 0 lists no channels, since the driver's queue takes 0 for no
 // request.
-class Cart
+class Cart : public test::CartImage
 {
 public:
     explicit Cart(bool code = true, Revision revision = Revision::kSwordOfMana)
-        : d_(0x10000, 0), vacation_(revision == Revision::kMagicalVacation)
+        : CartImage(0x10000), vacation_(revision == Revision::kMagicalVacation)
     {
         WriteTables();
         if (code)
@@ -96,23 +98,6 @@ public:
             WriteCode();
         }
         Sound(0, {});
-    }
-
-    void Put8(uint32_t a, uint8_t v)
-    {
-        d_[a - kRomBase] = v;
-    }
-
-    void Put16(uint32_t a, uint16_t v)
-    {
-        Put8(a, uint8_t(v));
-        Put8(a + 1, uint8_t(v >> 8));
-    }
-
-    void Put32(uint32_t a, uint32_t v)
-    {
-        Put16(a, uint16_t(v));
-        Put16(a + 2, uint16_t(v >> 16));
     }
 
     // Writes entry `sound` of the song table: the list of its channels, and each one's data and subroutines.
@@ -141,14 +126,6 @@ public:
         }
         Put32(next_list_, 0xFF);
         next_list_ += 4;
-    }
-
-    Rom ToRom() const
-    {
-        Rom r;
-        r.Assign(d_);
-
-        return r;
     }
 
 private:
@@ -315,7 +292,6 @@ private:
         }
     }
 
-    std::vector<uint8_t> d_;
     bool vacation_;
     uint32_t next_list_ = kSongLists;
     uint32_t next_data_ = kSequences;
@@ -343,21 +319,6 @@ std::vector<std::vector<RegisterWrite>> Writes(const Rom& rom, const DriverInfo&
     }
 
     return out;
-}
-
-// Returns the value of the last write to `address` in `writes`, or -1 if there was none.
-long long LastWrite(const std::vector<RegisterWrite>& writes, uint32_t address)
-{
-    long long value = -1;
-    for (const RegisterWrite& w : writes)
-    {
-        if (w.address == address)
-        {
-            value = w.value;
-        }
-    }
-
-    return value;
 }
 
 // Returns the frequency setting of key `key` in the test cartridge's table.
@@ -529,13 +490,13 @@ void TestLoops()
             }
         }
     }
-    ConvertOptions opt;
+    ConvertSettings opt;
 
-    const SongSummary sum = InspectSong(rom, info, 1, opt);
+    const SongReport sum = InspectSong(rom, info, 1, opt);
 
     SEQLIB_REQUIRE_EQ(loops.size(), 1);
-    SEQLIB_CHECK_EQ(loops.size() ? loops[0].frame : 0, 49);
-    SEQLIB_CHECK_EQ(loops.size() ? loops[0].first : 0, 1);
+    SEQLIB_CHECK_EQ(loops[0].frame, 49);
+    SEQLIB_CHECK_EQ(loops[0].first, 1);
     SEQLIB_CHECK(sum.ok && sum.tracks == 1);
     SEQLIB_CHECK(std::fabs(sum.loop_start - 280896.0 / 16777216) < 1e-9);
     SEQLIB_CHECK(std::fabs(sum.loop_end - 49 * 280896.0 / 16777216) < 1e-9);
@@ -551,9 +512,9 @@ void TestLoopSettings()
     cart.Sound(1, {{0, {0xF0, kPsgHold, 0x89, 24, 0xF3, 0xF4, 24, 0xF8, 0}, {3}}});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
+    ConvertSettings opt;
 
-    const SongSummary sum = InspectSong(rom, info, 1, opt);
+    const SongReport sum = InspectSong(rom, info, 1, opt);
 
     SEQLIB_CHECK(sum.ok && sum.tracks == 1);
     SEQLIB_CHECK(std::fabs(sum.loop_start - 49 * 280896.0 / 16777216) < 1e-9);
@@ -570,11 +531,9 @@ void TestLoopSettingsAgain()
     cart.Sound(1, {{0, {0xFD, 0x11, 0xF0, kPsgHold, 0xF2, 0, 0x89, 24, 0xF2, 0, 26, 0xF2, 6, 28, 0xF8, 0}, {8}}});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "loop_again";
+    ConvertSettings opt = TempSettings("loop_again");
 
-    const SongSummary sum = ConvertSong(rom, info, 1, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 1, opt, nullptr);
 
     const MidiEvents midi = ReadMidi(sum.midi_path);
     uint32_t loop_start = ~0u;
@@ -615,13 +574,10 @@ void TestConversion()
                    {8, {0xE1, 0, 0xEA, 0xFF, 0xF0, kSampleHold, 0xF2, 0xFF, 0x89, 2, 0xFF}, {}}});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "brownie";
-    int base = 0;
+    ConvertSettings opt = TempSettings("brownie");
 
-    const int cents = PsgTuning(rom, info, base);
-    const SongSummary sum = ConvertSong(rom, info, 1, opt, nullptr);
+    const Tuning tuning = PsgTuning(rom, info);
+    const SongReport sum = ConvertSong(rom, info, 1, opt, nullptr);
 
     const MidiEvents midi = ReadMidi(sum.midi_path);
     const auto square_on = midi.Find(0x90);
@@ -644,13 +600,13 @@ void TestConversion()
                             gens.count(sf2::kKeyRange) && gens.at(sf2::kKeyRange) == (39 | 39 << 8));
     }
 
-    SEQLIB_CHECK_EQ(base, 37);
-    SEQLIB_CHECK_EQ(cents, -33);
+    SEQLIB_CHECK_EQ(tuning.base, 37);
+    SEQLIB_CHECK_EQ(tuning.cents, -33);
     SEQLIB_CHECK(sum.ok && sum.tracks == 3);
     SEQLIB_CHECK_EQ(midi.division, 480);
     SEQLIB_REQUIRE_EQ(square_on.size(), 1);
-    SEQLIB_CHECK_EQ(square_on.size() ? square_on[0].tick : 1, 0);
-    SEQLIB_CHECK_EQ(square_on.size() ? square_on[0].bytes[1] : 0, 61);
+    SEQLIB_CHECK_EQ(square_on[0].tick, 0);
+    SEQLIB_CHECK_EQ(square_on[0].bytes[1], 61);
     SEQLIB_CHECK_EQ(sample_on.size() ? sample_on[0].bytes[1] : 0, 39);
     SEQLIB_CHECK(tuned);
     SEQLIB_CHECK(rooted);
@@ -667,11 +623,9 @@ void TestWaveRests()
                    {2, {0xFC, 0, 0xF0, kPsgHold, 0x89, 24, 0xED, 24, 0xE0, kPsgRelease, 0xFF}, {}}});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "brownie_wave";
+    ConvertSettings opt = TempSettings("brownie_wave");
 
-    const SongSummary sum = ConvertSong(rom, info, 1, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 1, opt, nullptr);
 
     // The sound plays on its frames, 16 ticks each. The wave's notes start in frames 1 and 49, and end at the rest in
     // frame 25 and the release's step in frame 74.
@@ -681,9 +635,9 @@ void TestWaveRests()
     SEQLIB_CHECK(sum.ok && sum.tracks == 2);
     SEQLIB_REQUIRE_EQ(ons.size(), 2);
     SEQLIB_REQUIRE_EQ(offs.size(), 2);
-    SEQLIB_CHECK_EQ(ons.size() == 2 ? ons[1].tick : 0, 48 * 16);
-    SEQLIB_CHECK_EQ(offs.size() == 2 ? offs[0].tick : 0, 24 * 16);
-    SEQLIB_CHECK_EQ(offs.size() == 2 ? offs[1].tick : 0, 73 * 16);
+    SEQLIB_CHECK_EQ(ons[1].tick, 48 * 16);
+    SEQLIB_CHECK_EQ(offs[0].tick, 24 * 16);
+    SEQLIB_CHECK_EQ(offs[1].tick, 73 * 16);
     SEQLIB_CHECK(midi.Find(0xE2).empty());
 }
 
@@ -855,11 +809,9 @@ void TestVacationConversion()
     cart.Sound(1, {{8, {0xE1, 0, 0xF0, kSampleHold, 0xF2, 0xFF, 0x89, 49, 0xF9, 3, 48, 0xFF}, {}}});
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
-    opt.out_dir = Utf8(test::g_temp);
-    opt.base_name = "vacation";
+    ConvertSettings opt = TempSettings("vacation");
 
-    const SongSummary sum = ConvertSong(rom, info, 1, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 1, opt, nullptr);
 
     const MidiEvents midi = ReadMidi(sum.midi_path);
     const auto notes = midi.Find(0x98);
@@ -893,8 +845,8 @@ void TestVacationConversion()
     // root and a fine tune of -1, and key 48 plays at 16384 Hz on its own key.
     SEQLIB_CHECK(sum.ok && sum.tracks == 1);
     SEQLIB_REQUIRE_EQ(notes.size(), 2);
-    SEQLIB_CHECK_EQ(notes.size() == 2 ? notes[0].bytes[1] : 0, 86);
-    SEQLIB_CHECK_EQ(notes.size() == 2 ? notes[1].bytes[1] : 0, 85);
+    SEQLIB_CHECK_EQ(notes[0].bytes[1], 86);
+    SEQLIB_CHECK_EQ(notes[1].bytes[1], 85);
     SEQLIB_CHECK(tuned);
     SEQLIB_CHECK(exact);
     SEQLIB_CHECK_EQ(last, expected);

@@ -30,6 +30,10 @@ std::vector<ThumbPattern> ParseThumbPattern(std::string_view text);
 // Returns the address of every halfword-aligned match of `pattern` in the ROM.
 std::vector<uint32_t> FindThumb(const Rom& rom, const std::vector<ThumbPattern>& pattern);
 
+// Returns the address of the first match of the pattern that `text` gives in ParseThumbPattern()'s form, or 0 if the
+// ROM has none.
+uint32_t FindFirstThumb(const Rom& rom, std::string_view text);
+
 // Returns the word that the Thumb instruction `ldr rX, [pc, #imm]` at `at` loads.
 uint32_t ThumbLiteral(const Rom& rom, uint32_t at);
 

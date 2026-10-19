@@ -27,6 +27,14 @@ constexpr int kModeLoop = 1;
 constexpr int kModeSong = 2;
 constexpr int kModeJingle = 4;
 
+// The frequency that the period of an Amiga module divides: 8363 Hz times 1712, the period of C-4.
+constexpr int32_t kAmigaClock = 14317456;
+
+// Return the period of `note`, from C-0, for a sample whose fine tune is `fine_tune`. AmigaPeriod() gives the note's
+// entry in the table of periods, scaled by the fine tune. LinearPeriod() gives a linear period, of 64 steps a note.
+uint32_t AmigaPeriod(const Rom& rom, const DriverInfo& info, uint32_t note, int fine_tune);
+int LinearPeriod(uint32_t note, int fine_tune);
+
 // The sizes of the player's record, a player channel's and a mixer channel's, as the game keeps them in RAM.
 constexpr size_t kPlayerRecordSize = 0x34;
 constexpr size_t kChannelRecordSize = 0x60;
@@ -155,6 +163,10 @@ public:
     // which have to outlive the player.
     Player(const Rom& rom, const DriverInfo& info, uint32_t module, int mode = kModeLoop, int song = 0);
 
+    // Starts a piece that the conversion numbers. A whole module plays in loop mode, and a song of a module in loop and
+    // song mode.
+    Player(const Rom& rom, const DriverInfo& info, const ModuleSong& song);
+
     // Returns false if the module can't be played.
     bool Valid() const
     {
@@ -189,6 +201,20 @@ public:
     const std::array<Channel, kPlayerChannels>& Channels() const
     {
         return channels_;
+    }
+
+    // Returns the mixer channel that a channel's handle names.
+    const MixChannel& MixerOf(const Channel& c) const
+    {
+        return mixer_[c.handle & 0x1F];
+    }
+
+    // Returns true if the channel's mixer channel still plays the channel's note. A handle of 0 names no play. A mixer
+    // channel that ramps a stopped note down has that handle too.
+    bool Sounding(const Channel& c) const
+    {
+        const MixChannel& m = MixerOf(c);
+        return c.handle != 0 && Plays(m, c.handle) && m.status == 1;
     }
 
     // Returns the speed, the tick within the row, and the order and row that the last row came from, with the state of
@@ -261,6 +287,10 @@ private:
     // channel's; and the rest of its state.
     uint32_t Play(uint32_t sample, int sample_index, int sfx, uint32_t handle, uint32_t freq, uint32_t volume,
                   int32_t pan);
+
+    // Returns true if `m` still plays the play that `handle` names.
+    static bool Plays(const MixChannel& m, uint32_t handle);
+
     bool Stop(uint32_t handle);
     bool SetFreq(uint32_t handle, uint32_t freq);
     bool SetVol(uint32_t handle, uint32_t volume);
@@ -277,19 +307,50 @@ private:
     void Mix(uint32_t amount);
     static void Advance(MixChannel& m, uint32_t samples);
 
-    // The player: a tick, which plays a row or the effects between rows, and then the envelopes; the start of the row's
-    // data; the move to the next row after a row; the note on; the stop; and the settings that go to the mixer.
+    // Mix()'s work on a channel at volume 0, and on a channel that plays.
+    static void SkipSilent(MixChannel& m, uint32_t amount);
+    static void MixPlaying(MixChannel& m, uint32_t todo);
+
+    // The player. Timer() runs a tick: a row or the effects between rows, and then the envelopes. FindRow() finds the
+    // row's data, NextRow() moves to the next row after a row, and PlayRow() plays a row's notes and effects.
     void Timer();
     void FindRow();
     void NextRow();
     void PlayRow();
+
+    // The end of a row's data. The channels that the row leaves out lose their effects, and a note that an effect
+    // changed goes back to its pitch, volume and pan when the effect changes.
+    void EndRow();
+
+    // A row's note off. A note whose volume envelope runs fades out. Any other stops.
+    void NoteOff(Channel& c);
+
+    // Starts the envelopes of the channel's instrument again, for a new note.
+    void RestartEnvelopes(Channel& c);
+
     void PlayTickBetweenRows();
+
+    // The instruments' envelopes and vibratos run at the end of each tick in a module with instruments.
+    // RunVolumeEnvelope() runs the volume envelope and the fade after the release. RunPanEnvelope() runs the pan
+    // envelope. Each returns false if it stops the note.
+    //
+    // The game's routine has the same steps twice, once for each envelope. The player keeps both copies. They differ in
+    // three places:
+    // - The pan envelope's target is the next point's tick. The volume envelope's target is a tick later.
+    // - After a loop, the pan envelope's tick is one past the loop point's tick. The volume envelope's tick is on it.
+    // - Only the volume envelope stops its note at an end of level 0.
     void RunEnvelopes();
+    bool RunVolumeEnvelope(Channel& c);
+    bool RunPanEnvelope(Channel& c);
+    void RunInstrumentVibrato(Channel& c);
+
+    // The note on, krapStop(), and the settings that go to the mixer. SetChannelVolume() and SetChannelPan() pass on
+    // the result of SetVol() and SetPan(): false for a handle that's no longer its channel's.
     void PlayNote(Channel& c);
-    void Stop();
+    void StopModule();
     void SetGlobalVolume();
-    void SetChannelVolume(Channel& c);
-    void SetChannelPan(Channel& c);
+    bool SetChannelVolume(Channel& c);
+    bool SetChannelPan(Channel& c);
     void SetChannelFreq(Channel& c);
     void StopChannel(Channel& c);
 
@@ -302,14 +363,27 @@ private:
 
     // The effects: the ones of the effect column, by number, which run on the row's tick and on the ticks between, and
     // those of the volume column.
-    void Effect(Channel& c, int effect, bool on_row, bool second);
+    void Effect(Channel& c, int effect, bool on_row);
     void VolumeColumnEffect(Channel& c, bool on_row);
     void VolumeSlideS3m(Channel& c, bool on_row);
     void VolumeSlideXm(Channel& c, bool on_row);
+
+    // Slides the channel's volume between rows: down by the low nibble of its slide, or else up by the high one.
+    void SlideVolume(Channel& c);
+
     void PortaS3m(Channel& c, bool on_row, bool up);
+
+    // RaisePeriod() and LowerPeriod() move the channel's period by `by` and set its frequency. A period that falls to 0
+    // or below stops the note instead.
+    void RaisePeriod(Channel& c, int by);
+    void LowerPeriod(Channel& c, int by);
+
     void PortaNote(Channel& c, bool on_row);
     void Vibrato(Channel& c, bool on_row);
     void VibratoTick(Channel& c);
+    void Tremor(Channel& c, bool on_row);
+    void Tremolo(Channel& c, bool on_row);
+    void Panbrello(Channel& c, bool on_row);
     void PanSlide(Channel& c, bool on_row);
     void Retrig(Channel& c, bool on_row);
     void Arpeggio(Channel& c, bool on_row);

@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <limits>
 #include <map>
+#include <utility>
 
 namespace agbsf2
 {
@@ -197,34 +198,100 @@ double Median(std::vector<double> values)
     return values[values.size() / 2];
 }
 
+// The notes of the channel that agrees most with the others in a part with a steady beat of `unit` frames, by their
+// frames: which of them fall on the beat, and where the beat starts again after notes that leave it.
+class SteadyNotes
+{
+public:
+    SteadyNotes(std::vector<uint32_t> frames, double unit, double eighth_triplet)
+        : frames_(std::move(frames)), unit_(unit), eighth_triplet_(eighth_triplet)
+    {
+    }
+
+    size_t Count() const
+    {
+        return frames_.size();
+    }
+
+    uint32_t Frame(size_t i) const
+    {
+        return frames_[i];
+    }
+
+    // Returns true if a note `frames` from the start of the beat is on a unit, or on an 8th-note triplet.
+    bool OnBeat(double frames) const
+    {
+        return Whole(frames, unit_, UnitTolerance(unit_)) ||
+               (eighth_triplet_ >= unit_ && Whole(frames, eighth_triplet_, ThirdTolerance(eighth_triplet_)));
+    }
+
+    // Returns how many of the `count` notes from `first` fall on the beat that starts at frame `start`.
+    size_t Settled(size_t first, double start, size_t count) const
+    {
+        size_t fitting = 0;
+        for (size_t j = first; j < frames_.size() && j < first + count; j++)
+        {
+            fitting += OnBeat(frames_[j] - start) ? 1 : 0;
+        }
+
+        return fitting;
+    }
+
+    // Returns the total distance, in frames, of the notes from `first` to the nearest whole units measured from
+    // `start`.
+    double Misfit(size_t first, double start) const
+    {
+        double distance = 0;
+        for (size_t j = first; j < frames_.size() && j < first + kSettleNotes; j++)
+        {
+            const double units = (frames_[j] - start) / unit_;
+            distance += std::fabs(units - std::round(units)) * unit_;
+        }
+
+        return distance;
+    }
+
+    // Returns the note from which the notes after note `i`, which leaves the beat, settle on a beat again, or the note
+    // count if they never do. After a ritardando, notes may also fit a fine grid starting at one of its last notes. Of
+    // the next few notes from which the following notes settle on the beat, the one that they fit best is chosen.
+    size_t Resettle(size_t i) const
+    {
+        size_t again = i;
+        while (again < frames_.size() && Settled(again + 1, frames_[again], kSettleNotes) < kSettleNotes)
+        {
+            again++;
+        }
+        if (again == frames_.size())
+        {
+            return again;
+        }
+
+        double closest = Misfit(again + 1, frames_[again]);
+        for (size_t j = again + 1; j < frames_.size() && j <= again + kSettleNotes; j++)
+        {
+            const double distance = Misfit(j + 1, frames_[j]);
+            if (Settled(j + 1, frames_[j], kSettleNotes) == kSettleNotes && distance < closest)
+            {
+                closest = distance;
+                again = j;
+            }
+        }
+
+        return again;
+    }
+
+private:
+    std::vector<uint32_t> frames_;
+    double unit_;
+    double eighth_triplet_;
+};
+
 } // namespace
 
-BeatGrid::BeatGrid(const std::vector<std::vector<uint32_t>>& channels, std::vector<uint32_t> hints)
-    : anchors_(channels.size()), frames_(channels)
+std::vector<uint32_t> BeatGrid::Bounds(std::vector<uint32_t> hints, uint32_t start, uint32_t end)
 {
-    // Each channel's events with their ornaments, and the song's first and last event.
-    std::vector<std::vector<Group>> groups;
-    uint32_t start = std::numeric_limits<uint32_t>::max();
-    uint32_t end = 0;
-    for (std::vector<uint32_t>& frames : frames_)
-    {
-        std::sort(frames.begin(), frames.end());
-        groups.push_back(Groups(frames));
-        if (!frames.empty())
-        {
-            start = std::min(start, frames.front());
-            end = std::max(end, frames.back());
-        }
-    }
-
-    if (start >= end)
-    {
-        stretches_.push_back({start > end ? 0 : double(start), 0, kTypicalQuarter, 1, 1, false});
-        return;
-    }
-
-    // The parts of the song between the changes of tempo that the hints show. Hints close together are one change, on
-    // the frame that most of them give, which is the beat's, where one channel may be ahead of it or behind it.
+    // Hints close together are one change, on the frame that most of them give, which is the beat's, where one channel
+    // may be ahead of it or behind it.
     std::sort(hints.begin(), hints.end());
     std::vector<uint32_t> bounds = {start};
     for (size_t i = 0; i < hints.size();)
@@ -251,7 +318,12 @@ BeatGrid::BeatGrid(const std::vector<std::vector<uint32_t>>& channels, std::vect
     }
     bounds.push_back(end);
 
-    // Each part's beat, if it's steady. Parts in a row with the same beat are one.
+    return bounds;
+}
+
+std::vector<BeatGrid::Part> BeatGrid::Parts(const std::vector<std::vector<Group>>& groups,
+                                            const std::vector<uint32_t>& bounds)
+{
     std::vector<Part> parts;
     for (size_t i = 0; i + 1 < bounds.size(); i++)
     {
@@ -286,6 +358,34 @@ BeatGrid::BeatGrid(const std::vector<std::vector<uint32_t>>& channels, std::vect
         parts.push_back(part);
     }
 
+    return parts;
+}
+
+BeatGrid::BeatGrid(const std::vector<std::vector<uint32_t>>& channels, std::vector<uint32_t> hints)
+    : anchors_(channels.size()), frames_(channels)
+{
+    // Each channel's events with their ornaments, and the song's first and last event.
+    std::vector<std::vector<Group>> groups;
+    uint32_t start = std::numeric_limits<uint32_t>::max();
+    uint32_t end = 0;
+    for (std::vector<uint32_t>& frames : frames_)
+    {
+        std::sort(frames.begin(), frames.end());
+        groups.push_back(Groups(frames));
+        if (!frames.empty())
+        {
+            start = std::min(start, frames.front());
+            end = std::max(end, frames.back());
+        }
+    }
+
+    if (start >= end)
+    {
+        stretches_.push_back({start > end ? 0 : double(start), 0, kTypicalQuarter, 1, 1, false});
+        return;
+    }
+
+    const std::vector<Part> parts = Parts(groups, Bounds(std::move(hints), start, end));
     for (size_t i = 0; i < parts.size(); i++)
     {
         AddPart(groups, parts[i], i + 1 == parts.size());
@@ -459,114 +559,52 @@ double BeatGrid::PerQuarter(double unit, double quarter)
 
 void BeatGrid::AddPart(const std::vector<std::vector<Group>>& groups, const Part& part, bool last)
 {
-    const double from = part.from;
-    const double to = part.to;
     if (!part.steady)
     {
-        // A tempo that changes gradually follows the notes, for a whole number of their units if a part comes after, so
-        // that its beat starts on the song's grid. Otherwise the part keeps the tempo before it, without a beat to move
-        // its events onto.
-        const double start = quarter_;
-        if (FollowNotes(groups, part.from, part.to, kFewestEvents, true))
-        {
-            if (!last)
-            {
-                WholeUnits(start, stretches_.back().per_quarter);
-            }
-            return;
-        }
-
-        const double unit = LastQuarter();
-        const double units = std::max(1.0, std::round((to - from) / unit));
-        Push(from, last ? unit : (to - from) / units, 1, units, false);
+        AddChangingPart(groups, part, last);
         return;
     }
 
     // A steady beat. Where the notes of the channel that agrees most with the others leave its units, and settle on
     // them again later, as around a ritardando, the notes in between set the tempo one by one. Finer places, such as
     // triplets', are for moving notes onto the beat, since so many of them would hide such a change.
+    const double from = part.from;
+    const double to = part.to;
     const double unit = FitBeat(groups, part, part.unit);
     const double per_quarter = PerQuarterFor(unit);
-    const double eighth_triplet = unit * per_quarter / 3;
     beats_.emplace_back(unit, per_quarter);
-
-    // Returns true if a note `frames` from the start of the beat is on a unit, or on an 8th-note triplet.
-    const auto steady = [&](double frames)
+    std::vector<uint32_t> frames;
+    for (const Group& g : ReferenceNotes(groups, part.from, part.to))
     {
-        return Whole(frames, unit, UnitTolerance(unit)) ||
-               (eighth_triplet >= unit && Whole(frames, eighth_triplet, ThirdTolerance(eighth_triplet)));
-    };
-
-    // The notes of the channel that best matches the others, and how many of the `count` of them from `first` fall on
-    // the beat that starts at frame `start`.
-    const std::vector<Group> notes = ReferenceNotes(groups, part.from, part.to);
-    const auto settled = [&](size_t first, double start, size_t count)
-    {
-        size_t fitting = 0;
-        for (size_t j = first; j < notes.size() && j < first + count; j++)
-        {
-            fitting += steady(notes[j].frame - start) ? 1 : 0;
-        }
-
-        return fitting;
-    };
-
-    // Returns the total distance, in frames, of the notes from `first` to the nearest whole units measured from
-    // `start`.
-    const auto misfit = [&](size_t first, double start)
-    {
-        double distance = 0;
-        for (size_t j = first; j < notes.size() && j < first + kSettleNotes; j++)
-        {
-            const double units = (notes[j].frame - start) / unit;
-            distance += std::fabs(units - std::round(units)) * unit;
-        }
-
-        return distance;
-    };
+        frames.push_back(g.frame);
+    }
+    const SteadyNotes notes(std::move(frames), unit, unit * per_quarter / 3);
 
     double origin = from;  // where the steady beat starts
     double on_beat = from; // the last of the notes on it
-    for (size_t i = 0; i < notes.size(); i++)
+    for (size_t i = 0; i < notes.Count(); i++)
     {
-        const double frame = notes[i].frame;
-        if (frame <= origin || steady(frame - origin))
+        const double frame = notes.Frame(i);
+        if (frame <= origin || notes.OnBeat(frame - origin))
         {
             on_beat = std::max(on_beat, frame);
             continue;
         }
 
         // A note off the beat matters only if most of the notes after it are off it too, and they settle on a beat.
-        if (settled(i + 1, origin, kDelayCheck) * 3 >= 2 * std::min(kDelayCheck, notes.size() - i - 1))
+        if (notes.Settled(i + 1, origin, kDelayCheck) * 3 >= 2 * std::min(kDelayCheck, notes.Count() - i - 1))
         {
             continue;
         }
 
-        size_t again = i;
-        while (again < notes.size() && settled(again + 1, notes[again].frame, kSettleNotes) < kSettleNotes)
-        {
-            again++;
-        }
-        if (again == notes.size())
+        const size_t again = notes.Resettle(i);
+        if (again == notes.Count())
         {
             break;
         }
 
-        // After a ritardando, notes may also fit a fine grid starting at one of its last notes. Of the next few notes
-        // from which the following notes settle on the beat, choose the one that they fit best.
-        double closest = misfit(again + 1, notes[again].frame);
-        for (size_t j = again + 1; j < notes.size() && j <= again + kSettleNotes; j++)
-        {
-            const double distance = misfit(j + 1, notes[j].frame);
-            if (settled(j + 1, notes[j].frame, kSettleNotes) == kSettleNotes && distance < closest)
-            {
-                closest = distance;
-                again = j;
-            }
-        }
-
-        AddBeat(groups, origin, on_beat, notes[again].frame, unit, per_quarter);
-        origin = on_beat = notes[again].frame;
+        AddBeat(groups, origin, on_beat, notes.Frame(again), unit, per_quarter);
+        origin = on_beat = notes.Frame(again);
         i = again;
     }
 
@@ -581,6 +619,28 @@ void BeatGrid::AddPart(const std::vector<std::vector<Group>>& groups, const Part
     }
 
     AddBeat(groups, origin, on_beat, to, unit, per_quarter);
+}
+
+void BeatGrid::AddChangingPart(const std::vector<std::vector<Group>>& groups, const Part& part, bool last)
+{
+    // A tempo that changes gradually follows the notes, for a whole number of their units if a part comes after, so
+    // that its beat starts on the song's grid. Otherwise the part keeps the tempo before it, without a beat to move its
+    // events onto.
+    const double from = part.from;
+    const double to = part.to;
+    const double start = quarter_;
+    if (FollowNotes(groups, part.from, part.to, kFewestEvents, true))
+    {
+        if (!last)
+        {
+            WholeUnits(start, stretches_.back().per_quarter);
+        }
+        return;
+    }
+
+    const double unit = LastQuarter();
+    const double units = std::max(1.0, std::round((to - from) / unit));
+    Push(from, last ? unit : (to - from) / units, 1, units, false);
 }
 
 void BeatGrid::AddBeat(const std::vector<std::vector<Group>>& groups, double from, double on_beat, double to,

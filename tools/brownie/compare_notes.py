@@ -47,11 +47,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for conversion.py and gbarom.py, in tools/
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for conversion.py, gbarom.py and traces.py, in tools/
 import conversion
 import driver_emu
-from compare_trace import parse_range
 from gbarom import ROM_BASE, load_rom
+from traces import parse_range
 
 FRAME_RATE = 16777216 / 280896
 FIRST_BEAT = 1  # the frame the MIDI file starts on

@@ -35,7 +35,7 @@ INIT_PATTERN = [0xB530, None, 0x6008, None, 0x2000, 0x7008, 0x2080, 0x7008, 0x39
 
 # The start of the routine that works out a sample voice's level in the Super Mario Advance 2 revision, whose tempo
 # command takes a byte and which has no player volume (EA).
-MARIO_PATTERN = [0xB530, 0x1C05, 0x7868, 0x2801, None, 0x7A6C, 0x0224]
+SMA2_PATTERN = [0xB530, 0x1C05, 0x7868, 0x2801, None, 0x7A6C, 0x0224]
 
 
 def u32(rom, address):
@@ -72,11 +72,11 @@ def find_settings(rom):
 class Track:
     """A track's commands, with labels for the addresses that F0, F4 and F8 go to."""
 
-    def __init__(self, mario):
+    def __init__(self, sma2):
         self.data = bytearray()
         self.labels = {}
         self.fixups = []  # (position, label): a halfword to fill in with a label's offset in the sequence
-        self.mario = mario  # the Super Mario Advance 2 revision, whose tempo is a byte and which has no player volume
+        self.sma2 = sma2  # the Super Mario Advance 2 revision, whose tempo is a byte and which has no player volume
 
     def raw(self, *values):
         self.data += bytes(values)
@@ -103,12 +103,12 @@ class Track:
         return self
 
     def tempo(self, tempo):
-        self.data += bytes([0xE4]) + (bytes([tempo]) if self.mario else self.length(tempo))
+        self.data += bytes([0xE4]) + (bytes([tempo]) if self.sma2 else self.length(tempo))
         return self
 
     def volume(self, volume):
         """The player's volume, which the Super Mario Advance 2 revision doesn't have."""
-        return self if self.mario else self.raw(0xEA, volume)
+        return self if self.sma2 else self.raw(0xEA, volume)
 
     def go(self, op, label, *before):
         self.raw(op, *before)
@@ -181,8 +181,8 @@ def build_bank():
     return bank.data
 
 
-def build_tracks(mario):
-    tracks = [Track(mario) for _ in range(10)]
+def build_tracks(sma2):
+    tracks = [Track(sma2) for _ in range(10)]
 
     # 0: tempo and the player's volume, and F8, which starts track 9 with this track's settings.
     t = tracks[0]
@@ -256,9 +256,9 @@ def build_tracks(mario):
     return tracks
 
 
-def build_sequence(mario):
+def build_sequence(sma2):
     """Returns the sequence's bytes: the header, then each track."""
-    tracks = build_tracks(mario)
+    tracks = build_tracks(sma2)
     data = bytearray(struct.pack('<bB', len(tracks), 0) + b'\0\0' * len(tracks))
     starts = []
     for t in tracks:
@@ -297,7 +297,7 @@ def main():
     struct.pack_into('<H', rom, list_at - ROM_BASE, 1)
     sequence_at = sequences + u32(rom, sequences)
     room = sequences + u32(rom, sequences + 4) - sequence_at
-    sequence = build_sequence(find(rom, MARIO_PATTERN) is not None)
+    sequence = build_sequence(find(rom, SMA2_PATTERN) is not None)
     if len(sequence) > room:
         raise SystemExit('the test sequence needs %d bytes, and sequence 0 has %d' % (len(sequence), room))
     rom[sequence_at - ROM_BASE:sequence_at - ROM_BASE + len(sequence)] = sequence

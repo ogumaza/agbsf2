@@ -10,19 +10,15 @@
 #include <string>
 #include <vector>
 
+#include "gba.h"
 #include "rom.h"
 #include "ubimilan/driver.h"
 
 namespace agbsf2::ubimilan
 {
 
-// A write to one of the sound registers.
-struct RegisterWrite
-{
-    uint32_t address = 0;
-    uint8_t size = 2;
-    uint32_t value = 0;
-};
+// The longest that a song plays: an hour. The model stops there, and so does a conversion.
+constexpr uint32_t kMaxFrames = 60 * 60 * 60;
 
 // A note as the driver plays it.
 struct Note
@@ -36,8 +32,8 @@ struct Note
     bool ended = false;   // false while it still sounds
     uint32_t sample = 0;  // a kit note's sample resource
     uint8_t duty = 0;     // a square note's NRx1, whose top 2 bits are the duty
-    uint8_t envelope = 0; // a PSG note's NRx2: its starting volume, its envelope's direction and its step
-    uint16_t control = 0; // a noise note's NR43, or a wave note's program
+    uint8_t envelope = 0; // the volume: a square's or the noise's NRx2, with its envelope, or the wave's NR32
+    uint8_t control = 0;  // a noise note's NR43
 };
 
 // The driver playing one piece of music, frame by frame.
@@ -73,10 +69,16 @@ public:
         return notes_;
     }
 
-    // Returns the frames on which each sequence of the piece started, in order, the first on frame 0.
-    const std::vector<uint32_t>& SegmentStarts() const
+    // Returns the piece of music that the sequencer read when it started the song.
+    const MusicPiece& Piece() const
     {
-        return segment_starts_;
+        return piece_;
+    }
+
+    // Returns the frames on which each sequence of the piece started, in order, the first on frame 0.
+    const std::vector<uint32_t>& SequenceStarts() const
+    {
+        return sequence_starts_;
     }
 
     // Returns the problems found in the song's data.
@@ -118,26 +120,28 @@ private:
     struct PsgChannel
     {
         int program = 0;
-        int key = 0;     // the key's place in the frequency table that its last note set
-        bool on = false; // the driver's flag that a note plays
-        int note = -1;   // the note that sounds, or -1
+        int index = 0; // the place in the frequency table of its last note's key
+        int note = -1; // the note that sounds, or -1
     };
 
     void SequencerStep();
     void SoundUpdate();
     void MixerRun();
-    void Event(int status);
+    void RunCommand(int status);
     void NoteOn(int channel, int key, int velocity);
     void NoteOff(int channel, int key);
     void KitNoteOn(int key, int velocity);
     void KitNoteOff();
+    void NoiseNoteOn(int key, int velocity);
+    void NoiseNoteOff(int key);
     void PsgNoteOn(int channel, int key, int velocity);
     void PsgNoteOff(int channel, int key);
     void Program(int channel, int program);
+    Note NewNote(int channel, int key, int velocity, int program) const;
     void EndNote(int index, uint32_t frame);
     void Stop(const std::string& why);
     void Warn(const std::string& message);
-    uint32_t NextSegment(int ahead) const;
+    uint32_t NextSequence(int ahead) const;
     void Write(uint32_t address, uint8_t size, uint32_t value);
 
     const Rom& rom_;
@@ -150,12 +154,16 @@ private:
     // The track.
     uint32_t wait_ = 0;
     uint32_t pointer_ = 0;
-    uint32_t next_ = 0; // the next sequence's countdown and commands, or 0
+    // The next sequence's countdown and commands, or 0. From an end command to the sound update, it holds the address
+    // of the resource that the game's callback gave the track.
+    uint32_t next_ = 0;
     bool active_ = false;
-    bool playing_ = false; // the piece plays: the game's flag, which its callback clears once the track stops
-    bool ending_ = false;  // an end command was read
-    bool changed_ = false; // a sequence ended, which the game's sound update notes
-    int index_ = 0;        // the sequence of the piece that plays
+    // The game's flag that the piece plays. The game's callback clears it once the track stops.
+    bool piece_playing_ = false;
+    bool ending_ = false; // an end command was read
+    // A sequence ended. The game's sound update notes it.
+    bool changed_ = false;
+    int index_ = 0; // the sequence of the piece that plays
 
     // The kit, its voices and the PSG.
     int kit_program_ = 0;
@@ -165,7 +173,7 @@ private:
     std::array<PsgChannel, kPsgChannels> psg_ = {};
 
     std::vector<Note> notes_;
-    std::vector<uint32_t> segment_starts_;
+    std::vector<uint32_t> sequence_starts_;
     std::vector<RegisterWrite> writes_;
     std::vector<std::string> warnings_;
 };

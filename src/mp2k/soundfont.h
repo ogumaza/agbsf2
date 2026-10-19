@@ -15,21 +15,13 @@
 #include "mp2k/song.h"
 #include "rom.h"
 #include "sf2.h"
+#include "song_banks.h"
 
 namespace agbsf2::mp2k
 {
 
-// A SoundFont volume envelope: times in timecents and the sustain level in centibels of attenuation.
-struct Sf2Envelope
-{
-    int attack = -12000;
-    int decay = -12000;
-    int sustain = 0;
-    int release = -12000;
-};
-
 // Returns the SoundFont envelope that comes closest to a voice's envelope in the driver.
-Sf2Envelope EnvelopeFor(const DriverInfo& info, const Voice& voice);
+VolumeEnvelope EnvelopeFor(const DriverInfo& info, const Voice& voice);
 
 // The synth voices of Camelot's mixer, which plays a sample of no length as a wave it makes from the sample's data.
 enum class Synth
@@ -48,13 +40,6 @@ Synth SynthOf(const Rom& rom, const DriverInfo& info, const Voice& voice);
 // equals, times 256.
 std::vector<int16_t> RenderSynth(const Rom& rom, const DriverInfo& info, Synth synth, uint32_t data, uint32_t frequency,
                                  uint32_t count);
-
-// A preset's bank and program.
-struct PresetSlot
-{
-    int bank = 0;
-    int program = 0;
-};
 
 // Builds SoundFont samples and instruments from the ROM, reusing any already built. The converter adds the presets.
 class SoundfontBuilder
@@ -82,7 +67,7 @@ public:
     // songs play as the same program: the first gets bank 0, the next bank 1, and so on up to 127. Once a program is
     // taken in every bank, its other instruments get the first free program of the lowest bank that has one. Returns a
     // bank of -1 if there's none.
-    PresetSlot SharedPreset(int program, int instrument);
+    BankProgram SharedPreset(int program, int instrument);
 
 private:
     // Returns the index of the SoundFont sample for a voice's sound, or -1 if it has none or makes one for each key.
@@ -113,7 +98,7 @@ private:
     std::map<std::pair<int, uint32_t>, int> samples_;       // by kind and source
     std::map<std::pair<uint32_t, int>, int> synth_samples_; // a pulse or saw synth voice's, by sample and key
     std::set<std::pair<int, int>> synth_keys_;              // the instruments' zones for a key of a synth voice
-    std::map<std::pair<int, int>, PresetSlot> slots_;       // SharedPreset()'s presets, by program and instrument
+    std::map<std::pair<int, int>, BankProgram> slots_;      // SharedPreset()'s presets, by program and instrument
 };
 
 } // namespace agbsf2::mp2k

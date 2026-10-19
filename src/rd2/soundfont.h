@@ -29,21 +29,30 @@ constexpr double PsgShare(Revision revision)
 // A voice's envelope in a SoundFont's terms: times in timecents and levels in centibels below the full level.
 struct Sf2Envelope
 {
-    int attack = -12000;
-    int hold = -12000;
-    int decay = -12000;
+    int attack = kInstant;
+    int hold = kInstant;
+    int decay = kInstant;
     int sustain = 0;
-    int release = -12000;
+    int release = kInstant;
     int attenuation = 0; // the envelope's peak, below the full level
 };
 
-// Returns the SoundFont envelope closest to the driver's envelope at `address`, with the release of a region's release
-// value. `psg` selects a square or noise voice's release, which the PSG's envelope plays.
-Sf2Envelope EnvelopeFor(const Rom& rom, uint32_t address, uint8_t release, bool psg);
+// Returns the SoundFont envelope closest to the driver's envelope at `address`, with `release` in timecents. A silent
+// envelope gets no release.
+Sf2Envelope EnvelopeFor(const Rom& rom, uint32_t address, int release);
 
-// Returns the SoundFont envelope of a wave voice. The wave voice leaves its region's envelope out, and its level holds
-// until the release. The release of a region's release value fades it as a sample voice's release does.
-Sf2Envelope WaveEnvelope(uint8_t release);
+// Returns the SoundFont envelope of a wave voice, with `release` in timecents. The wave voice leaves its region's
+// envelope out, and its level holds until the release.
+Sf2Envelope WaveEnvelope(int release);
+
+// Returns the SoundFont release of a sample or wave voice for a region's release value. The release takes a share of
+// the voice's level off each frame.
+int SampleRelease(uint8_t release);
+
+// Returns the SoundFont release of a square or noise voice for a region's release value. The release is the PSG's
+// envelope. It steps the volume down from 15 at most every 1/64 s for each step of the value's top 3 bits, or silences
+// the channel at once.
+int PsgRelease(uint8_t release);
 
 // Adds an envelope's generators to a zone, before its last generator (the sample).
 void AddEnvelope(sf2::Zone& zone, const Sf2Envelope& envelope);

@@ -141,8 +141,8 @@ also makes `build/Agbsf2.app`. You can drop files on the app.
 
 `ctest` runs the unit tests. On macOS, `ctest` also checks the report that
 `Agbsf2.app` puts together from the program's output. CI builds
-agbsf2 and runs the tests on macOS on Apple Silicon and on Windows x64
-with clang-cl.
+agbsf2 on macOS on Apple Silicon and on Windows x64 with clang-cl. Only the
+Windows build runs the tests in CI.
 
 ## Usage
 
@@ -383,7 +383,13 @@ tune's commands:
   pressure or the modulator plays every note. Where the mixer takes one note of
   a key and leaves out another on the same channel, the MIDI file plays both.
   In *Donkey Kong Country 3*, the mixer also leaves out the notes of a channel
-  at volume 0. Those notes don't count towards the limit.
+  at volume 0. Those notes don't count towards the limit. A file whose
+  SoundFont has the mute modulator starts with a key pressure of 0 for each key
+  that the file plays before giving the key a pressure. A player that keeps key
+  pressures from one file to the next would otherwise mute the keys that the
+  file before left muted. With `--single-sf2`, the shared SoundFont has the
+  modulator once any tune of the set has mutes. Every file of the set then
+  starts with those key pressures.
 * A note off releases only one note with that key on the channel. Since a
   MIDI channel can't play the same key twice at once, the conversion ends
   the older note when the newer one starts.
@@ -1058,6 +1064,17 @@ SoundFonts.
   note out, with a warning.
 * **Sound effects** aren't converted. The game plays them straight from its
   samples.
+
+### FluidSynth
+
+SoundFont output follows the specification and targets FluidSynth. One player
+difference affects every driver's conversions:
+
+* **Level.** FluidSynth runs the SoundFont low-pass filter on every note. That
+  includes notes whose filter is open. The filter divides the level by the
+  square root of its Q. FluidSynth converts the default resonance of 0 dB to a
+  Q of 0.707. Every note therefore plays 1.5 dB louder than the SoundFont
+  specifies. Multiplying FluidSynth's gain by 0.84 gives the specified level.
 
 ## Internals
 

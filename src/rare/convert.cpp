@@ -27,71 +27,19 @@ namespace
 // Maximum conversion duration: one hour, measured in frames.
 constexpr uint32_t kMaxFrames = 60 * 60 * 60;
 
-// The MIDI channel that General MIDI players keep for drums. They look for its programs in bank kDrumBank.
-constexpr int kDrumChannel = 9;
-
-// A semitone in the model's pitch offsets, which are 32.32 fixed point.
-constexpr int64_t kSemitone = int64_t(1) << 32;
-
 // Maximum number of commands DumpSong() lists per track.
 constexpr int kMaxListedCommands = 200000;
 
-std::string TwoDigits(int n)
+// Plans the conversion of a tune from its tracks (see PlanSong()).
+SongPlan PlanTune(const Rom& rom, const DriverInfo& info, const TuneHeader& header, int loops)
 {
-    char b[16];
-    std::snprintf(b, sizeof b, "%02d", n);
-
-    return b;
-}
-
-// The stretch of a tune that the conversion covers: its loop, and the tick at which the MIDI file ends.
-struct Plan
-{
-    bool loops = false;
-    uint64_t loop_start = 0; // the latest of the looping tracks' loop starts and the other tracks' last commands
-    uint64_t loop_end = 0;   // the loop start plus the length LoopLength() gives for the tracks' loops
-    uint64_t end = 0;
-};
-
-// Plans the conversion: looping tunes play `loops` passes; other tunes run until the last track ends. Tracks can have
-// different loop points and lengths. The overall loop starts once all looping tracks have entered their loops and all
-// other tracks have played their last command other than a delay or end. It ends when all looping tracks return to
-// their loop starts, subject to the length limit in LoopLength().
-Plan PlanTune(const Rom& rom, const DriverInfo& info, const TuneHeader& header, int loops)
-{
-    Plan plan;
-    uint64_t longest_end = 0;
-    uint64_t last_command = 0;
-    std::vector<uint64_t> lengths;
+    std::vector<TrackLayout> layouts;
     for (uint32_t address : header.tracks)
     {
-        const TrackLayout layout = ScanTrack(rom, address, info.format);
-        if (layout.loops && layout.loop_end > layout.loop_start)
-        {
-            plan.loops = true;
-            plan.loop_start = std::max(plan.loop_start, layout.loop_start);
-            lengths.push_back(layout.loop_end - layout.loop_start);
-        }
-        else if (!layout.loops)
-        {
-            longest_end = std::max(longest_end, layout.end);
-            last_command = std::max(last_command, layout.last_command);
-        }
+        layouts.push_back(ScanTrack(rom, address, info.format));
     }
 
-    if (plan.loops)
-    {
-        const uint64_t length = LoopLength(lengths);
-        plan.loop_start = std::max(plan.loop_start, last_command);
-        plan.loop_end = plan.loop_start + length;
-        plan.end = plan.loop_start + uint64_t(loops) * length;
-    }
-    else
-    {
-        plan.end = longest_end;
-    }
-
-    return plan;
+    return PlanSong(layouts, loops, false);
 }
 
 // A clock that converts frame start times to ticks, following the tempo.
@@ -247,22 +195,116 @@ uint64_t PlayingFrame(const std::vector<Action>& actions, uint32_t per_quarter, 
     return starts[size_t(std::min<uint64_t>(frame, starts.size() - 1))];
 }
 
+// Follows which keys the mixer leaves out, frame by frame. A key is muted from a frame in which the mixer leaves out
+// every voice that plays it, at the voice limit or at a level of 0. The key plays again from a frame in which the mixer
+// takes any of them. A frame without voices of the key changes nothing.
+class MuteTracker
+{
+public:
+    // Adds the mute changes of `frame` to `changes`, at `tick`. `seq` has just run the frame. The keys come in the
+    // order of the slots that first play them in the frame.
+    void Update(const Sequencer& seq, uint32_t frame, uint64_t tick, std::vector<MuteChange>& changes);
+
+private:
+    // The keys of every channel, as channel * 128 + key.
+    static constexpr size_t kKeys = kChannels * 128;
+
+    std::vector<bool> muted_ = std::vector<bool>(kKeys, false);
+
+    // In the current frame, -1 for a key without voices, 0 where the mixer leaves out every voice that plays the key,
+    // and 1 where the mixer takes any of them.
+    std::vector<int8_t> heard_ = std::vector<int8_t>(kKeys, -1);
+
+    std::vector<int> keys_; // the keys that the frame's voices play, in slot order
+};
+
+void MuteTracker::Update(const Sequencer& seq, uint32_t frame, uint64_t tick, std::vector<MuteChange>& changes)
+{
+    for (int i = 0; i < seq.SlotCount(); i++)
+    {
+        const Slot& s = seq.GetSlot(i);
+        if (s.mix == MixResult::kIdle)
+        {
+            continue;
+        }
+
+        const int key = s.channel * 128 + (s.key & 0x7F);
+        if (heard_[size_t(key)] < 0)
+        {
+            keys_.push_back(key);
+        }
+        heard_[size_t(key)] = std::max<int8_t>(heard_[size_t(key)], s.mix == MixResult::kMixed ? 1 : 0);
+    }
+
+    for (int key : keys_)
+    {
+        const bool mute = heard_[size_t(key)] == 0;
+        if (mute != muted_[size_t(key)])
+        {
+            muted_[size_t(key)] = mute;
+            changes.push_back({tick, key / 128, key % 128, mute, frame});
+        }
+        heard_[size_t(key)] = -1;
+    }
+    keys_.clear();
+}
+
+// Moves each action but a tempo change, and each pitch and mute change, to the start of the frame that the driver plays
+// it in. `frames` is the number of frames that the model ran, with `slot_count` note slots. Also leaves out the note
+// ons at or after the end.
+void PutOnFrames(Simulation& sim, const SongPlan& plan, uint32_t per_quarter, uint32_t frames, int slot_count)
+{
+    // The notes at or after the end start the loop's next pass. They can come in the frame that plays the end, a frame
+    // that starts before the end. Like the default timing, frame timing leaves them out. It also leaves out the
+    // envelope settings that their phases take. The conversion would otherwise give those settings to the note before
+    // them in their slot.
+    const uint64_t end = sim.cut_off ? std::min(plan.end, *sim.cut_off) : plan.end;
+    std::vector<bool> slot_past_end(size_t(slot_count), false);
+    std::vector<Action> kept;
+    for (const Action& a : sim.actions)
+    {
+        if (a.kind == Action::kNoteOn)
+        {
+            slot_past_end[size_t(a.slot)] = a.tick >= end;
+        }
+
+        const bool note_past_end = (a.kind == Action::kNoteOn || a.kind == Action::kNoteDropped) && a.tick >= end;
+        if (!note_past_end && !(a.kind == Action::kEnvelope && slot_past_end[size_t(a.slot)]))
+        {
+            kept.push_back(a);
+        }
+    }
+    sim.actions = std::move(kept);
+
+    sim.frame_starts = FrameStarts(sim.actions, per_quarter, frames);
+    for (Action& a : sim.actions)
+    {
+        if (a.kind != Action::kTempo)
+        {
+            a.tick = sim.frame_starts[std::min(a.frame, frames)];
+        }
+    }
+    for (PitchChange& p : sim.pitches)
+    {
+        p.tick = sim.frame_starts[std::min(p.frame, frames)];
+    }
+    for (MuteChange& m : sim.mutes)
+    {
+        m.tick = sim.frame_starts[std::min(m.frame, frames)];
+    }
+}
+
 // Runs the model until the plan's end or until the driver has stopped the tune, for an hour at most. With
 // `frame_timing`, each action but a tempo change, and each pitch and mute change, goes at the start of the frame the
 // driver plays it in. Frame timing also leaves out the note ons at or after the end.
-Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, const TuneHeader& header, const Plan& plan,
+Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, const TuneHeader& header, const SongPlan& plan,
                     bool frame_timing)
 {
     Simulation sim;
     Sequencer seq(rom, info, song);
     TickClock clock(header.ticks_per_quarter);
     std::array<int64_t, kChannels> last = {};
-
-    // For each key on each channel (channel * 128 + key): whether it's muted, and in the current frame, -1 without
-    // voices, 0 if the mixer leaves out every voice that plays it and 1 if it takes any of them.
-    std::vector<bool> muted(kChannels * 128, false);
-    std::vector<int8_t> heard(kChannels * 128, -1);
-    std::vector<int> keys; // the keys that the frame's voices play, in slot order
+    MuteTracker mute_tracker;
     uint32_t frames = 0;
     bool finished = false; // the tune reached the plan's end, or the driver stopped it
     for (uint32_t f = 0; f < kMaxFrames; f++)
@@ -300,35 +342,7 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, const Tune
             sim.pitches.push_back({!vibrato && at >= 0 ? uint64_t(at) : frame_tick, ch, offset, f});
         }
 
-        // A key is muted from a frame in which the mixer leaves out every voice that plays it, at the voice limit or
-        // at a level of 0, and plays again from one in which the mixer takes any of them. A frame without voices of
-        // the key changes nothing.
-        for (int i = 0; i < seq.SlotCount(); i++)
-        {
-            const Slot& s = seq.GetSlot(i);
-            if (s.mix == MixResult::kIdle)
-            {
-                continue;
-            }
-
-            const int key = s.channel * 128 + (s.key & 0x7F);
-            if (heard[size_t(key)] < 0)
-            {
-                keys.push_back(key);
-            }
-            heard[size_t(key)] = std::max<int8_t>(heard[size_t(key)], s.mix == MixResult::kMixed ? 1 : 0);
-        }
-        for (int key : keys)
-        {
-            const bool mute = heard[size_t(key)] == 0;
-            if (mute != muted[size_t(key)])
-            {
-                muted[size_t(key)] = mute;
-                sim.mutes.push_back({frame_tick, key / 128, key % 128, mute, f});
-            }
-            heard[size_t(key)] = -1;
-        }
-        keys.clear();
+        mute_tracker.Update(seq, f, frame_tick, sim.mutes);
 
         // Stop once every track has read up to the end, and the frames have reached it. A track counts the ticks of a
         // delay as it starts it, so its count reaches the end before the frames do.
@@ -359,43 +373,7 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, const Tune
 
     if (frame_timing)
     {
-        // The notes at or after the end, which start the loop's next pass, can come in the frame that plays the end,
-        // whose start is before it. They aren't converted, as without frame timing, and neither are the envelope
-        // settings that their phases take, which would otherwise go to the note before them in their slot.
-        const uint64_t end = sim.cut_off ? std::min(plan.end, *sim.cut_off) : plan.end;
-        std::vector<bool> slot_past_end(size_t(seq.SlotCount()), false);
-        std::vector<Action> kept;
-        for (const Action& a : sim.actions)
-        {
-            if (a.kind == Action::kNoteOn)
-            {
-                slot_past_end[size_t(a.slot)] = a.tick >= end;
-            }
-
-            const bool note_past_end = (a.kind == Action::kNoteOn || a.kind == Action::kNoteDropped) && a.tick >= end;
-            if (!note_past_end && !(a.kind == Action::kEnvelope && slot_past_end[size_t(a.slot)]))
-            {
-                kept.push_back(a);
-            }
-        }
-        sim.actions = std::move(kept);
-
-        sim.frame_starts = FrameStarts(sim.actions, header.ticks_per_quarter, frames);
-        for (Action& a : sim.actions)
-        {
-            if (a.kind != Action::kTempo)
-            {
-                a.tick = sim.frame_starts[std::min(a.frame, frames)];
-            }
-        }
-        for (PitchChange& p : sim.pitches)
-        {
-            p.tick = sim.frame_starts[std::min(p.frame, frames)];
-        }
-        for (MuteChange& m : sim.mutes)
-        {
-            m.tick = sim.frame_starts[std::min(m.frame, frames)];
-        }
+        PutOnFrames(sim, plan, header.ticks_per_quarter, frames, seq.SlotCount());
     }
 
     return sim;
@@ -421,186 +399,263 @@ struct Note
     bool before_programs = false; // it plays with the program from before its track's program changes on its tick
 };
 
-// Works out the MIDI file's notes from the model's note ons and offs. A MIDI channel can't play one key twice at once,
-// so where the driver's channel does, the older note ends when the newer one starts, unless they start on the same
-// frame. A note ends where the driver releases its slot, where a later note takes its slot, or at the end of the
-// conversion.
-std::vector<Note> CollectNotes(const Simulation& sim, const Plan& plan, uint16_t track_mask, int slot_count)
+// Works out the MIDI file's notes from the model's note ons and offs. A MIDI channel can't play one key twice at once.
+// Where the driver's channel does, the older note ends when the newer one starts, unless they start on the same frame.
+// A note ends where the driver releases its slot, where a later note takes its slot, or at the end of the conversion.
+class NoteCollector
 {
-    std::vector<Note> notes;
-    std::array<std::array<int, 128>, kChannels> owner;
-    for (auto& keys : owner)
+public:
+    // Collects the notes of the tracks in `track_mask` from `sim`. `slot_count` is the number of the model's note
+    // slots. `sim` and `plan` have to outlive the collector.
+    NoteCollector(const Simulation& sim, const SongPlan& plan, uint32_t track_mask, int slot_count);
+
+    // Returns the notes in the order of the model's note ons. Call it once.
+    std::vector<Note> Collect();
+
+private:
+    // Starts the MIDI note of a note on. A note on of a key that started a note on the same frame adds a voice to that
+    // note instead.
+    void NoteOn(const Action& a);
+
+    // Ends the note that a note off releases.
+    void NoteOff(const Action& a);
+
+    // Gives the note that a slot played last the settings that a phase of the slot's envelope took.
+    void TakeSettings(const Action& a);
+
+    // Returns the action that gives a note on its program: the note on itself for a note that the model plays. A note
+    // before its channel's first program change takes the change at its tick, if there's one. Returns null for any
+    // other note that the model doesn't play.
+    const Action* ProgramFor(const Action& a) const;
+
+    // Ends note `index` at `tick`, unless it has ended already.
+    void Close(int index, uint64_t tick);
+
+    // Ends a slot's voice, and the note when its last voice ends.
+    void Release(int slot, uint64_t tick, uint32_t frame);
+
+    const Simulation& sim_;
+    const SongPlan& plan_;
+    uint32_t track_mask_;
+    std::vector<Note> notes_;
+    std::array<std::array<int, 128>, kChannels> owner_;  // each key's playing note, or -1
+    std::array<std::array<int, 128>, kChannels> latest_; // each key's last note, ended or not, or -1
+    std::vector<int> slot_note_;                         // the note of each slot's voice, or -1
+    std::vector<int> slot_level_;                        // the velocity + 1 of each slot's voice
+
+    // The note that each slot played last, or -1. The release of the slot's voice is part of the note.
+    std::vector<int> slot_last_;
+
+    // The first program change on each channel at each tick.
+    std::map<std::pair<int, uint64_t>, const Action*> first_program_;
+};
+
+NoteCollector::NoteCollector(const Simulation& sim, const SongPlan& plan, uint32_t track_mask, int slot_count)
+    : sim_(sim),
+      plan_(plan),
+      track_mask_(track_mask),
+      slot_note_(size_t(slot_count), -1),
+      slot_level_(size_t(slot_count), 0),
+      slot_last_(size_t(slot_count), -1)
+{
+    for (auto& keys : owner_)
     {
         keys.fill(-1);
     }
-    std::array<std::array<int, 128>, kChannels> latest = owner; // each key's last note, which may have ended
-    std::vector<int> slot_note(size_t(slot_count), -1), slot_level(size_t(slot_count), 0);
-    std::vector<int> slot_last(size_t(slot_count), -1); // the note each slot played last, which its release is part of
+    latest_ = owner_;
 
     // A track can play a note just before it gives the channel its first program, at the same tick. The game plays the
-    // note with whatever instrument the channel had from the tune before, so the MIDI file gives it that program.
-    std::map<std::pair<int, uint64_t>, const Action*> first_program;
+    // note with whatever instrument the channel had from the tune before. The MIDI file gives the note the program that
+    // the channel gets at its tick.
     for (const Action& a : sim.actions)
     {
         if (a.kind == Action::kProgram)
         {
-            first_program.emplace(std::make_pair(int(a.channel), a.tick), &a);
+            first_program_.emplace(std::make_pair(int(a.channel), a.tick), &a);
         }
     }
+}
 
-    auto close = [&](int index, uint64_t tick)
-    {
-        // A note lasts at least a tick, so that its note off can't come before its note on.
-        Note& n = notes[size_t(index)];
-        if (n.open)
-        {
-            n.open = false;
-            n.off = std::max(tick, n.on + 1);
-            owner[size_t(n.channel)][size_t(n.key)] = -1;
-        }
-    };
-
-    // Ends a slot's voice, ending the MIDI note when its last voice ends. A voice that ends in the note's first frame
-    // sounds for at most two frames, so the note keeps the combined velocity of the remaining voices.
-    auto release = [&](int slot, uint64_t tick, uint32_t frame)
-    {
-        const int index = slot_note[size_t(slot)];
-        slot_note[size_t(slot)] = -1;
-        if (index < 0)
-        {
-            return;
-        }
-
-        Note& n = notes[size_t(index)];
-        if (--n.voices == 0)
-        {
-            close(index, tick);
-        }
-        else if (frame == n.frame)
-        {
-            n.level -= slot_level[size_t(slot)];
-            n.velocity = std::min(127, n.level - 1);
-        }
-    };
-
-    for (const Action& a : sim.actions)
+std::vector<Note> NoteCollector::Collect()
+{
+    for (const Action& a : sim_.actions)
     {
         if (a.kind == Action::kNoteOn)
         {
-            release(a.slot, a.tick, a.frame);
-            slot_last[size_t(a.slot)] = -1;
-
-            const Action* program = &a;
-            if (!a.playable && a.instrument == 0)
-            {
-                const auto found = first_program.find(std::make_pair(int(a.channel), a.tick));
-                program = found != first_program.end() ? found->second : nullptr;
-            }
-            if ((!a.playable && program == &a) || !program || !(track_mask >> a.track & 1) || a.tick >= plan.end)
-            {
-                continue;
-            }
-
-            // A key played twice on the same frame is one MIDI note, as loud as the two voices together, since the
-            // driver starts both on the frame.
-            int& held = owner[a.channel][a.a & 0x7F];
-            slot_level[size_t(a.slot)] = a.b + 1;
-            if (held >= 0 && notes[size_t(held)].frame == a.frame)
-            {
-                Note& n = notes[size_t(held)];
-                n.level += a.b + 1;
-                n.velocity = std::min(127, n.level - 1);
-                n.voices++;
-                slot_note[size_t(a.slot)] = held;
-                slot_last[size_t(a.slot)] = held;
-                continue;
-            }
-
-            // A player takes a tick's events track by track. So where the older note is in a later track, it ends a
-            // tick before the newer one starts, or else its note off would end the newer note too. If the older note
-            // started a tick before, the newer one starts a tick late instead.
-            uint64_t on = a.tick;
-            if (held >= 0 && notes[size_t(held)].track > a.track)
-            {
-                on = std::max(on, notes[size_t(held)].on + 2);
-                close(held, on - 1);
-            }
-            else if (held >= 0)
-            {
-                close(held, on);
-            }
-
-            // A note lasts at least a tick, even one that the driver releases in the frame it starts in, whose release
-            // frame timing puts on its start's tick. So where the key's last note ends after this one's start, this one
-            // starts as it ends, or a tick later if that note is in a later track, as above.
-            int& previous = latest[a.channel][a.a & 0x7F];
-            if (previous >= 0 && notes[size_t(previous)].off > on)
-            {
-                on = notes[size_t(previous)].off + (notes[size_t(previous)].track > a.track ? 1 : 0);
-            }
-
-            Note n;
-            n.track = a.track;
-            n.channel = a.channel;
-            n.key = a.a & 0x7F;
-            n.velocity = a.b;
-            n.level = a.b + 1;
-            n.program = program == &a ? a.program : program->a;
-            n.instrument = program->instrument;
-            n.on = on;
-            n.frame = a.frame;
-            notes.push_back(n);
-            held = int(notes.size()) - 1;
-            previous = held;
-            slot_note[size_t(a.slot)] = held;
-            slot_last[size_t(a.slot)] = held;
+            NoteOn(a);
         }
-        else if (a.kind == Action::kEnvelope && slot_last[size_t(a.slot)] >= 0)
+        else if (a.kind == Action::kEnvelope)
         {
-            // Each phase takes its own settings, which may not be those the channel had when the note started.
-            EnvelopeSettings& e = notes[size_t(slot_last[size_t(a.slot)])].envelope;
-            const EnvelopeSettings& took = a.envelope;
-            e.attack = took.attack < 0x80 ? took.attack : e.attack;
-            e.decay = took.decay < 0x80 ? took.decay : e.decay;
-            e.sustain = took.sustain < 0x80 ? took.sustain : e.sustain;
-            e.release = took.release < 0x80 ? took.release : e.release;
+            TakeSettings(a);
         }
         else if (a.kind == Action::kNoteOff)
         {
-            // The release of an older note with the same key, which the MIDI file has ended already, leaves the newer
-            // one playing. A note off that releases nothing ends a note that has ended by itself in the driver.
-            const int held = owner[a.channel][a.a & 0x7F];
-            if (held >= 0 && a.slot < 0)
-            {
-                close(held, std::min(a.tick, plan.end));
-            }
-            else if (held >= 0 && slot_note[size_t(a.slot)] == held)
-            {
-                release(a.slot, std::min(a.tick, plan.end), a.frame);
-            }
+            NoteOff(a);
         }
     }
 
     // The MIDI file releases the notes still playing at the end. Each takes the release that its channel's settings
     // give there. The driver's release would take the same.
-    for (size_t i = 0; i < notes.size(); i++)
+    for (size_t i = 0; i < notes_.size(); i++)
     {
-        Note& n = notes[i];
+        Note& n = notes_[i];
         if (n.open && n.envelope.release >= 0x80)
         {
-            n.envelope.release = sim.end_envelopes[size_t(n.channel)].release;
+            n.envelope.release = sim_.end_envelopes[size_t(n.channel)].release;
         }
-        close(int(i), plan.end);
+        Close(int(i), plan_.end);
     }
 
-    return notes;
+    return std::move(notes_);
+}
+
+void NoteCollector::NoteOn(const Action& a)
+{
+    Release(a.slot, a.tick, a.frame);
+    slot_last_[size_t(a.slot)] = -1;
+
+    const Action* program = ProgramFor(a);
+    if (!program || !(track_mask_ >> a.track & 1) || a.tick >= plan_.end)
+    {
+        return;
+    }
+
+    // A key played twice on the same frame is one MIDI note, as loud as the two voices together. The driver starts
+    // both on the frame.
+    int& held = owner_[a.channel][a.a & 0x7F];
+    slot_level_[size_t(a.slot)] = a.b + 1;
+    if (held >= 0 && notes_[size_t(held)].frame == a.frame)
+    {
+        Note& n = notes_[size_t(held)];
+        n.level += a.b + 1;
+        n.velocity = std::min(127, n.level - 1);
+        n.voices++;
+        slot_note_[size_t(a.slot)] = held;
+        slot_last_[size_t(a.slot)] = held;
+        return;
+    }
+
+    // A player takes a tick's events track by track. So where the older note is in a later track, it ends a tick
+    // before the newer one starts. Otherwise its note off would end the newer note too. If the older note started a
+    // tick before, the newer one starts a tick late instead.
+    uint64_t on = a.tick;
+    if (held >= 0 && notes_[size_t(held)].track > a.track)
+    {
+        on = std::max(on, notes_[size_t(held)].on + 2);
+        Close(held, on - 1);
+    }
+    else if (held >= 0)
+    {
+        Close(held, on);
+    }
+
+    // A note lasts at least a tick, even one that the driver releases in the frame it starts in. Frame timing puts
+    // such a release on the note's start tick. So where the key's last note ends after this one's start, this one
+    // starts as that one ends. It starts a tick later if that note is in a later track, for the reason above.
+    int& previous = latest_[a.channel][a.a & 0x7F];
+    if (previous >= 0 && notes_[size_t(previous)].off > on)
+    {
+        on = notes_[size_t(previous)].off + (notes_[size_t(previous)].track > a.track ? 1 : 0);
+    }
+
+    Note n;
+    n.track = a.track;
+    n.channel = a.channel;
+    n.key = a.a & 0x7F;
+    n.velocity = a.b;
+    n.level = a.b + 1;
+    n.program = program == &a ? a.program : program->a;
+    n.instrument = program->instrument;
+    n.on = on;
+    n.frame = a.frame;
+    notes_.push_back(n);
+    held = int(notes_.size()) - 1;
+    previous = held;
+    slot_note_[size_t(a.slot)] = held;
+    slot_last_[size_t(a.slot)] = held;
+}
+
+void NoteCollector::NoteOff(const Action& a)
+{
+    // Where a note off releases an older note of the key, the MIDI file has ended that note already. The newer note
+    // goes on playing. A note off that releases nothing ends a note that has ended by itself in the driver.
+    const int held = owner_[a.channel][a.a & 0x7F];
+    if (held >= 0 && a.slot < 0)
+    {
+        Close(held, std::min(a.tick, plan_.end));
+    }
+    else if (held >= 0 && slot_note_[size_t(a.slot)] == held)
+    {
+        Release(a.slot, std::min(a.tick, plan_.end), a.frame);
+    }
+}
+
+void NoteCollector::TakeSettings(const Action& a)
+{
+    // Each phase takes the settings that the channel has when the phase starts. Those may differ from the settings at
+    // the note's start.
+    const int index = slot_last_[size_t(a.slot)];
+    if (index >= 0)
+    {
+        notes_[size_t(index)].envelope.Merge(a.envelope);
+    }
+}
+
+const Action* NoteCollector::ProgramFor(const Action& a) const
+{
+    if (a.playable)
+    {
+        return &a;
+    }
+    if (a.instrument != 0)
+    {
+        return nullptr;
+    }
+
+    const auto found = first_program_.find(std::make_pair(int(a.channel), a.tick));
+    return found != first_program_.end() ? found->second : nullptr;
+}
+
+void NoteCollector::Close(int index, uint64_t tick)
+{
+    // A note lasts at least a tick. Its note off then can't come before its note on.
+    Note& n = notes_[size_t(index)];
+    if (n.open)
+    {
+        n.open = false;
+        n.off = std::max(tick, n.on + 1);
+        owner_[size_t(n.channel)][size_t(n.key)] = -1;
+    }
+}
+
+void NoteCollector::Release(int slot, uint64_t tick, uint32_t frame)
+{
+    const int index = slot_note_[size_t(slot)];
+    slot_note_[size_t(slot)] = -1;
+    if (index < 0)
+    {
+        return;
+    }
+
+    // A voice that ends in the note's first frame sounds for two frames at most. The note then keeps the combined
+    // velocity of the remaining voices.
+    Note& n = notes_[size_t(index)];
+    if (--n.voices == 0)
+    {
+        Close(index, tick);
+    }
+    else if (frame == n.frame)
+    {
+        n.level -= slot_level_[size_t(slot)];
+        n.velocity = std::min(127, n.level - 1);
+    }
 }
 
 // Returns the key pressures that mute the notes that the mixer leaves out, on the channels that `notes` play: 127 from
 // the frame in which the mixer leaves out every voice of a key on a channel, and 0 from the frame in which it takes one
 // again. A player that jumps back to the loop's start keeps the pressures that the loop's end left. So a key that has
 // another pressure at the loop's end gets the pressure from the loop's start again there, unless it changes there.
-std::vector<MuteChange> KeyPressures(const Simulation& sim, const Plan& plan, const std::vector<Note>& notes)
+std::vector<MuteChange> KeyPressures(const Simulation& sim, const SongPlan& plan, const std::vector<Note>& notes)
 {
     // The channels that the notes play, and the first note on of each key on each channel in each frame.
     std::array<bool, kChannels> plays = {};
@@ -660,6 +715,38 @@ std::vector<MuteChange> KeyPressures(const Simulation& sim, const Plan& plan, co
     return pressures;
 }
 
+// Returns pressure 0 at the start for each key that `notes` play before `pressures` give the key a pressure. A player
+// that keeps key pressures from one file to the next would otherwise play the file with the pressures that the file
+// before left. With a SoundFont that mutes notes, a key left at 127 would mute the file's notes on it.
+std::vector<MuteChange> StartPressures(const std::vector<Note>& notes, const std::vector<MuteChange>& pressures)
+{
+    // Each key's first note on.
+    std::map<std::pair<int, int>, uint64_t> first_on;
+    for (const Note& n : notes)
+    {
+        uint64_t& on = first_on.try_emplace({n.channel, n.key}, n.on).first->second;
+        on = std::min(on, n.on);
+    }
+
+    // A pressure at or before a key's first note on comes before that note. Such a key gets no pressure at the start.
+    for (const MuteChange& m : pressures)
+    {
+        const auto found = first_on.find({m.channel, m.key});
+        if (found != first_on.end() && m.tick <= found->second)
+        {
+            first_on.erase(found);
+        }
+    }
+
+    std::vector<MuteChange> start;
+    for (const auto& [key, on] : first_on)
+    {
+        start.push_back({0, key.first, key.second, false, 0});
+    }
+
+    return start;
+}
+
 // Returns the pitch bend range of each channel, in semitones: wide enough for its largest pitch offset, and its
 // instruments' bend range, so that a bend without vibrato keeps its value.
 std::array<int, kChannels> BendRanges(const Rom& rom, const Simulation& sim)
@@ -697,15 +784,6 @@ std::array<int, kChannels> BendRanges(const Rom& rom, const Simulation& sim)
     return range;
 }
 
-// Returns the MIDI pitch bend value for a pitch offset, with a bend range of `range` semitones, at least 1.
-int BendValue(int64_t offset, int range)
-{
-    const int64_t scaled = offset * 8192;
-    const int64_t unit = int64_t(range) * kSemitone;
-    const int64_t steps = scaled >= 0 ? (scaled + unit / 2) / unit : -((-scaled + unit / 2) / unit);
-    return int(std::clamp<int64_t>(8192 + steps, 0, 16383));
-}
-
 // Returns the elapsed seconds at `tick`, using the GBA's frame rate and the tempo changes in `actions`.
 double TickSeconds(const std::vector<Action>& actions, uint32_t per_quarter, uint64_t tick)
 {
@@ -731,21 +809,21 @@ double TickSeconds(const std::vector<Action>& actions, uint32_t per_quarter, uin
     return seconds * kTempoScale;
 }
 
-// Fills in a summary's length, loop and tempo.
-void Summarize(const Simulation& sim, const Plan& plan, uint32_t per_quarter, SongSummary& sum)
+// Fills in a report's length, loop and tempo.
+void Summarize(const Simulation& sim, const SongPlan& plan, uint32_t per_quarter, SongReport& report)
 {
-    sum.seconds = TickSeconds(sim.actions, per_quarter, plan.end);
+    report.seconds = TickSeconds(sim.actions, per_quarter, plan.end);
     if (plan.loops)
     {
-        sum.loop_start = TickSeconds(sim.actions, per_quarter, plan.loop_start);
-        sum.loop_end = TickSeconds(sim.actions, per_quarter, plan.loop_end);
+        report.loop_start = TickSeconds(sim.actions, per_quarter, plan.loop_start);
+        report.loop_end = TickSeconds(sim.actions, per_quarter, plan.loop_end);
     }
 
     for (const Action& a : sim.actions)
     {
         if (a.kind == Action::kTempo && a.value)
         {
-            sum.bpm = 60000000.0 / (a.value * kTempoScale);
+            report.bpm = 60000000.0 / (a.value * kTempoScale);
             break;
         }
     }
@@ -774,51 +852,45 @@ void WriteChannelSetup(MidiTrack& mt, int ch, int range, int bank, bool volume_a
     }
 }
 
-// Returns the instrument of the preset at `bank` and `program` in `file`, or -1 if there's none.
-int PresetInstrument(const Sf2File& file, int bank, int program)
+// The programs whose presets AddPresets() couldn't add as the notes play them.
+struct PresetProblems
 {
-    for (const sf2::Preset& p : file.presets)
-    {
-        if (p.bank == bank && p.program == program)
-        {
-            return agbsf2::PresetInstrument(p);
-        }
-    }
-
-    return -1;
-}
+    std::set<int> missing; // the programs whose instruments have nothing to play
+    std::set<int> clashes; // the drum channel's programs that another set of instruments has in the drum bank
+};
 
 // Adds a preset for each program the notes play, in each note's bank. A note on the drum channel without envelope
 // settings gets a copy in the drum bank too. In a shared SoundFont, another set of instruments can have the program
-// there already, and `clashes` gets the program. Returns the programs whose instruments have nothing to play.
-std::set<int> AddPresets(SoundfontBuilder& sf, const std::vector<Note>& notes, std::set<int>& clashes)
+// there already.
+PresetProblems AddPresets(SoundfontBuilder& sf, const std::vector<Note>& notes)
 {
-    std::set<int> missing;
+    PresetProblems problems;
     for (const Note& n : notes)
     {
         const int instrument = sf.InstrumentFor(n.instrument, n.envelope);
         if (instrument < 0)
         {
-            missing.insert(n.program);
+            problems.missing.insert(n.program);
             continue;
         }
 
         sf.AddPreset(n.bank, n.program, instrument);
         if (n.channel == kDrumChannel && n.envelope.None())
         {
-            const int drum = PresetInstrument(sf.File(), kDrumBank, n.program);
+            const sf2::Preset* preset = sf.FindPreset(kDrumBank, n.program);
+            const int drum = preset ? PresetInstrument(*preset) : -1;
             if (drum < 0)
             {
                 sf.AddPreset(kDrumBank, n.program, instrument);
             }
             else if (drum != instrument)
             {
-                clashes.insert(n.program);
+                problems.clashes.insert(n.program);
             }
         }
     }
 
-    return missing;
+    return problems;
 }
 
 // A program change, with the bank it chooses, and the track of the MIDI file it goes in, given by the tune's track
@@ -897,9 +969,76 @@ void MatchPrograms(std::vector<Note>& notes, std::vector<ProgramChange>& program
     }
 }
 
+// Writes `programs`. `track` holds the MIDI file's track for each of the tune's tracks. Each channel starts in bank
+// `bank`.
+void WritePrograms(const std::vector<ProgramChange>& programs, const std::vector<MidiTrack*>& track, int bank)
+{
+    // A program change gives its bank first where the channel's bank changes, to that of the presets for the envelope
+    // settings that the notes after it play with, or back to the tune's.
+    std::array<int, kChannels> channel_bank;
+    channel_bank.fill(bank);
+    for (const ProgramChange& p : programs)
+    {
+        if (p.bank != channel_bank[size_t(p.channel)])
+        {
+            track[size_t(p.track)]->Bank(uint32_t(p.tick), p.channel, p.bank);
+            channel_bank[size_t(p.channel)] = p.bank;
+        }
+        track[size_t(p.track)]->Program(uint32_t(p.tick), p.channel, p.program);
+    }
+}
+
+// Writes the pitch bends of each channel that has a track in `home` and a bend range in `range`.
+void WriteBends(const Simulation& sim, const SongPlan& plan, const std::array<MidiTrack*, kChannels>& home,
+                const std::array<int, kChannels>& range)
+{
+    // A player that jumps back to the loop's start keeps the bends that the loop's end left. The game keeps them too,
+    // until the loop's first bend or program change on the channel sets its pitch. So each channel's bend is written
+    // again at the loop's start. That's left out where the bend changes there or before, or where the loop starts with
+    // the tune.
+    std::array<uint64_t, kChannels> loop_set;
+    loop_set.fill(plan.end);
+    for (const Action& a : sim.actions)
+    {
+        if ((a.kind == Action::kBend || a.kind == Action::kProgram) && a.tick >= plan.loop_start)
+        {
+            loop_set[size_t(a.channel)] = std::min(loop_set[size_t(a.channel)], a.tick);
+        }
+    }
+
+    std::array<int64_t, kChannels> loop_offset = {};
+    for (const PitchChange& p : sim.pitches)
+    {
+        if (p.tick < plan.loop_start)
+        {
+            loop_offset[size_t(p.channel)] = p.offset;
+        }
+        else if (p.tick <= loop_set[size_t(p.channel)])
+        {
+            loop_set[size_t(p.channel)] = plan.end;
+        }
+
+        if (home[size_t(p.channel)] && range[size_t(p.channel)] > 0 && p.tick < plan.end)
+        {
+            home[size_t(p.channel)]->PitchBend(uint32_t(p.tick), p.channel,
+                                               FixedBendValue(p.offset, kSemitone, range[size_t(p.channel)]));
+        }
+    }
+
+    for (int ch = 0; ch < kChannels; ch++)
+    {
+        if (plan.loops && plan.loop_start > 0 && loop_set[size_t(ch)] < plan.end && home[size_t(ch)] &&
+            range[size_t(ch)] > 0)
+        {
+            home[size_t(ch)]->PitchBend(uint32_t(loop_set[size_t(ch)]), ch,
+                                        FixedBendValue(loop_offset[size_t(ch)], kSemitone, range[size_t(ch)]));
+        }
+    }
+}
+
 // Writes the MIDI file: a conductor track, then a track for each of the tune's tracks that plays notes.
 bool WriteMidi(const std::string& path, const std::string& title, const std::string& about, const TuneHeader& header,
-               const Simulation& sim, const Plan& plan, const std::vector<Note>& notes,
+               const Simulation& sim, const SongPlan& plan, const std::vector<Note>& notes,
                const std::vector<MuteChange>& pressures, const std::array<int, kChannels>& range, int bank,
                std::string& error)
 {
@@ -990,63 +1129,10 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
         }
     }
 
-    // A program change gives its bank first where the channel's bank changes, to that of the presets for the envelope
-    // settings that the notes after it play with, or back to the tune's.
     std::vector<Note> ordered = notes;
     MatchPrograms(ordered, programs);
-    std::array<int, kChannels> channel_bank;
-    channel_bank.fill(bank);
-    for (const ProgramChange& p : programs)
-    {
-        if (p.bank != channel_bank[size_t(p.channel)])
-        {
-            track[size_t(p.track)]->Bank(uint32_t(p.tick), p.channel, p.bank);
-            channel_bank[size_t(p.channel)] = p.bank;
-        }
-        track[size_t(p.track)]->Program(uint32_t(p.tick), p.channel, p.program);
-    }
-
-    // A player that jumps back to the loop's start keeps the bends that the loop's end left, as the game does until the
-    // loop's first bend or program change on the channel sets its pitch. So each channel's bend is written again there,
-    // unless it changes there or before, or the loop starts with the tune.
-    std::array<uint64_t, kChannels> loop_set;
-    loop_set.fill(plan.end);
-    for (const Action& a : sim.actions)
-    {
-        if ((a.kind == Action::kBend || a.kind == Action::kProgram) && a.tick >= plan.loop_start)
-        {
-            loop_set[size_t(a.channel)] = std::min(loop_set[size_t(a.channel)], a.tick);
-        }
-    }
-
-    std::array<int64_t, kChannels> loop_offset = {};
-    for (const PitchChange& p : sim.pitches)
-    {
-        if (p.tick < plan.loop_start)
-        {
-            loop_offset[size_t(p.channel)] = p.offset;
-        }
-        else if (p.tick <= loop_set[size_t(p.channel)])
-        {
-            loop_set[size_t(p.channel)] = plan.end;
-        }
-
-        if (home[size_t(p.channel)] && range[size_t(p.channel)] > 0 && p.tick < plan.end)
-        {
-            home[size_t(p.channel)]->PitchBend(uint32_t(p.tick), p.channel,
-                                               BendValue(p.offset, range[size_t(p.channel)]));
-        }
-    }
-
-    for (int ch = 0; ch < kChannels; ch++)
-    {
-        if (plan.loops && plan.loop_start > 0 && loop_set[size_t(ch)] < plan.end && home[size_t(ch)] &&
-            range[size_t(ch)] > 0)
-        {
-            home[size_t(ch)]->PitchBend(uint32_t(loop_set[size_t(ch)]), ch,
-                                        BendValue(loop_offset[size_t(ch)], range[size_t(ch)]));
-        }
-    }
+    WritePrograms(programs, track, bank);
+    WriteBends(sim, plan, home, range);
 
     // The key pressures go in the channel's track, before the note ons at their ticks.
     for (const MuteChange& m : pressures)
@@ -1064,20 +1150,109 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
     return WriteFile(path, midi.Encode(), error);
 }
 
-// Converts a tune, writing its files if `write` is set.
-SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertOptions& opt, SoundfontBuilder* shared,
-                bool write)
+// Returns the number of notes that the driver drops before the plan's end, in the tracks of `track_mask`.
+int DroppedNotes(const Simulation& sim, const SongPlan& plan, uint32_t track_mask)
 {
-    SongSummary sum;
+    int dropped = 0;
+    for (const Action& a : sim.actions)
+    {
+        dropped += a.kind == Action::kNoteDropped && a.tick < plan.end && (track_mask >> a.track & 1) ? 1 : 0;
+    }
+
+    return dropped;
+}
+
+// Writes the files of tune `song` after Run() has converted it: the MIDI file, and the SoundFont unless the tune uses
+// `shared`. With `shared`, the tune's presets go in bank `bank` there. Adds the warnings to `report`. Sets `report.ok`
+// once the files are written.
+void WriteTune(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings,
+               SoundfontBuilder* shared, int bank, const TuneHeader& header, const SongPlan& plan,
+               const Simulation& sim, std::vector<Note>& notes, SongReport& report)
+{
+    // The SoundFont's presets, in the song's file or the shared one. Those of notes that play with envelope settings go
+    // in banks of their own.
+    SoundfontBuilder own(rom, info);
+    SoundfontBuilder& sf = shared ? *shared : own;
+    for (Note& n : notes)
+    {
+        n.bank = sf.BankFor(bank, n.envelope);
+    }
+
+    // The SoundFont mutes a note while its key's pressure is high, in a tune that the mixer leaves voices out of.
+    std::vector<MuteChange> pressures = KeyPressures(sim, plan, notes);
+    const bool mutes = std::any_of(pressures.begin(), pressures.end(), [](const MuteChange& m) { return m.muted; });
+    if (mutes)
+    {
+        sf.AddMutes();
+    }
+
+    // A file that a SoundFont with mutes plays starts with pressure 0 for each key that plays before the tune gives it
+    // a pressure. The shared SoundFont can gain the mutes from a later tune. Every file that shares it therefore starts
+    // that way too. These pressures come before the tune's pressures at tick 0.
+    if (mutes || shared)
+    {
+        const std::vector<MuteChange> start = StartPressures(notes, pressures);
+        pressures.insert(pressures.begin(), start.begin(), start.end());
+    }
+
+    const PresetProblems problems = AddPresets(sf, notes);
+    for (int program : problems.missing)
+    {
+        report.warnings.push_back("program " + std::to_string(program) + "'s instrument has no samples to play");
+    }
+    for (int program : problems.clashes)
+    {
+        report.warnings.push_back("channel 10's program " + std::to_string(program) +
+                                  " is another set of instruments' in the drum bank, which some players use there");
+    }
+
+    // The tune's number has two digits, or more from 100 on, as Music::FileNumber() gives it.
+    const std::string number = SongNumber(song, 0);
+    const std::string title = rom.Title() + " #" + number;
+    char about[160];
+    std::snprintf(about, sizeof about, "%s (%s) tune %d, header at 0x%08X, converted by %s", rom.Title().c_str(),
+                  rom.GameCode().c_str(), song, unsigned(header.address), kProgramName);
+    const std::string stem = SongStem(settings, number);
+
+    std::string error;
+    report.midi_path = stem + ".mid";
+    if (!WriteMidi(report.midi_path, title, about, header, sim, plan, notes, pressures, BendRanges(rom, sim), bank,
+                   error))
+    {
+        report.warnings.push_back(error);
+        return;
+    }
+
+    if (!shared)
+    {
+        Sf2File& file = sf.File();
+        file.SetTitle(title);
+        report.sf2_path = stem + ".sf2";
+        if (!file.Write(report.sf2_path, error))
+        {
+            report.warnings.push_back(error);
+            return;
+        }
+    }
+
+    report.ok = true;
+}
+
+// Converts a tune, writing its files if `write` is set.
+// With `shared`, the tune's presets go in bank `bank` there.
+SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings,
+               SoundfontBuilder* shared, int bank, bool write)
+{
+    SongReport report;
     TuneHeader header;
     if (!ReadTuneHeader(rom, TuneAddress(rom, info, song), header))
     {
-        sum.warnings.push_back("its header can't be read");
-        return sum;
+        report.warnings.push_back("its header can't be read");
+        return report;
     }
 
-    Plan plan = PlanTune(rom, info, header, opt.loops);
-    const Simulation sim = Simulate(rom, info, song, header, plan, opt.frame_timing);
+    SongPlan plan = PlanTune(rom, info, header, settings.loops);
+    const Simulation sim = Simulate(rom, info, song, header, plan, settings.frame_timing);
 
     // A tune that the model gave up on ends where it stopped.
     if (sim.cut_off)
@@ -1085,20 +1260,21 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
         plan.end = std::min(plan.end, *sim.cut_off);
     }
 
-    Summarize(sim, plan, header.ticks_per_quarter, sum);
+    Summarize(sim, plan, header.ticks_per_quarter, report);
 
     // With frame timing, the loop's start and end go at the start of the frames that play them, as their events do, so
     // that each pass's first events fall on the same side of the marker. The end goes at the start of the first frame
     // that reaches it, after the frame that plays it.
-    if (opt.frame_timing)
+    if (settings.frame_timing)
     {
         plan.loop_start = PlayingFrame(sim.actions, header.ticks_per_quarter, sim.frame_starts, plan.loop_start);
         plan.loop_end = PlayingFrame(sim.actions, header.ticks_per_quarter, sim.frame_starts, plan.loop_end);
         plan.end = OnFrame(sim.frame_starts, plan.end);
     }
 
-    sum.warnings = sim.warnings;
-    std::vector<Note> notes = CollectNotes(sim, plan, opt.track_mask, kChannels * info.slots_per_channel);
+    report.warnings = sim.warnings;
+    std::vector<Note> notes =
+        NoteCollector(sim, plan, settings.track_mask, kChannels * info.slots_per_channel).Collect();
 
     std::set<int> tracks;
     for (const Note& n : notes)
@@ -1106,99 +1282,38 @@ SongSummary Run(const Rom& rom, const DriverInfo& info, int song, const ConvertO
         tracks.insert(n.track);
     }
 
-    // The notes that the driver drops, of the tracks that the conversion keeps.
-    int dropped = 0;
-    for (const Action& a : sim.actions)
-    {
-        dropped += a.kind == Action::kNoteDropped && a.tick < plan.end && (opt.track_mask >> a.track & 1) ? 1 : 0;
-    }
+    const int dropped = DroppedNotes(sim, plan, settings.track_mask);
     if (dropped)
     {
-        sum.warnings.push_back(
+        report.warnings.push_back(
             std::to_string(dropped) + " note" + (dropped == 1 ? "" : "s") +
             " found no available slot on their channel; omitted from the MIDI file to match the game");
     }
 
-    sum.tracks = int(tracks.size());
-    sum.silent = notes.empty();
-    if (sum.silent || !write)
+    report.tracks = int(tracks.size());
+    report.silent = notes.empty();
+    if (report.silent || !write)
     {
-        sum.ok = true;
-        return sum;
+        report.ok = true;
+        return report;
     }
 
-    // The SoundFont's presets, in the song's file or the shared one. Those of notes that play with envelope settings go
-    // in banks of their own.
-    SoundfontBuilder own(rom, info);
-    SoundfontBuilder& sf = shared ? *shared : own;
-    for (Note& n : notes)
-    {
-        n.bank = sf.BankFor(opt.bank, n.envelope);
-    }
+    WriteTune(rom, info, song, settings, shared, bank, header, plan, sim, notes, report);
 
-    // The SoundFont mutes a note while its key's pressure is high, in a tune that the mixer leaves voices out of.
-    const std::vector<MuteChange> pressures = KeyPressures(sim, plan, notes);
-    if (std::any_of(pressures.begin(), pressures.end(), [](const MuteChange& m) { return m.muted; }))
-    {
-        sf.AddMutes();
-    }
-
-    std::set<int> clashes;
-    for (int program : AddPresets(sf, notes, clashes))
-    {
-        sum.warnings.push_back("program " + std::to_string(program) + "'s instrument has no samples to play");
-    }
-    for (int program : clashes)
-    {
-        sum.warnings.push_back("channel 10's program " + std::to_string(program) +
-                               " is another set of instruments' in the drum bank, which some players use there");
-    }
-
-    const std::string title = rom.Title() + " #" + TwoDigits(song);
-    char about[160];
-    std::snprintf(about, sizeof about, "%s (%s) tune %d, header at 0x%08X, converted by %s", rom.Title().c_str(),
-                  rom.GameCode().c_str(), song, unsigned(header.address), kProgramName);
-    const std::string stem =
-        Utf8(PathFromUtf8(opt.out_dir) / PathFromUtf8(SafeFileName(opt.base_name) + "_" + TwoDigits(song)));
-
-    std::string error;
-    sum.midi_path = stem + ".mid";
-    if (!WriteMidi(sum.midi_path, title, about, header, sim, plan, notes, pressures, BendRanges(rom, sim), opt.bank,
-                   error))
-    {
-        sum.warnings.push_back(error);
-        return sum;
-    }
-
-    if (!shared)
-    {
-        Sf2File& file = sf.File();
-        file.name = title;
-        file.comment = "Instruments for " + title + ", extracted by " + kProgramName;
-        sum.sf2_path = stem + ".sf2";
-        if (!file.Write(sum.sf2_path, error))
-        {
-            sum.warnings.push_back(error);
-            return sum;
-        }
-    }
-
-    sum.ok = true;
-
-    return sum;
+    return report;
 }
 
 } // namespace
 
-SongSummary InspectSong(const Rom& rom, const DriverInfo& info, int song, const ConvertOptions& opt)
+SongReport InspectSong(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings)
 {
-    return Run(rom, info, song, opt, nullptr, false);
+    return Run(rom, info, song, settings, nullptr, 0, false);
 }
 
-SongSummary ConvertSong(const Rom& rom, const DriverInfo& info, int song, const ConvertOptions& opt,
-                        SoundfontBuilder* shared)
+SongReport ConvertSong(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings,
+                       SoundfontBuilder* shared, int bank)
 {
-    return Run(rom, info, song, opt, shared, true);
+    return Run(rom, info, song, settings, shared, bank, true);
 }
 
 bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::string& path, std::string& error)
@@ -1239,13 +1354,7 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
                 break;
             }
 
-            std::string bytes;
-            for (uint32_t i = 0; i < e.size; i++)
-            {
-                char b[4];
-                std::snprintf(b, sizeof b, "%02X ", rom.U8(address + i));
-                bytes += b;
-            }
+            const std::string bytes = HexBytes(rom, address, e.size);
 
             // The driver ignores a loop's end before its start.
             const bool control = e.command == kCmdControl;
@@ -1258,7 +1367,7 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
 
             address += e.size;
             loop_started = loop_started || (control && e.a == kCtrlLoopStart);
-            if (e.command == kCmdDelay1 || e.command == kCmdDelay2 || e.command == kCmdDelay3)
+            if (IsDelay(e.command))
             {
                 tick += e.value;
             }
@@ -1269,8 +1378,7 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
         }
     }
 
-    std::vector<uint8_t> data(text.begin(), text.end());
-    return WriteFile(path, data, error);
+    return WriteTextFile(path, text, error);
 }
 
 } // namespace agbsf2::rare

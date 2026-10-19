@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "gba.h"
 #include "music.h"
 #include "rom.h"
 #include "test_util.h"
@@ -94,31 +95,14 @@ const std::vector<uint8_t> kMixSequence = {
     0xFC,
 };
 
-class Cart
+class Cart : public test::CartImage
 {
 public:
-    Cart() : d_(0x10000, 0)
+    Cart() : CartImage(0x10000)
     {
         WriteCode();
         WriteTables();
         WriteBank();
-    }
-
-    void Put8(uint32_t a, uint8_t v)
-    {
-        d_[a - kRomBase] = v;
-    }
-
-    void Put16(uint32_t a, uint16_t v)
-    {
-        Put8(a, uint8_t(v));
-        Put8(a + 1, uint8_t(v >> 8));
-    }
-
-    void Put32(uint32_t a, uint32_t v)
-    {
-        Put16(a, uint16_t(v));
-        Put16(a + 2, uint16_t(v >> 16));
     }
 
     // Returns the address of resource `id`.
@@ -127,31 +111,7 @@ public:
         return resources_[size_t(id)];
     }
 
-    Rom ToRom() const
-    {
-        Rom r;
-        r.Assign(d_);
-
-        return r;
-    }
-
 private:
-    void PutHalfwords(uint32_t at, const std::vector<uint16_t>& code)
-    {
-        for (size_t i = 0; i < code.size(); i++)
-        {
-            Put16(at + 2 * uint32_t(i), code[i]);
-        }
-    }
-
-    // Writes the Thumb bl at `at` that calls `target`.
-    void Bl(uint32_t at, uint32_t target)
-    {
-        const uint32_t offset = target - (at + 4);
-        Put16(at, uint16_t(0xF000 | ((offset >> 12) & 0x7FF)));
-        Put16(at + 2, uint16_t(0xF800 | ((offset >> 1) & 0x7FF)));
-    }
-
     // The driver's code that detection reads: the sequencer's step, the routine that takes the sound bank, the game's
     // routine that calls it, the archive's lookup, which returns the bank, the call of the two with file 2, the PSG's
     // lookups of its tables, and the sound init with Timer 0's float.
@@ -164,13 +124,13 @@ private:
                                  0x6091, 0x68C1, 0x1840, 0x60D0, 0x4770});
         Put32(kTakeBank + 0x20, 0x02003B00);
         Put16(kWrapper, 0xB500);
-        Bl(kWrapper + 2, kTakeBank);
+        PutBl(kWrapper + 2, kTakeBank);
         Put16(kWrapper + 6, 0xBD00);
         PutHalfwords(kFileLookup, {0x4801, 0x4770});
         Put32(kFileLookup + 8, kBank);
         Put16(kStart, 0x2002);
-        Bl(kStart + 2, kFileLookup);
-        Bl(kStart + 6, kWrapper);
+        PutBl(kStart + 2, kFileLookup);
+        PutBl(kStart + 6, kWrapper);
 
         PutHalfwords(kInstrumentCode,
                      {0xB500, 0x0600, 0x0E00, 0x2901, 0xD00E, 0x2901, 0xDC02, 0x2900, 0xD003, 0xE015, 0x2902, 0xD00D,
@@ -236,7 +196,7 @@ private:
         std::vector<uint8_t> kit = {kKit, 1, 0xFF, 0xFF};
         for (int key = 0; key < 128; key++)
         {
-            const int id = key == 40 ? kShortId : key == 41 ? kLoopId : key == 42 ? kLongId : 0x8000;
+            const int id = key == 40 ? kShortId : key == 41 ? kLoopId : key == 42 ? kLongId : kNoResource;
             kit.push_back(uint8_t(id));
             kit.push_back(uint8_t(id >> 8));
         }
@@ -278,12 +238,11 @@ private:
         return b;
     }
 
-    static std::vector<uint8_t> Music(int flags, int segment)
+    static std::vector<uint8_t> Music(int flags, int sequence)
     {
-        return {kMusic, 0xFF, 0xFF, 0xFF, 1, 0, uint8_t(flags), 0, uint8_t(segment), 0};
+        return {kMusic, 0xFF, 0xFF, 0xFF, 1, 0, uint8_t(flags), 0, uint8_t(sequence), 0};
     }
 
-    std::vector<uint8_t> d_;
     std::array<uint32_t, kResourceCount> resources_ = {};
 };
 
@@ -407,7 +366,7 @@ void TestLoopingPiece()
     }
     const std::array<uint32_t, 5> track = seq.TrackState();
 
-    SEQLIB_CHECK(seq.SegmentStarts() == std::vector<uint32_t>({0, 30}));
+    SEQLIB_CHECK(seq.SequenceStarts() == std::vector<uint32_t>({0, 30}));
     SEQLIB_CHECK(seq.VoicePlays(3) && !seq.VoicePlays(2));
     SEQLIB_CHECK_EQ(seq.VoiceState(3)[4], 63);
     SEQLIB_CHECK_EQ(track[2], cart.Resource(kLoopSeqId) + 4);
@@ -424,11 +383,11 @@ void TestConversion()
     const Cart cart;
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.out_dir = TempPath("").string();
     opt.base_name = "ubimilan_once";
 
-    const SongSummary sum = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
 
     SEQLIB_CHECK(sum.ok && !sum.silent && sum.tracks == 1 && sum.loop_start < 0);
     SEQLIB_CHECK(sum.warnings.empty());
@@ -466,11 +425,11 @@ void TestLoopMarkers()
     const Cart cart;
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.out_dir = TempPath("").string();
     opt.base_name = "ubimilan_loops";
 
-    const SongSummary sum = ConvertSong(rom, info, 1, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 1, opt, nullptr);
 
     SEQLIB_CHECK(sum.ok && sum.loop_start == 0);
     SEQLIB_CHECK(std::fabs(sum.loop_end - 30 * double(kFrameCycles) / kSecondCycles) < 1e-9);
@@ -492,11 +451,11 @@ void TestPsgConversion()
     const Cart cart;
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    ConvertOptions opt;
+    ConvertSettings opt;
     opt.out_dir = TempPath("").string();
     opt.base_name = "ubimilan_mix";
 
-    const SongSummary sum = ConvertSong(rom, info, 2, opt, nullptr);
+    const SongReport sum = ConvertSong(rom, info, 2, opt, nullptr);
 
     SEQLIB_CHECK(sum.ok && sum.tracks == 2);
     const test::MidiEvents midi = ReadMidi(sum.midi_path);

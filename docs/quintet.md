@@ -404,11 +404,12 @@ with these differences:
 | Starting values | tempo 90, hardware envelope up | tempo 120, hardware envelope down |
 | Random numbers | the seed carries on | the play routine and each loop set the seed back to 1 |
 | Wave volume | 0-3: silence, 25%, 50%, 100% | 0-4: silence, 25%, 50%, 75%, 100%; `5F` stops at 4, and the volume envelope gives silence above 4 |
-| Volume envelope | stops after the decay | goes on writing the end level |
+| Volume envelope | stops after the decay | goes on writing the end level, and after a rest does nothing |
 | Pitch envelope | after a rest, adds its end offset once and then starts over | after a rest, does nothing |
 | PCM pitch effects | count double | count once |
 | FIFO starts | clear the DMA's count with a 16-bit write | clear its count and control with a 32-bit write |
 | Timers | written when a FIFO starts or bends | written at the end of the frame, by `0x0807FE30` in `B6JJ`; a stop drops a setting that's waiting |
+| Noise macros | `DB` without a macro table leaves the channel's macro as it was | `DB` without a macro table turns the channel's macro off |
 
 In `B6JJ` the play routine is at `0x0807D250`, the note reader at
 `0x0807D844`, the per-frame routine at `0x0807EEE4`, and the routine that sets

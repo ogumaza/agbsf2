@@ -9,6 +9,8 @@
 #include <set>
 #include <utility>
 
+#include "xsflib/bytes.h"
+
 #include "konami/seqformat.h"
 
 namespace agbsf2::konami
@@ -390,15 +392,49 @@ bool PlausibleDungeonDiceSample(const Rom& rom, uint32_t entry)
     return length > 0 && period >= 0x100 && period <= 0x4000 && rom.Contains(rom.U32(entry), length);
 }
 
-// Returns true if entry `index` of a sample table of revision `revision` at `table` is a sample agbsf2 can read.
-bool ReadableSample(const Rom& rom, uint32_t table, int index, Revision revision)
+// Returns the header of sample `index` in a table of pointers to sample headers at `table`, with valid = false if
+// agbsf2 can't read it.
+SampleInfo SampleHeaderAt(const Rom& rom, uint32_t table, int index)
 {
-    if (revision == Revision::kDungeonDiceMonsters)
+    SampleInfo s;
+    const uint32_t p = rom.U32(table + 4 * uint32_t(index));
+    if (!PlausibleSampleHeader(rom, p))
     {
-        return PlausibleDungeonDiceSample(rom, table + 8 * uint32_t(index));
+        return s;
     }
 
-    return PlausibleSampleHeader(rom, rom.U32(table + 4 * uint32_t(index)));
+    s.valid = true;
+    s.step = rom.U32(p);
+    s.length = rom.S32(p + 4);
+    s.loop_start = rom.S32(p + 8);
+    s.data = p + 12;
+
+    return s;
+}
+
+// Returns entry `index` of the Dungeon Dice Monsters revision's sample table at `table`, with valid = false if agbsf2
+// can't read it. The revision's samples have no loop.
+SampleInfo DungeonDiceSampleAt(const Rom& rom, uint32_t table, int index)
+{
+    SampleInfo s;
+    const uint32_t entry = table + 8 * uint32_t(index);
+    if (PlausibleDungeonDiceSample(rom, entry))
+    {
+        const uint32_t word = rom.U32(entry + 4);
+        s.valid = true;
+        s.period = word & 0xFFFF;
+        s.length = int32_t((word >> 20) * 16);
+        s.data = rom.U32(entry);
+    }
+
+    return s;
+}
+
+// Returns sample `index` of revision `revision`'s sample table at `table`, with valid = false if agbsf2 can't read it.
+SampleInfo SampleAt(const Rom& rom, uint32_t table, int index, Revision revision)
+{
+    return revision == Revision::kDungeonDiceMonsters ? DungeonDiceSampleAt(rom, table, index)
+                                                      : SampleHeaderAt(rom, table, index);
 }
 
 // Returns true if `used` is nonempty and every referenced sample has a plausible header at `table`.
@@ -406,7 +442,7 @@ bool SampleTableFits(const Rom& rom, uint32_t table, const std::vector<int>& use
 {
     for (int idx : used)
     {
-        if (!ReadableSample(rom, table, idx, Revision::kUltimateMasters))
+        if (!SampleHeaderAt(rom, table, idx).valid)
         {
             return false;
         }
@@ -464,43 +500,144 @@ std::vector<int> UsedSamples(const Rom& rom, uint32_t song_table, int song_count
     return used;
 }
 
-// Returns the song tables the play-song routine could load: its entry is table + song * 36 (song * 9 * 4), or song * 28
-// (song * 7 * 4) in the Rave Master revision, song * 24 (song * 3 * 8) in the Eternal Duelist revision, or song * 20
-// (song * 5 * 4) in the Dungeon Dice Monsters revision. Sets `exact` if they come from the routine's code, rather than
-// from code that only works out an address the same way.
-std::set<uint32_t> SongTablesFromCode(const Rom& rom, Revision revision, bool& exact)
+// Code that loads one of the driver's tables, and the index of its ldr of the table.
+struct TableCode
 {
-    // Ultimate Masters: lsls r0,r4,#3 / adds r0,r0,r4 / lsls r0,r0,#2 / ldr r1,=table / adds r2,r0,r1 / ldrh r1,[r2] /
-    // ldrh r0,[r2,#2] / lsls r0,r0,#16 / orrs r1,r0. WCT 2004 has the song number in r5 and the entry's address in r3,
-    // and Rave Master subtracts the song number where the others add it.
-    std::vector<Pattern> code = {Exact(0x00E0), Exact(0x1900), Exact(0x0080), HiByte(0x4900), Exact(0x1842),
-                                 Exact(0x8811), Exact(0x8850), Exact(0x0400), Exact(0x4301)};
-    if (revision == Revision::kWct2004)
+    std::vector<Pattern> code;
+    int ldr = 0;
+};
+
+// Returns the address that the code in `table` loads, or 0 if no match of the code loads one. A revision without such
+// code gives an empty pattern. FindThumb() would match that at every halfword.
+uint32_t TableFromCode(const Rom& rom, const TableCode& table)
+{
+    return table.code.empty() ? 0 : FindLiteral(rom, table.code, table.ldr);
+}
+
+// How the play-song routine works out the address of a song's entry: it shifts the song number left by `first_shift`,
+// adds the song number to it (or subtracts it if `subtracts` is set), and shifts the sum left by `second_shift`.
+struct SongEntrySum
+{
+    int first_shift = 3;
+    bool subtracts = false;
+    int second_shift = 2;
+};
+
+// The code that loads each of a revision's tables, and the sum that gives a song's entry.
+struct RevisionCode
+{
+    TableCode song_start;    // code in the play-song routine that loads the song table
+    SongEntrySum song_entry; // the play-song routine's sum for a song's entry
+    TableCode note_start;    // code in the note start that loads the sample table
+    TableCode volume;        // code that loads the volume table
+    TableCode psg_freq;      // code that loads the PSG frequency table
+    TableCode noise;         // code that loads the noise table
+};
+
+// Returns the code that loads revision `r`'s tables.
+RevisionCode CodeFor(Revision r)
+{
+    RevisionCode c;
+    if (r == Revision::kUltimateMasters)
     {
-        code = {Exact(0x00E8), Exact(0x1940), Exact(0x0080), HiByte(0x4900), Exact(0x1843),
-                Exact(0x8819), Exact(0x8858), Exact(0x0400), Exact(0x4301)};
-    }
-    else if (revision == Revision::kRaveMaster)
-    {
-        code[1] = Exact(0x1B00);
-    }
-    else if (revision == Revision::kEternalDuelist)
-    {
-        code[0] = Exact(0x0060);
-        code[2] = Exact(0x00C0);
-    }
-    else if (revision == Revision::kDungeonDiceMonsters)
-    {
-        // lsls r0,r4,#2 / adds r0,r0,r4 / lsls r0,r0,#2 / ldr r1,=table / adds r1,r0,r1 / ldrh r4,[r1,#2] /
-        // lsls r0,r4,#16 / ldrh r5,[r1] / orrs r0,r5
-        code = {Exact(0x00A0), Exact(0x1900), Exact(0x0080), HiByte(0x4900), Exact(0x1841),
-                Exact(0x884C), Exact(0x0420), Exact(0x880D), Exact(0x4328)};
+        // Song start: lsls r0,r4,#3 / adds r0,r0,r4 / lsls r0,r0,#2 / ldr r1,=table / adds r2,r0,r1 / ldrh r1,[r2] /
+        // ldrh r0,[r2,#2] / lsls r0,r0,#16 / orrs r1,r0. A song's entry is at table + song * 36 (song * 9 * 4).
+        // Note start: ldr r3,=0xFFF / ands r3,r7 / movs r0,#0xA0 / lsls r0,#8 / ands r0,r7 / cmp r0,#0 / bne /
+        // ldr r1,=sample_table. DirectSound output: ldrb r2,[r2,#3] / lsls r1,r2,#6 / ldr r0,=volume_table /
+        // adds r1,r1,r0. Square 1 output: ldr r0,=freq_table / movs r7,#0 / ldrsh r1,[r5,r7] / lsls r1,#1 / adds /
+        // ldrh. Noise output: ldr r1,=noise_table / movs r4,#0x24 / ldrsh r0,[r3,r4] / lsls r0,#1 / adds / ldrh.
+        c.song_start = {{Exact(0x00E0), Exact(0x1900), Exact(0x0080), HiByte(0x4900), Exact(0x1842), Exact(0x8811),
+                         Exact(0x8850), Exact(0x0400), Exact(0x4301)},
+                        3};
+        c.note_start = {{HiByte(0x4B00), Exact(0x403B), Exact(0x20A0), Exact(0x0200), Exact(0x4038), Exact(0x2800),
+                         HiByte(0xD100), HiByte(0x4900)},
+                        7};
+        c.volume = {{Exact(0x78D2), Exact(0x0191), HiByte(0x4800), Exact(0x1809)}, 2};
+        c.psg_freq = {{HiByte(0x4800), Exact(0x2700), Exact(0x5FE9), Exact(0x0049), Exact(0x1809), Exact(0x880D)}, 0};
+        c.noise = {{HiByte(0x4900), Exact(0x2424), Exact(0x5F18), Exact(0x0040), Exact(0x1840), Exact(0x8800)}, 0};
+        return c;
     }
 
-    std::set<uint32_t> tables;
-    for (uint32_t hit : FindThumb(rom, code))
+    // Dungeon Dice Monsters. Song start: lsls r0,r4,#2 / adds r0,r0,r4 / lsls r0,r0,#2 / ldr r1,=table /
+    // adds r1,r0,r1 / ldrh r4,[r1,#2] / lsls r0,r4,#16 / ldrh r5,[r1] / orrs r0,r5. A song's entry is at
+    // table + song * 20 (song * 5 * 4). Voice start: lsls r1,r2,#3 / ldr r0,=sample_table / adds r0,r1,r0 /
+    // ldr r5,[r0] / ldr r1,[r0,#4]. Square 1 output: ldr r1,=freq_table / movs r4,#0 / ldrsh r0,[r6,r4] / lsls r0,#1 /
+    // adds / ldrh. The frequency table holds its noise settings too, and it has no volume table.
+    if (r == Revision::kDungeonDiceMonsters)
     {
-        tables.insert(ThumbLiteral(rom, hit + 6));
+        c.song_start = {{Exact(0x00A0), Exact(0x1900), Exact(0x0080), HiByte(0x4900), Exact(0x1841), Exact(0x884C),
+                         Exact(0x0420), Exact(0x880D), Exact(0x4328)},
+                        3};
+        c.song_entry = {2, false, 2};
+        c.note_start = {{Exact(0x00D1), HiByte(0x4800), Exact(0x1808), Exact(0x6805), Exact(0x6841)}, 1};
+        c.psg_freq = {{HiByte(0x4900), Exact(0x2400), Exact(0x5F30), Exact(0x0040), Exact(0x1840), Exact(0x8800)}, 0};
+        return c;
+    }
+
+    // Eternal Duelist. Song start: as in Ultimate Masters, with lsls r0,r4,#1 and lsls r0,r0,#3. A song's entry is at
+    // table + song * 24 (song * 3 * 8). Note start: ldr r1,=sample_table / lsls r0,r4,#2 / adds r0,r0,r1 /
+    // ldr r2,[r0] / lsls r0,r3,#1 / ldr r1,=pitch_table / adds / ldrh r1,[r0] / ldr r0,[r2] / muls r0,r1. Square 1
+    // output: ldr r0,=freq_table / movs r3,#0 / ldrsh r1,[r7,r3] / lsls r1,#1 / adds / ldrh r5,[r1]. Noise output:
+    // ldr r1,=noise_table / movs r3,#0x18 / ldrsh r0,[r7,r3] / lsls r0,#1 / adds / ldrh. Its voices have no pan, and it
+    // has no volume table.
+    if (r == Revision::kEternalDuelist)
+    {
+        c.song_start = {{Exact(0x0060), Exact(0x1900), Exact(0x00C0), HiByte(0x4900), Exact(0x1842), Exact(0x8811),
+                         Exact(0x8850), Exact(0x0400), Exact(0x4301)},
+                        3};
+        c.song_entry = {1, false, 3};
+        c.note_start = {{HiByte(0x4900), Exact(0x00A0), Exact(0x1840), Exact(0x6802), Exact(0x0058), HiByte(0x4900),
+                         Exact(0x1840), Exact(0x8801), Exact(0x6810), Exact(0x4348)},
+                        0};
+        c.psg_freq = {{HiByte(0x4800), Exact(0x2300), Exact(0x5EF9), Exact(0x0049), Exact(0x1809), Exact(0x880D)}, 0};
+        c.noise = {{HiByte(0x4900), Exact(0x2318), Exact(0x5EF8), Exact(0x0040), Exact(0x1840), Exact(0x8800)}, 0};
+        return c;
+    }
+
+    // WCT 2004. Song start: as in Ultimate Masters, with the song number in r5 and the entry's address in r3. The Rave
+    // Master revision has the Ultimate Masters code with subs r0,r0,r4 in place of the adds. A Rave Master song's entry
+    // is at table + song * 28 (song * 7 * 4). Note start: ldr r1,=sample_table / ldr r0,=0xFFF / ands r0,r6 /
+    // lsls r0,#2 / adds r0,r0,r1 / ldr r5,[r0]. DirectSound and PSG output: ldrb r0,[r7,#3] / lsls r0,#4 /
+    // ldr r1,=volume_table / adds r1,r0,r1 / movs r0,#0xF / ands r0,r4. Square 1 output: ldr r0,=freq_table /
+    // movs r2,#0 / ldrsh r1,[r7,r2] / lsls r1,#1 / adds / ldrh r4,[r1]. Noise output: as in Ultimate Masters, with
+    // ldrsh r0,[r7,r4]. The Rave Master revision has other registers in some of them.
+    const bool rave_master = r == Revision::kRaveMaster;
+    if (rave_master)
+    {
+        c.song_start = {{Exact(0x00E0), Exact(0x1B00), Exact(0x0080), HiByte(0x4900), Exact(0x1842), Exact(0x8811),
+                         Exact(0x8850), Exact(0x0400), Exact(0x4301)},
+                        3};
+        c.song_entry.subtracts = true;
+    }
+    else
+    {
+        c.song_start = {{Exact(0x00E8), Exact(0x1940), Exact(0x0080), HiByte(0x4900), Exact(0x1843), Exact(0x8819),
+                         Exact(0x8858), Exact(0x0400), Exact(0x4301)},
+                        3};
+    }
+
+    c.note_start = {{HiByte(0x4900), HiByte(0x4800), Exact(rave_master ? 0x4028 : 0x4030), Exact(0x0080), Exact(0x1840),
+                     Exact(rave_master ? 0x6802 : 0x6805)},
+                    0};
+    c.volume = {{Exact(0x78F8), Exact(0x0100), HiByte(0x4900), Exact(0x1841), Exact(0x200F),
+                 Exact(rave_master ? 0x4028 : 0x4020)},
+                2};
+    c.psg_freq = {{HiByte(0x4800), Exact(0x2200), Exact(0x5EB9), Exact(0x0049), Exact(0x1809),
+                   Exact(rave_master ? 0x880D : 0x880C)},
+                  0};
+    c.noise = {{HiByte(0x4900), Exact(0x2424), Exact(0x5F38), Exact(0x0040), Exact(0x1840), Exact(0x8800)}, 0};
+
+    return c;
+}
+
+// Returns the song tables that the play-song routine could load, found with the patterns in `code`. Sets `exact` if
+// they come from the routine's code, rather than from code that only works out a song's entry with the same sum.
+std::set<uint32_t> SongTablesFromCode(const Rom& rom, const RevisionCode& code, bool& exact)
+{
+    std::set<uint32_t> tables;
+    for (uint32_t hit : FindThumb(rom, code.song_start.code))
+    {
+        tables.insert(ThumbLiteral(rom, hit + 2 * uint32_t(code.song_start.ldr)));
     }
 
     exact = !tables.empty();
@@ -509,22 +646,18 @@ std::set<uint32_t> SongTablesFromCode(const Rom& rom, Revision revision, bool& e
         return tables;
     }
 
-    // The same computation with any registers: a shift, an add (a subtract in Rave Master) and another shift.
-    const bool subtract = revision == Revision::kRaveMaster;
-    const int first_shift = revision == Revision::kEternalDuelist        ? 1
-                            : revision == Revision::kDungeonDiceMonsters ? 2
-                                                                         : 3;
-    const int second_shift = revision == Revision::kEternalDuelist ? 3 : 2;
+    // The same sum with any registers: a shift, an add or a subtract, and another shift.
+    const SongEntrySum& sum = code.song_entry;
     const uint8_t* d = rom.Ptr(kRomBase);
     for (size_t i = 0; i + 10 <= rom.Size(); i += 2)
     {
         auto h = [&](int k)
         {
-            return uint16_t(d[i + 2 * k] | (d[i + 2 * k + 1] << 8));
+            return xsflib::LoadLe16(d + i + 2 * k);
         };
 
         const uint16_t a = h(0), b = h(1), c = h(2), l = h(3);
-        if ((a & 0xFFC0) != uint16_t(first_shift << 6)) // lsls rd, rm, #first_shift
+        if ((a & 0xFFC0) != uint16_t(sum.first_shift << 6)) // lsls rd, rm, #first_shift
         {
             continue;
         }
@@ -534,11 +667,11 @@ std::set<uint32_t> SongTablesFromCode(const Rom& rom, Revision revision, bool& e
         const int bd = b & 7, bn = (b >> 3) & 7, bm = (b >> 6) & 7;
         const bool adds = (b & 0xFE00) == 0x1800 && ((bn == rd && bm == rm) || (bn == rm && bm == rd));
         const bool subs = (b & 0xFE00) == 0x1A00 && bn == rd && bm == rm;
-        if (bd != rd || !(subtract ? subs : adds))
+        if (bd != rd || !(sum.subtracts ? subs : adds))
         {
             continue;
         }
-        if (c != uint16_t((second_shift << 6) | (rd << 3) | rd)) // lsls rd, rd, #second_shift
+        if (c != uint16_t((sum.second_shift << 6) | (rd << 3) | rd)) // lsls rd, rd, #second_shift
         {
             continue;
         }
@@ -591,16 +724,18 @@ uint32_t ScanForSongTable(const Rom& rom, Revision revision)
     return best;
 }
 
-// Finds the song table from the play-song routine's code, or failing that in the data. Returns 0 and sets `error` if
-// the code loads a table without songs, or returns 0 with `error` empty if there's no sign of a song table.
-uint32_t FindSongTable(const Rom& rom, Revision revision, std::vector<std::string>& log, std::string& error)
+// Finds the song table from the play-song routine's code, or failing that in the data. `code` holds the revision's
+// patterns. Returns 0 and sets `error` if the code loads a table without songs, or returns 0 with `error` empty if
+// there's no sign of a song table.
+uint32_t FindSongTable(const Rom& rom, Revision revision, const RevisionCode& code, std::vector<std::string>& log,
+                       std::string& error)
 {
     // Choose the candidate table with the most songs. The play-song routine's code gives the table's address, so its
     // table only needs one song that parses. Tables found through other code must also pass the data scan's layout
     // checks. Other revisions compute the same address, and some of their jingles can parse despite the different
     // command sets.
     bool exact = false;
-    const std::set<uint32_t> candidates = SongTablesFromCode(rom, revision, exact);
+    const std::set<uint32_t> candidates = SongTablesFromCode(rom, code, exact);
     uint32_t loaded = 0; // the first of them in the ROM
     uint32_t best = 0;
     int best_valid = 0;
@@ -650,85 +785,6 @@ uint32_t FindSongTable(const Rom& rom, Revision revision, std::vector<std::strin
     error.clear();
 
     return 0;
-}
-
-// Code that loads one of the driver's tables, and the index of its ldr of the table.
-struct TableCode
-{
-    std::vector<Pattern> code;
-    int ldr = 0;
-};
-
-// The code that loads each of a revision's tables, apart from the song table.
-struct RevisionCode
-{
-    TableCode note_start; // code in the note start that loads the sample table
-    TableCode volume;     // code that loads the volume table
-    TableCode psg_freq;   // code that loads the PSG frequency table
-    TableCode noise;      // code that loads the noise table
-};
-
-// Returns the code that loads revision `r`'s tables.
-RevisionCode CodeFor(Revision r)
-{
-    RevisionCode c;
-    if (r == Revision::kUltimateMasters)
-    {
-        // Note start: ldr r3,=0xFFF / ands r3,r7 / movs r0,#0xA0 / lsls r0,#8 / ands r0,r7 / cmp r0,#0 / bne /
-        // ldr r1,=sample_table. DirectSound output: ldrb r2,[r2,#3] / lsls r1,r2,#6 / ldr r0,=volume_table /
-        // adds r1,r1,r0. Square 1 output: ldr r0,=freq_table / movs r7,#0 / ldrsh r1,[r5,r7] / lsls r1,#1 / adds /
-        // ldrh. Noise output: ldr r1,=noise_table / movs r4,#0x24 / ldrsh r0,[r3,r4] / lsls r0,#1 / adds / ldrh.
-        c.note_start = {{HiByte(0x4B00), Exact(0x403B), Exact(0x20A0), Exact(0x0200), Exact(0x4038), Exact(0x2800),
-                         HiByte(0xD100), HiByte(0x4900)},
-                        7};
-        c.volume = {{Exact(0x78D2), Exact(0x0191), HiByte(0x4800), Exact(0x1809)}, 2};
-        c.psg_freq = {{HiByte(0x4800), Exact(0x2700), Exact(0x5FE9), Exact(0x0049), Exact(0x1809), Exact(0x880D)}, 0};
-        c.noise = {{HiByte(0x4900), Exact(0x2424), Exact(0x5F18), Exact(0x0040), Exact(0x1840), Exact(0x8800)}, 0};
-        return c;
-    }
-
-    // Dungeon Dice Monsters. Voice start: lsls r1,r2,#3 / ldr r0,=sample_table / adds r0,r1,r0 / ldr r5,[r0] /
-    // ldr r1,[r0,#4]. Square 1 output: ldr r1,=freq_table / movs r4,#0 / ldrsh r0,[r6,r4] / lsls r0,#1 / adds / ldrh.
-    // The frequency table holds its noise settings too, and it has no volume table.
-    if (r == Revision::kDungeonDiceMonsters)
-    {
-        c.note_start = {{Exact(0x00D1), HiByte(0x4800), Exact(0x1808), Exact(0x6805), Exact(0x6841)}, 1};
-        c.psg_freq = {{HiByte(0x4900), Exact(0x2400), Exact(0x5F30), Exact(0x0040), Exact(0x1840), Exact(0x8800)}, 0};
-        return c;
-    }
-
-    // Eternal Duelist. Note start: ldr r1,=sample_table / lsls r0,r4,#2 / adds r0,r0,r1 / ldr r2,[r0] / lsls r0,r3,#1 /
-    // ldr r1,=pitch_table / adds / ldrh r1,[r0] / ldr r0,[r2] / muls r0,r1. Square 1 output: ldr r0,=freq_table /
-    // movs r3,#0 / ldrsh r1,[r7,r3] / lsls r1,#1 / adds / ldrh r5,[r1]. Noise output: ldr r1,=noise_table /
-    // movs r3,#0x18 / ldrsh r0,[r7,r3] / lsls r0,#1 / adds / ldrh. Its voices have no pan, and it has no volume table.
-    if (r == Revision::kEternalDuelist)
-    {
-        c.note_start = {{HiByte(0x4900), Exact(0x00A0), Exact(0x1840), Exact(0x6802), Exact(0x0058), HiByte(0x4900),
-                         Exact(0x1840), Exact(0x8801), Exact(0x6810), Exact(0x4348)},
-                        0};
-        c.psg_freq = {{HiByte(0x4800), Exact(0x2300), Exact(0x5EF9), Exact(0x0049), Exact(0x1809), Exact(0x880D)}, 0};
-        c.noise = {{HiByte(0x4900), Exact(0x2318), Exact(0x5EF8), Exact(0x0040), Exact(0x1840), Exact(0x8800)}, 0};
-        return c;
-    }
-
-    // WCT 2004. Note start: ldr r1,=sample_table / ldr r0,=0xFFF / ands r0,r6 / lsls r0,#2 / adds r0,r0,r1 /
-    // ldr r5,[r0]. DirectSound and PSG output: ldrb r0,[r7,#3] / lsls r0,#4 / ldr r1,=volume_table / adds r1,r0,r1 /
-    // movs r0,#0xF / ands r0,r4. Square 1 output: ldr r0,=freq_table / movs r2,#0 / ldrsh r1,[r7,r2] / lsls r1,#1 /
-    // adds / ldrh r4,[r1]. Noise output: as in Ultimate Masters, with ldrsh r0,[r7,r4]. The Rave Master revision has
-    // other registers in some of them.
-    const bool rave_master = r == Revision::kRaveMaster;
-    c.note_start = {{HiByte(0x4900), HiByte(0x4800), Exact(rave_master ? 0x4028 : 0x4030), Exact(0x0080), Exact(0x1840),
-                     Exact(rave_master ? 0x6802 : 0x6805)},
-                    0};
-    c.volume = {{Exact(0x78F8), Exact(0x0100), HiByte(0x4900), Exact(0x1841), Exact(0x200F),
-                 Exact(rave_master ? 0x4028 : 0x4020)},
-                2};
-    c.psg_freq = {{HiByte(0x4800), Exact(0x2200), Exact(0x5EB9), Exact(0x0049), Exact(0x1809),
-                   Exact(rave_master ? 0x880D : 0x880C)},
-                  0};
-    c.noise = {{HiByte(0x4900), Exact(0x2424), Exact(0x5F38), Exact(0x0040), Exact(0x1840), Exact(0x8800)}, 0};
-
-    return c;
 }
 
 // Scans for a table containing the samples in `used`, which must be nonempty. Returns 0 if none is found. Adds a
@@ -809,7 +865,7 @@ uint32_t FindSampleTable(const Rom& rom, const std::vector<int>& used, const Tab
         std::vector<int> missing;
         for (int idx : used)
         {
-            if (!ReadableSample(rom, t, idx, revision))
+            if (!SampleAt(rom, t, idx, revision).valid)
             {
                 missing.push_back(idx);
             }
@@ -879,18 +935,25 @@ double TimerRate(const Rom& rom, uint32_t timer_table)
         return 0;
     }
 
+    // The timer counts the CPU's cycles, divided by the prescaler that bits 16-17 of the setting select.
     constexpr int kPrescale[4] = {1, 64, 256, 1024};
     const uint32_t v = rom.U32(timer_table);
-    const double rate = kCpuHz / ((0x10000 - (v & 0xFFFF)) * kPrescale[(v >> 16) & 3]);
+    const double rate = double(kSecondCycles) / ((0x10000 - (v & 0xFFFF)) * kPrescale[(v >> 16) & 3]);
     return rate >= 4000 && rate <= 65536 ? rate : 0;
 }
 
+// The older revisions of the driver that agbsf2 reads, by the fifth opcode that the command reader compares a command
+// with. The fourth is EF in each of them.
+constexpr std::pair<int, Revision> kOlderRevisions[] = {{0xFA, Revision::kWct2004},
+                                                        {0xF5, Revision::kRaveMaster},
+                                                        {0xF3, Revision::kEternalDuelist},
+                                                        {0xFC, Revision::kDungeonDiceMonsters}};
+
 // Finds the driver's command reader, and works out the driver's revision from the opcodes it compares the command with:
-// ldrb rX,[rY] / cmp rX,#0xFC / ble, then FF, and FD in the Ultimate Masters revision or FE in older ones. Of those,
-// the WCT 2004 revision goes on with EF and FA, the Rave Master revision with EF and F5, the Eternal Duelist revision
-// with EF and F3, and the Dungeon Dice Monsters revision with EF and FC. Sets `reader` to the address of the reader, or
-// to 0 if there's none. Returns false and sets `error` for another older revision that agbsf2 can't read. A ROM
-// without a command reader that this recognises is taken to have the Ultimate Masters revision.
+// ldrb rX,[rY] / cmp rX,#0xFC / ble, then FF, and FD in the Ultimate Masters revision or FE in older ones. The older
+// ones go on with EF and an opcode from kOlderRevisions. Sets `reader` to the address of the reader, or to 0 if there's
+// none. Returns false and sets `error` for another older revision that agbsf2 can't read. A ROM without a command
+// reader that this recognises is taken to have the Ultimate Masters revision.
 bool FindRevision(const Rom& rom, Revision& revision, uint32_t& reader, std::vector<std::string>& log,
                   std::string& error)
 {
@@ -901,7 +964,7 @@ bool FindRevision(const Rom& rom, Revision& revision, uint32_t& reader, std::vec
     const size_t count = rom.Size() / 2;
     auto h = [&](size_t i)
     {
-        return uint16_t(d[2 * i] | (d[2 * i + 1] << 8));
+        return xsflib::LoadLe16(d + 2 * i);
     };
 
     for (size_t i = 0; i + 3 <= count; i++)
@@ -934,8 +997,9 @@ bool FindRevision(const Rom& rom, Revision& revision, uint32_t& reader, std::vec
         }
 
         reader = kRomBase + uint32_t(2 * i);
-        if (opcodes[2] == 0xFE && (opcodes[3] != 0xEF || (opcodes[4] != 0xFA && opcodes[4] != 0xF5 &&
-                                                          opcodes[4] != 0xF3 && opcodes[4] != 0xFC)))
+        const auto* older = std::find_if(std::begin(kOlderRevisions), std::end(kOlderRevisions),
+                                         [&](const auto& r) { return r.first == opcodes[4]; });
+        if (opcodes[2] == 0xFE && (opcodes[3] != 0xEF || older == std::end(kOlderRevisions)))
         {
             error =
                 "this game has an older revision of Konami's driver with commands that agbsf2 can't read (its "
@@ -944,11 +1008,7 @@ bool FindRevision(const Rom& rom, Revision& revision, uint32_t& reader, std::vec
             return false;
         }
 
-        revision = opcodes[2] == 0xFD   ? Revision::kUltimateMasters
-                   : opcodes[4] == 0xFA ? Revision::kWct2004
-                   : opcodes[4] == 0xF5 ? Revision::kRaveMaster
-                   : opcodes[4] == 0xF3 ? Revision::kEternalDuelist
-                                        : Revision::kDungeonDiceMonsters;
+        revision = opcodes[2] == 0xFD ? Revision::kUltimateMasters : older->second;
         log.push_back(std::string(RevisionName(revision)) + " revision of the driver (from the command reader at " +
                       Hex(reader) + ")");
         return true;
@@ -1003,45 +1063,282 @@ bool FindDungeonDiceTables(const Rom& rom, DriverInfo& info, std::string& error)
     return true;
 }
 
+// Checks that the table addresses in `overrides` fall within the ROM. Returns false and sets `error` if one doesn't.
+bool CheckOverrides(const Rom& rom, const DriverOverrides& overrides, std::string& error)
+{
+    for (const auto& [what, address] :
+         {std::pair("song", overrides.song_table), std::pair("sample", overrides.sample_table)})
+    {
+        if (address && !rom.Contains(address))
+        {
+            error = std::string("the ") + what + " table address " + Hex(address) + " is outside the ROM (" +
+                    Hex(kRomBase) + "-" + Hex(rom.End() - 1) + ")";
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Finds the song table and counts its songs, unless `overrides` gives them. `reader` is the address of the command
+// reader, or 0 if there's none. Returns false and sets `error` if there's no song table with songs agbsf2 can read.
+bool FindSongs(const Rom& rom, const DriverOverrides& overrides, const RevisionCode& code, uint32_t reader,
+               DriverInfo& info, std::string& error)
+{
+    if (overrides.song_table)
+    {
+        info.song_table = overrides.song_table;
+        info.log.push_back("song table " + Hex(overrides.song_table) + " (user supplied)");
+    }
+    else
+    {
+        info.song_table = FindSongTable(rom, info.revision, code, info.log, error);
+        if (!info.song_table)
+        {
+            // The command reader shows that the game has the driver, so a song table that can't be found is an error.
+            if (reader && error.empty())
+            {
+                error = "found the command reader of the " + std::string(RevisionName(info.revision)) +
+                        " revision of Konami's driver, at " + Hex(reader) +
+                        ", but not its song table (--song-table and --song-count override detection)";
+            }
+
+            return false;
+        }
+    }
+
+    if (overrides.song_count > 0)
+    {
+        info.song_count = overrides.song_count;
+    }
+    else
+    {
+        const SongCount songs = CountSongs(rom, info.song_table, info.revision);
+        info.song_count = songs.entries;
+        if (songs.unreadable >= 0)
+        {
+            info.warnings.push_back("song " + std::to_string(songs.unreadable) +
+                                    "'s tracks don't read cleanly, so the song table is taken to end before it "
+                                    "(--song-count overrides this)");
+        }
+    }
+    if (info.song_count <= 0)
+    {
+        error = "the song table at " + Hex(info.song_table) +
+                " holds no songs agbsf2 can read (--song-count overrides this)";
+        return false;
+    }
+
+    return true;
+}
+
+// Finds the sample table, unless `overrides` gives it. Returns false and sets `error` if the songs play samples and
+// there's no table that agbsf2 can use.
+bool FindSamples(const Rom& rom, const DriverOverrides& overrides, const RevisionCode& code, DriverInfo& info,
+                 std::string& error)
+{
+    if (overrides.sample_table)
+    {
+        info.sample_table = overrides.sample_table;
+        info.log.push_back("sample table " + Hex(overrides.sample_table) + " (user supplied)");
+        return true;
+    }
+
+    const std::vector<int> used = UsedSamples(rom, info.song_table, info.song_count, info.revision, info.sample_map);
+    info.sample_table = FindSampleTable(rom, used, code.note_start, info.revision, info.log, info.warnings, error);
+    return info.sample_table != 0 || used.empty();
+}
+
+// Finishes the detection of the Dungeon Dice Monsters revision, and logs its tables. The revision's noise settings are
+// entries of the frequency table. The revision has no mixer: each FIFO plays at the rate of the samples on it.
+void FinishDungeonDice(DriverInfo& info)
+{
+    constexpr uint32_t kNoiseEntry = 16 * kDungeonDiceNoiseNote;
+    info.noise_table = info.psg_freq_table ? info.psg_freq_table + 2 * kNoiseEntry : 0;
+    if (!info.psg_freq_table)
+    {
+        info.warnings.push_back(
+            "PSG frequency table not found, so square notes are left out, wave notes play at "
+            "the wrong pitch and noise notes use default settings");
+    }
+
+    char buf[160];
+    std::snprintf(buf, sizeof buf, "%d song%s, samples at their own rates, PSG freq table %s, noise table %s",
+                  info.song_count, info.song_count == 1 ? "" : "s",
+                  info.psg_freq_table ? Hex(info.psg_freq_table).c_str() : "(not found)",
+                  info.noise_table ? Hex(info.noise_table).c_str() : "(default)");
+    info.log.push_back(buf);
+
+    std::snprintf(buf, sizeof buf, "sample map %s, sample period table %s, wave table %s, wave volume table %s",
+                  Hex(info.sample_map).c_str(), Hex(info.sample_period_table).c_str(),
+                  info.wave_table ? Hex(info.wave_table).c_str() : "(default)",
+                  info.wave_volume_table ? Hex(info.wave_volume_table).c_str() : "(default)");
+    info.log.push_back(buf);
+
+    info.bend_kept = false;
+}
+
+// Finds the wave tables from the code that loads a wave into the wave RAM.
+void FindWaveTables(const Rom& rom, DriverInfo& info)
+{
+    // Wave RAM loader: push {r4,lr} / adds r4,r0,#0 / ldr r3,=wave_table / cmp r2,#0 / beq / movs r0,#0x80 /
+    // ands r0,r1 / cmp r0,#0 / beq / ldr r3,=sfx_wave_table. A wave from 80 up comes from the second table, which sound
+    // effects use. A GSF rip zeroes the code of the second table, which the songs don't run.
+    const std::vector<uint32_t> wave_code = FindThumb(rom, {Exact(0xB510), Exact(0x1C04), HiByte(0x4B00), Exact(0x2A00),
+                                                            HiByte(0xD000), Exact(0x2080), Exact(0x4008)});
+    for (uint32_t hit : wave_code)
+    {
+        if (!rom.Contains(ThumbLiteral(rom, hit + 4)))
+        {
+            continue;
+        }
+
+        info.wave_table = ThumbLiteral(rom, hit + 4);
+        const bool second = rom.U16(hit + 14) == 0x2800 && (rom.U16(hit + 16) & 0xFF00) == 0xD000 &&
+                            (rom.U16(hit + 18) & 0xFF00) == 0x4B00 && rom.Contains(ThumbLiteral(rom, hit + 18));
+        info.sfx_wave_table = second ? ThumbLiteral(rom, hit + 18) : 0;
+        break;
+    }
+
+    // The Eternal Duelist revision's loader has no check for volume 0 and no second table: push {r4,lr} /
+    // lsls r1,r1,#4 / adds r1,r1,r2 / lsls r1,r1,#4 / ldr r2,=wave_table / adds r1,r1,r2.
+    if (!info.wave_table)
+    {
+        info.wave_table = FindLiteral(
+            rom, {Exact(0xB510), Exact(0x0109), Exact(0x1889), Exact(0x0109), HiByte(0x4A00), Exact(0x1889)}, 4);
+    }
+}
+
+// Returns the address of the driver's timer table, or of a timer setting that stands for the table, or 0 if there's
+// none.
+uint32_t FindTimerTable(const Rom& rom)
+{
+    // Mixer rate: ldr r1,=timer_table / lsls r0,r3,#2 / adds / ldr r0,[r0] / movs r1,#0x80 / lsls r1,#16 / orrs / str.
+    // Some builds load the setting into r3 instead: ldr r3,[r0] / movs r0,#0x80 / lsls r0,#16 / orrs r0,r3.
+    uint32_t table = FindLiteral(rom,
+                                 {HiByte(0x4900), Exact(0x0098), Exact(0x1840), Exact(0x6800), Exact(0x2180),
+                                  Exact(0x0409), Exact(0x4308), Exact(0x6010)},
+                                 0);
+    if (!table)
+    {
+        table = FindLiteral(rom,
+                            {HiByte(0x4900), Exact(0x0098), Exact(0x1840), Exact(0x6803), Exact(0x2080), Exact(0x0400),
+                             Exact(0x4318), Exact(0x6010)},
+                            0);
+    }
+
+    // The Rave Master revision loads the setting itself: ldr r0,[r1,#8] / adds r1,#0x38 / ldr r0,=setting /
+    // str r0,[r1]. Eternal Duelist has ldr r1,=0x04000100 / ldr r0,=setting / str r0,[r1]. The literal then stands for
+    // the table.
+    if (!table)
+    {
+        const std::vector<uint32_t> hits =
+            FindThumb(rom, {Exact(0x6888), Exact(0x3138), HiByte(0x4800), Exact(0x6008)});
+        table = hits.empty() ? 0 : LiteralAddress(rom, hits.front() + 4);
+    }
+    if (!table)
+    {
+        for (uint32_t hit : FindThumb(rom, {HiByte(0x4900), HiByte(0x4800), Exact(0x6008)}))
+        {
+            if (ThumbLiteral(rom, hit) == 0x04000100)
+            {
+                table = LiteralAddress(rom, hit + 2);
+                break;
+            }
+        }
+    }
+
+    return table;
+}
+
+// Sets the mixer's output rate: the rate in `overrides`, or else the rate that the timer table gives, or else 21024 Hz.
+void SetMixRate(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info)
+{
+    const double timer_rate = TimerRate(rom, info.timer_table);
+    if (overrides.mix_rate > 0)
+    {
+        info.mix_rate = overrides.mix_rate;
+    }
+    else if (timer_rate > 0)
+    {
+        info.mix_rate = timer_rate;
+    }
+    else
+    {
+        info.mix_rate = double(kSecondCycles) / (0x10000 - 0xFCE2);
+        info.warnings.push_back(info.timer_table
+                                    ? "mixer rate in the timer table is outside 4000-65536 Hz, assuming 21024 Hz"
+                                    : "mixer timer not found, assuming 21024 Hz");
+    }
+}
+
+// Logs the song count, the mixer rate and the tables, for every revision but Dungeon Dice Monsters.
+void LogTables(DriverInfo& info)
+{
+    char buf[160];
+    std::snprintf(buf, sizeof buf, "%d song%s, mixer %.2f Hz, volume table %s, PSG freq table %s", info.song_count,
+                  info.song_count == 1 ? "" : "s", info.mix_rate,
+                  info.volume_table ? Hex(info.volume_table).c_str() : "(computed)",
+                  info.psg_freq_table ? Hex(info.psg_freq_table).c_str() : "(default)");
+    info.log.push_back(buf);
+
+    std::snprintf(buf, sizeof buf, "noise table %s, wave table %s, timer table %s",
+                  info.noise_table ? Hex(info.noise_table).c_str() : "(default)",
+                  info.wave_table ? Hex(info.wave_table).c_str() : "(default)",
+                  info.timer_table ? Hex(info.timer_table).c_str() : "(default)");
+    info.log.push_back(buf);
+}
+
+// Works out whether the driver keeps a pitch bend for the notes after it. In the Ultimate Masters revision, the answer
+// comes from the bend command's code and goes into the log.
+void FindBendKept(const Rom& rom, DriverInfo& info)
+{
+    // The older revisions never keep a bend.
+    if (info.revision != Revision::kUltimateMasters)
+    {
+        info.bend_kept = false;
+        return;
+    }
+
+    // Pitch bend: the bend command hands on the bent pitch with ldrh r0,[r6,#0x1c] / mov r7,r8 / strh r0,[r7,#6] /
+    // ldrh r0,[r6] / adds r0,r0,r4 / strh r0,[r7] / ldrb r0,[r7,#5] / movs r1,#0x20 / orrs r0,r1 / strb r0,[r7,#5]. A
+    // driver that keeps the bend for later notes stores it next, with strh r4,[r6,#0x1e].
+    const std::vector<uint32_t> bend_code =
+        FindThumb(rom, {Exact(0x8BB0), Exact(0x4647), Exact(0x80F8), Exact(0x8830), Exact(0x1900), Exact(0x8038),
+                        Exact(0x7978), Exact(0x2120), Exact(0x4308), Exact(0x7178)});
+    if (bend_code.empty())
+    {
+        info.log.push_back("pitch bend code not recognised, assuming a bend carries over to later notes");
+    }
+    else
+    {
+        info.bend_kept = rom.U16(bend_code.front() + 20) == 0x83F4;
+        info.log.push_back(info.bend_kept ? "pitch bends carry over to later notes (from bend code)"
+                                          : "pitch bends apply to the playing note only (from bend code)");
+    }
+}
+
 } // namespace
+
+std::optional<uint16_t> TableEntry(const Rom& rom, uint32_t table, int index)
+{
+    const uint32_t a = table + 2 * uint32_t(index);
+    if (!table || !rom.Contains(a, 2))
+    {
+        return std::nullopt;
+    }
+
+    return rom.U16(a);
+}
 
 SampleInfo DriverInfo::Sample(const Rom& rom, int index) const
 {
-    SampleInfo s;
     if (!sample_table || index < 0)
     {
-        return s;
+        return SampleInfo();
     }
 
-    // The Dungeon Dice Monsters revision's samples have no loop.
-    if (revision == Revision::kDungeonDiceMonsters)
-    {
-        const uint32_t entry = sample_table + 8 * uint32_t(index);
-        if (PlausibleDungeonDiceSample(rom, entry))
-        {
-            const uint32_t word = rom.U32(entry + 4);
-            s.valid = true;
-            s.period = word & 0xFFFF;
-            s.length = int32_t((word >> 20) * 16);
-            s.data = rom.U32(entry);
-        }
-
-        return s;
-    }
-
-    const uint32_t p = rom.U32(sample_table + 4 * uint32_t(index));
-    if (!PlausibleSampleHeader(rom, p))
-    {
-        return s;
-    }
-
-    s.valid = true;
-    s.step = rom.U32(p);
-    s.length = rom.S32(p + 4);
-    s.loop_start = rom.S32(p + 8);
-    s.data = p + 12;
-
-    return s;
+    return SampleAt(rom, sample_table, index, revision);
 }
 
 int DriverInfo::TableLevel(const Rom& rom, int volume, int pan) const
@@ -1090,13 +1387,9 @@ int DriverInfo::VoiceLevel(const Rom& rom, int volume, int pan) const
 uint16_t DriverInfo::NoiseSetting(const Rom& rom, int note) const
 {
     // The driver reads whatever lies at the note's place, before the table for a negative note.
-    if (noise_table)
+    if (const std::optional<uint16_t> setting = TableEntry(rom, noise_table, note))
     {
-        const uint32_t a = noise_table + 2 * uint32_t(note);
-        if (rom.Contains(a, 2))
-        {
-            return rom.U16(a);
-        }
+        return *setting;
     }
 
     // Fallback matching Yu-Gi-Oh! Ultimate Masters Edition's table: shift = note + 1.
@@ -1106,240 +1399,42 @@ uint16_t DriverInfo::NoiseSetting(const Rom& rom, int note) const
 bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info, std::string& error)
 {
     info = DriverInfo();
-    auto& log = info.log;
-
-    // Check that table address overrides fall within the ROM.
-    for (const auto& [what, address] :
-         {std::pair("song", overrides.song_table), std::pair("sample", overrides.sample_table)})
-    {
-        if (address && !rom.Contains(address))
-        {
-            error = std::string("the ") + what + " table address " + Hex(address) + " is outside the ROM (" +
-                    Hex(kRomBase) + "-" + Hex(rom.End() - 1) + ")";
-            return false;
-        }
-    }
-
-    uint32_t reader = 0;
-    if (!FindRevision(rom, info.revision, reader, log, error))
+    if (!CheckOverrides(rom, overrides, error))
     {
         return false;
     }
 
+    uint32_t reader = 0;
+    if (!FindRevision(rom, info.revision, reader, info.log, error))
+    {
+        return false;
+    }
+
+    const RevisionCode code = CodeFor(info.revision);
     const bool dungeon_dice = info.revision == Revision::kDungeonDiceMonsters;
     if (dungeon_dice && !FindDungeonDiceTables(rom, info, error))
     {
         return false;
     }
-
-    if (overrides.song_table)
+    if (!FindSongs(rom, overrides, code, reader, info, error) || !FindSamples(rom, overrides, code, info, error))
     {
-        info.song_table = overrides.song_table;
-        log.push_back("song table " + Hex(overrides.song_table) + " (user supplied)");
-    }
-    else
-    {
-        info.song_table = FindSongTable(rom, info.revision, log, error);
-        if (!info.song_table)
-        {
-            // The command reader shows that the game has the driver, so a song table that can't be found is an error.
-            if (reader && error.empty())
-            {
-                error = "found the command reader of the " + std::string(RevisionName(info.revision)) +
-                        " revision of Konami's driver, at " + Hex(reader) +
-                        ", but not its song table (--song-table and --song-count override detection)";
-            }
-
-            return false;
-        }
-    }
-
-    if (overrides.song_count > 0)
-    {
-        info.song_count = overrides.song_count;
-    }
-    else
-    {
-        const SongCount songs = CountSongs(rom, info.song_table, info.revision);
-        info.song_count = songs.entries;
-        if (songs.unreadable >= 0)
-        {
-            info.warnings.push_back("song " + std::to_string(songs.unreadable) +
-                                    "'s tracks don't read cleanly, so the song table is taken to end before it "
-                                    "(--song-count overrides this)");
-        }
-    }
-    if (info.song_count <= 0)
-    {
-        error = "the song table at " + Hex(info.song_table) +
-                " holds no songs agbsf2 can read (--song-count overrides this)";
         return false;
     }
 
-    const RevisionCode code = CodeFor(info.revision);
-    const std::vector<int> used = UsedSamples(rom, info.song_table, info.song_count, info.revision, info.sample_map);
-    if (overrides.sample_table)
-    {
-        info.sample_table = overrides.sample_table;
-        log.push_back("sample table " + Hex(overrides.sample_table) + " (user supplied)");
-    }
-    else
-    {
-        info.sample_table = FindSampleTable(rom, used, code.note_start, info.revision, log, info.warnings, error);
-        if (!info.sample_table && !used.empty())
-        {
-            return false;
-        }
-    }
-
-    info.volume_table = code.volume.code.empty() ? 0 : FindLiteral(rom, code.volume.code, code.volume.ldr);
-    info.psg_freq_table = FindLiteral(rom, code.psg_freq.code, code.psg_freq.ldr);
-    info.noise_table = code.noise.code.empty() ? 0 : FindLiteral(rom, code.noise.code, code.noise.ldr);
-
-    // The Dungeon Dice Monsters revision's noise settings are entries of the frequency table, and it has no mixer: each
-    // FIFO plays at the rate of the samples on it.
-    char buf[160];
+    info.volume_table = TableFromCode(rom, code.volume);
+    info.psg_freq_table = TableFromCode(rom, code.psg_freq);
+    info.noise_table = TableFromCode(rom, code.noise);
     if (dungeon_dice)
     {
-        constexpr uint32_t kNoiseEntry = 16 * kDungeonDiceNoiseNote;
-        info.noise_table = info.psg_freq_table ? info.psg_freq_table + 2 * kNoiseEntry : 0;
-        if (!info.psg_freq_table)
-        {
-            info.warnings.push_back(
-                "PSG frequency table not found, so square notes are left out, wave notes play at "
-                "the wrong pitch and noise notes use default settings");
-        }
-
-        std::snprintf(buf, sizeof buf, "%d song%s, samples at their own rates, PSG freq table %s, noise table %s",
-                      info.song_count, info.song_count == 1 ? "" : "s",
-                      info.psg_freq_table ? Hex(info.psg_freq_table).c_str() : "(not found)",
-                      info.noise_table ? Hex(info.noise_table).c_str() : "(default)");
-        log.push_back(buf);
-
-        std::snprintf(buf, sizeof buf, "sample map %s, sample period table %s, wave table %s, wave volume table %s",
-                      Hex(info.sample_map).c_str(), Hex(info.sample_period_table).c_str(),
-                      info.wave_table ? Hex(info.wave_table).c_str() : "(default)",
-                      info.wave_volume_table ? Hex(info.wave_volume_table).c_str() : "(default)");
-        log.push_back(buf);
-
-        info.bend_kept = false;
+        FinishDungeonDice(info);
         return true;
     }
 
-    // Wave RAM loader: push {r4,lr} / adds r4,r0,#0 / ldr r3,=wave_table / cmp r2,#0 / beq / movs r0,#0x80 /
-    // ands r0,r1 / cmp r0,#0 / beq / ldr r3,=sfx_wave_table. A wave from 80 up comes from the second table, which sound
-    // effects use. A GSF rip zeroes the code of the second table, which the songs don't run.
-    const std::vector<uint32_t> wave_code = FindThumb(rom, {Exact(0xB510), Exact(0x1C04), HiByte(0x4B00), Exact(0x2A00),
-                                                            HiByte(0xD000), Exact(0x2080), Exact(0x4008)});
-    for (uint32_t hit : wave_code)
-    {
-        if (!rom.Contains(ThumbLiteral(rom, hit + 4)))
-        {
-            continue;
-        }
-
-        info.wave_table = ThumbLiteral(rom, hit + 4);
-        const bool second = rom.U16(hit + 14) == 0x2800 && (rom.U16(hit + 16) & 0xFF00) == 0xD000 &&
-                            (rom.U16(hit + 18) & 0xFF00) == 0x4B00 && rom.Contains(ThumbLiteral(rom, hit + 18));
-        info.sfx_wave_table = second ? ThumbLiteral(rom, hit + 18) : 0;
-        break;
-    }
-
-    // The Eternal Duelist revision's loader has no check for volume 0 and no second table: push {r4,lr} /
-    // lsls r1,r1,#4 / adds r1,r1,r2 / lsls r1,r1,#4 / ldr r2,=wave_table / adds r1,r1,r2.
-    if (!info.wave_table)
-    {
-        info.wave_table = FindLiteral(
-            rom, {Exact(0xB510), Exact(0x0109), Exact(0x1889), Exact(0x0109), HiByte(0x4A00), Exact(0x1889)}, 4);
-    }
-
-    // Mixer rate: ldr r1,=timer_table / lsls r0,r3,#2 / adds / ldr r0,[r0] / movs r1,#0x80 / lsls r1,#16 / orrs / str.
-    // Some builds load the setting into r3 instead: ldr r3,[r0] / movs r0,#0x80 / lsls r0,#16 / orrs r0,r3.
-    info.timer_table = FindLiteral(rom,
-                                   {HiByte(0x4900), Exact(0x0098), Exact(0x1840), Exact(0x6800), Exact(0x2180),
-                                    Exact(0x0409), Exact(0x4308), Exact(0x6010)},
-                                   0);
-    if (!info.timer_table)
-    {
-        info.timer_table = FindLiteral(rom,
-                                       {HiByte(0x4900), Exact(0x0098), Exact(0x1840), Exact(0x6803), Exact(0x2080),
-                                        Exact(0x0400), Exact(0x4318), Exact(0x6010)},
-                                       0);
-    }
-
-    // The Rave Master revision loads the setting itself: ldr r0,[r1,#8] / adds r1,#0x38 / ldr r0,=setting /
-    // str r0,[r1]. Eternal Duelist has ldr r1,=0x04000100 / ldr r0,=setting / str r0,[r1]. The literal then stands for
-    // the table.
-    if (!info.timer_table)
-    {
-        const std::vector<uint32_t> hits =
-            FindThumb(rom, {Exact(0x6888), Exact(0x3138), HiByte(0x4800), Exact(0x6008)});
-        info.timer_table = hits.empty() ? 0 : LiteralAddress(rom, hits.front() + 4);
-    }
-    if (!info.timer_table)
-    {
-        for (uint32_t hit : FindThumb(rom, {HiByte(0x4900), HiByte(0x4800), Exact(0x6008)}))
-        {
-            if (ThumbLiteral(rom, hit) == 0x04000100)
-            {
-                info.timer_table = LiteralAddress(rom, hit + 2);
-                break;
-            }
-        }
-    }
-
-    const double timer_rate = TimerRate(rom, info.timer_table);
-    if (overrides.mix_rate > 0)
-    {
-        info.mix_rate = overrides.mix_rate;
-    }
-    else if (timer_rate > 0)
-    {
-        info.mix_rate = timer_rate;
-    }
-    else
-    {
-        info.mix_rate = kCpuHz / (0x10000 - 0xFCE2);
-        info.warnings.push_back(info.timer_table
-                                    ? "mixer rate in the timer table is outside 4000-65536 Hz, assuming 21024 Hz"
-                                    : "mixer timer not found, assuming 21024 Hz");
-    }
-
-    std::snprintf(buf, sizeof buf, "%d song%s, mixer %.2f Hz, volume table %s, PSG freq table %s", info.song_count,
-                  info.song_count == 1 ? "" : "s", info.mix_rate,
-                  info.volume_table ? Hex(info.volume_table).c_str() : "(computed)",
-                  info.psg_freq_table ? Hex(info.psg_freq_table).c_str() : "(default)");
-    log.push_back(buf);
-
-    std::snprintf(buf, sizeof buf, "noise table %s, wave table %s, timer table %s",
-                  info.noise_table ? Hex(info.noise_table).c_str() : "(default)",
-                  info.wave_table ? Hex(info.wave_table).c_str() : "(default)",
-                  info.timer_table ? Hex(info.timer_table).c_str() : "(default)");
-    log.push_back(buf);
-
-    // The older revisions never keep a bend.
-    if (info.revision != Revision::kUltimateMasters)
-    {
-        info.bend_kept = false;
-        return true;
-    }
-
-    // Pitch bend: the bend command hands on the bent pitch with ldrh r0,[r6,#0x1c] / mov r7,r8 / strh r0,[r7,#6] /
-    // ldrh r0,[r6] / adds r0,r0,r4 / strh r0,[r7] / ldrb r0,[r7,#5] / movs r1,#0x20 / orrs r0,r1 / strb r0,[r7,#5]. A
-    // driver that keeps the bend for later notes stores it next, with strh r4,[r6,#0x1e].
-    const std::vector<uint32_t> bend_code =
-        FindThumb(rom, {Exact(0x8BB0), Exact(0x4647), Exact(0x80F8), Exact(0x8830), Exact(0x1900), Exact(0x8038),
-                        Exact(0x7978), Exact(0x2120), Exact(0x4308), Exact(0x7178)});
-    if (bend_code.empty())
-    {
-        log.push_back("pitch bend code not recognised, assuming a bend carries over to later notes");
-    }
-    else
-    {
-        info.bend_kept = rom.U16(bend_code.front() + 20) == 0x83F4;
-        log.push_back(info.bend_kept ? "pitch bends carry over to later notes (from bend code)"
-                                     : "pitch bends apply to the playing note only (from bend code)");
-    }
+    FindWaveTables(rom, info);
+    info.timer_table = FindTimerTable(rom);
+    SetMixRate(rom, overrides, info);
+    LogTables(info);
+    FindBendKept(rom, info);
 
     return true;
 }

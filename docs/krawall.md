@@ -235,7 +235,7 @@ something with 0. The slides of the volume and the pan stop at 0 and 64, and
 | 24 | Volume slide (S3M) and slide to a note | the slide's part between rows, at its last step |
 | 25 | Channel volume | sets the channel volume, up to 64 |
 | 26 | Channel volume slide | `x0` up, `0y` down, between rows |
-| 27 | Offset | starts the note 256 times the operand points into its sample, or moves the playing note there |
+| 27 | Offset | starts the note 256 times the operand points into its sample, or moves the playing note there; an operand of 0 does nothing |
 | 28 | Pan slide | `x0` left, `0y` right, by twice the digit, between rows; `xF` and `Fy` once, on the row |
 | 29 | Retrig | `xy`: starts the note again every so many ticks, and changes the volume by `x`: -1, -2, -4, -8 or -16 for 1-5, times 2/3 for 6, a half for 7, +1, +2, +4, +8 or +16 for 9-13, times 3/2 for 14 and twice for 15 |
 | 30 | Tremolo | sets the speed and depth; between rows, adds the wave's point times the depth over 64 to the volume |
@@ -282,9 +282,11 @@ is 0. The envelope's volume is the level times the fade over 2^23, 0 to 64,
 which multiplies the volume and the channel volume, over 4096. After the
 release, each tick takes the fade's step from the fade, and the note stops at
 0. The pan envelope works the same way, from -64 at level 0 to 64 at level
-64, added to the channel's pan, and the instrument's vibrato adds the wave's
-point times its depth over 256 to the period that the effects leave, and moves
-on by its rate, a quarter of a point at a time.
+64, added to the channel's pan. It differs from the volume envelope in three
+ways: it reaches each point a tick sooner, a loop takes it back to a tick past
+the loop's point, and its end never stops the note. The instrument's vibrato
+adds the wave's point times its depth over 256 to the period that the effects
+leave. It moves on by its rate, a quarter of a point at a time.
 
 ### The next row
 
