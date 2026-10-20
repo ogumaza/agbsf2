@@ -80,7 +80,7 @@ public:
     }
 
     // The shared SoundFont numbers the instruments of every module together.
-    void ShareSoundfont() override
+    void ShareSoundfont(const ConvertSettings&) override
     {
         shared_ = std::make_unique<InstrumentSet>();
     }

@@ -119,12 +119,14 @@ struct Part
 };
 
 // Adds a zone for each part that plays `voice` with SoundFont sample `sample`, with the drum kit's pan `rhythm_pan`.
+// With `exclusive`, a PSG voice with a slow release gets the exclusive class of its channel (see SoundfontBuilder()).
 void AddParts(const DriverInfo& info, const Voice& voice, int sample, bool loops, const std::vector<Part>& parts,
-              int rhythm_pan, sf2::Instrument& instrument)
+              int rhythm_pan, bool exclusive, sf2::Instrument& instrument)
 {
     // The samples hold the levels of the sample and PSG channels (see DirectLevel() and PsgLevel()).
     const int psg = voice.PsgChannel();
     const VolumeEnvelope env = EnvelopeFor(info, voice);
+    const int exclusive_class = exclusive && psg && env.release > kExclusiveRelease ? psg : 0;
     for (const Part& part : parts)
     {
         sf2::Zone z;
@@ -142,6 +144,10 @@ void AddParts(const DriverInfo& info, const Voice& voice, int sample, bool loops
         if (loops)
         {
             z.generators.push_back(sf2::Generator::Value(sf2::kSampleModes, 1));
+        }
+        if (exclusive_class)
+        {
+            z.generators.push_back(sf2::Generator::Value(sf2::kExclusiveClass, exclusive_class));
         }
         z.generators.push_back(sf2::Generator::Value(sf2::kSampleId, sample));
 
@@ -305,7 +311,8 @@ std::vector<int16_t> RenderSynth(const Rom& rom, const DriverInfo& info, Synth s
     return out;
 }
 
-SoundfontBuilder::SoundfontBuilder(const Rom& rom, const DriverInfo& info) : rom_(rom), info_(info)
+SoundfontBuilder::SoundfontBuilder(const Rom& rom, const DriverInfo& info, bool psg_exclusive)
+    : rom_(rom), info_(info), psg_exclusive_(psg_exclusive)
 {
 }
 
@@ -429,7 +436,7 @@ void SoundfontBuilder::AddSynthKey(int instrument, uint32_t address, int key)
     {
         const int sample = SynthSample(voice, fixed_key >= 0 ? fixed_key : key);
         AddParts(info_, voice, sample, Looped(file_.samples[size_t(sample)]), {{key, key, 0.0, fixed_key >= 0}}, pan,
-                 file_.instruments[size_t(instrument)]);
+                 false, file_.instruments[size_t(instrument)]);
     }
 }
 
@@ -815,7 +822,7 @@ bool SoundfontBuilder::AddZone(sf2::Instrument& instrument, const Voice& voice, 
         }
     }
 
-    AddParts(info_, voice, sample, Looped(s), parts, rhythm_pan, instrument);
+    AddParts(info_, voice, sample, Looped(s), parts, rhythm_pan, psg_exclusive_, instrument);
 
     return true;
 }

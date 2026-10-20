@@ -81,7 +81,7 @@ public:
     }
 
     // Starts the shared SoundFont. SongBanks gives each sequence's presets their bank and programs.
-    void ShareSoundfont() override
+    void ShareSoundfont(const ConvertSettings&) override
     {
         shared_ = std::make_unique<SoundfontBuilder>(rom_, PsgShare(info_.revision), SongCount());
     }

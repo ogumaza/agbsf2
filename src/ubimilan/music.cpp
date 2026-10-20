@@ -64,7 +64,7 @@ public:
     }
 
     // The shared SoundFont collects the instruments of every song.
-    void ShareSoundfont() override
+    void ShareSoundfont(const ConvertSettings&) override
     {
         shared_ = std::make_unique<InstrumentSet>();
     }

@@ -191,6 +191,7 @@ Each file's results go in a folder next to it, as above.
 | `-t, --tracks LIST` | only these tracks, e.g. `4-15`; in Konami's driver, 0-3 are the PSG channels and 4 and up the sample voices, in Quintet's, 0-3 are the PSG channels and 4 and 5 the PCM channels, in Brownie Brown's, 0-3 are the music's PSG channels, 4-7 the sound effects' and 8 and up the sample channels, in Ubisoft Milan's, 0-2 are the PSG channels and 9 the kit, and in Krawall, the module's channels, 0-19 |
 | `--single-sf2` | one SoundFont for all songs (see [Output](#output) for its banks) |
 | `--voice-channels` | MP2K only: a MIDI channel for each of the driver's sound channels instead of each track, so that notes stop where the game cuts them off, though a track's notes then move between channels (see [MIDI from MP2K](#midi-from-mp2k)) |
+| `--psg-exclusive` | MP2K only: an exclusive class for each PSG channel in the SoundFont. A track's next note on a PSG channel then ends the slow release of the note before it. The game cuts that note off there too. A note that another track cuts off still fades out (see [SoundFont from MP2K](#soundfont-from-mp2k)) |
 | `--frame-timing` | put each event on the frame the game plays it in, rather than on the song's beat (see [Output](#output)) |
 | `--dump` | also write a text listing of every command of each song (`NAME_NN.txt`) |
 | `--info` | print each driver found, with its tables and a list of its songs, then exit. The track count, length and loop reflect the current conversion options |
@@ -552,6 +553,10 @@ stops its sound where the driver's channel stops. So a track's notes move
 between channels, and each channel's program, volume, pan and pitch bend follow
 the track whose note it plays; `--tracks` still picks the song's tracks.
 
+`--psg-exclusive` shortens the fades of the PSG notes that the same track's
+next note cuts off. It changes only the SoundFont.
+[SoundFont from MP2K](#soundfont-from-mp2k) says how.
+
 ### SoundFont from MP2K
 
 Each song's SoundFont has a preset for each voice the song plays, named
@@ -585,7 +590,24 @@ those played on channel 10.
   and the driver's master volume scales the samples. Camelot's mixer leaves the
   master volume out, and plays the samples a little louder against the PSG.
   The samples themselves hold these levels and the PSG's. A zone's attenuation
-  would hold them in other players, but FluidSynth applies only 0.4 of it.
+  could hold them too, but FluidSynth and BASSMIDI apply only 0.4 of it.
+
+With `--psg-exclusive`, each zone of a PSG voice with a slow release gets the
+exclusive class of the voice's channel: 1 and 2 for the squares, 3 for the wave
+and 4 for the noise. When a note of a class starts, FluidSynth ends the notes of
+the same class on its MIDI channel. Their sound then fades by 96 dB in 0.32 s.
+Each MIDI channel holds one track. In the game, a track's next note on a PSG
+channel takes the channel. The note before it stops there at once. A zone whose
+release is quicker than FluidSynth's fade gets no class. The fade would slow
+that release down. A note that another track cuts off still fades out.
+`--voice-channels` stops it with an All Sound Off. The SoundFont specification
+limits a class to the notes of one preset. FluidSynth applies it to every note
+on the MIDI channel. The note's program doesn't matter there. That matches the
+driver. A player that follows the specification lets a note of another voice
+fade out. The option works with `--single-sf2` and `--voice-channels`. With
+`--voice-channels`, a cut-off PSG note of a class fades out over 0.32 s in
+FluidSynth. The All Sound Off alone would stop it at once (see
+[FluidSynth](#fluidsynth)).
 
 With `--single-sf2`, each voice keeps its number as its program, and banks tell
 apart the voices that songs play under the same number: the first one is in
@@ -970,6 +992,8 @@ SoundFonts.
 * **Notes cut off.** The driver stops a note at once when it gives the note's
   channel to another, even partway through its release. Without
   `--voice-channels`, a SoundFont player lets the note fade out instead.
+  `--psg-exclusive` shortens the fade of a PSG note that its track's next note
+  cuts off. In FluidSynth, the note then fades out in 0.32 s.
 * **Changes that miss older notes.** When a track changes its volume, pan or
   pitch in the tick in which it starts a note, the driver gives the change to
   the new note alone, and the track's older notes keep their volume, pan and
@@ -980,7 +1004,10 @@ SoundFonts.
   approximated with the reverb send.
 * **Changed voices.** A track can change its copy of a voice with extended
   commands, and a note can start partway into its sample. The SoundFont plays
-  the voice group's voices as they are, from the start.
+  the voice group's voices as they are, from the start. With
+  `--psg-exclusive`, the exclusive classes follow those voices too. A track
+  that moves its voice to another PSG channel can then end a note that the
+  driver keeps playing.
 * **Sound register writes.** A track can write to the sound registers. The
   conversion leaves these out, with a warning.
 * **Mixer character.** The driver mixes at its own rate, often 13379 Hz, with
@@ -1067,14 +1094,25 @@ SoundFonts.
 
 ### FluidSynth
 
-SoundFont output follows the specification and targets FluidSynth. One player
-difference affects every driver's conversions:
+SoundFont output follows the specification. One of FluidSynth's departures
+from it affects every driver's conversions:
 
 * **Level.** FluidSynth runs the SoundFont low-pass filter on every note. That
   includes notes whose filter is open. The filter divides the level by the
   square root of its Q. FluidSynth converts the default resonance of 0 dB to a
   Q of 0.707. Every note therefore plays 1.5 dB louder than the SoundFont
   specifies. Multiplying FluidSynth's gain by 0.84 gives the specified level.
+
+Another affects MP2K's conversions with `--voice-channels`:
+
+* **All Sound Off.** With `--voice-channels`, an All Sound Off (CC120) stops
+  each cut-off note on the tick on which the game cuts it off. FluidSynth
+  ignores the All Sound Off where the channel's next note starts on the same
+  tick with the same key. The cut-off note then fades out over its release.
+  With `--psg-exclusive` as well, FluidSynth also ignores it where a PSG note
+  with a slow release cuts off another. The cut-off note then fades out in
+  0.32 s. A player that follows the MIDI specification stops the note at once.
+  agbsf2 keeps the All Sound Off where the game cuts the note off.
 
 ## Internals
 

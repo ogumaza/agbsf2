@@ -1657,6 +1657,156 @@ void TestVoiceChannelsLoop()
     SEQLIB_CHECK((m.Find(0xE0) == Events{{12 * kMidiTicks, {0xE0, 0x00, 0x40}}}));
 }
 
+// Returns the zones of the instrument that each preset of bank 0 plays, by the preset's program: for each zone after
+// the global zone, its key range and its exclusive class, or 0 for none.
+std::map<int, std::vector<std::pair<int, int>>> ExclusiveClasses(const Sf2Records& sf)
+{
+    std::map<int, std::vector<std::pair<int, int>>> out;
+    for (size_t p = 0; p + 1 < sf.Count("phdr", 38); p++)
+    {
+        const uint8_t* h = sf.Record("phdr", 38, p);
+        if (Le16(h + 22) != 0)
+        {
+            continue;
+        }
+
+        const size_t instrument = Le16(sf.Record("pgen", 4, Le16(sf.Record("pbag", 4, Le16(h + 24)))) + 2);
+        const size_t first = Le16(sf.Record("inst", 22, instrument) + 20);
+        const size_t end = Le16(sf.Record("inst", 22, instrument + 1) + 20);
+        for (size_t z = first + 1; z < end; z++)
+        {
+            const std::map<uint16_t, uint16_t> gens = sf.ZoneGens(z);
+            const auto found = gens.find(sf2::kExclusiveClass);
+            out[Le16(h + 20)].push_back({gens.at(sf2::kKeyRange), found != gens.end() ? found->second : 0});
+        }
+    }
+
+    return out;
+}
+
+// Returns true if each zone in `zones` has the exclusive class `expected`.
+bool AllOfClass(const std::vector<std::pair<int, int>>& zones, int expected)
+{
+    return !zones.empty() &&
+           std::all_of(zones.begin(), zones.end(), [&](const auto& zone) { return zone.second == expected; });
+}
+
+// A test cartridge, and the driver that detection finds in it.
+struct ExclusiveSong
+{
+    Rom rom;
+    DriverInfo info;
+};
+
+// Returns a cartridge whose song plays programs 0 to 9: a voice of each PSG channel with a slow release, a square 1
+// voice with the fixed-frequency bit, two square 1 voices with quick releases, a sample with a slow release, a drum kit
+// and a key split.
+ExclusiveSong MakeExclusiveSong()
+{
+    Cart cart;
+    const uint32_t wave = cart.Place(std::vector<uint8_t>(16, 0x5A));
+    const uint32_t sample = cart.Wave(Saw(), 13379, 0);
+    const uint32_t kit = cart.VoiceGroup({{36, Cart::Voice(4, 0, 50, {0, 0, 15, 3})},
+                                          {38, Cart::Voice(4, 0, 50, {0, 0, 15, 0})},
+                                          {40, Cart::Voice(0, sample, 60, {255, 0, 255, 250})}});
+    const uint32_t split = cart.VoiceGroup({{0, Cart::Voice(2, 1, 60, {0, 0, 15, 5})}, {1, Cart::Voice(0, sample)}});
+    const uint32_t voices = cart.VoiceGroup({{0, Cart::Voice(1, 2, 60, {0, 0, 15, 7})},
+                                             {1, Cart::Voice(2, 2, 60, {0, 0, 15, 1})},
+                                             {2, Cart::Voice(3, wave, 60, {0, 0, 15, 4})},
+                                             {3, Cart::Voice(4, 0, 60, {0, 0, 15, 2})},
+                                             {4, Cart::Voice(1 | kVoiceFixed, 2, 60, {0, 0, 15, 7})},
+                                             {5, Cart::Voice(1, 2, 60, {0, 0, 15, 0})},
+                                             {6, Cart::Voice(1, 2, 60, {0, 0, 2, 1})},
+                                             {7, Cart::Voice(0, sample, 60, {255, 0, 255, 250})},
+                                             {8, Cart::Voice(kVoiceDrumKit, kit)},
+                                             {9, cart.KeySplit(split, 59)}});
+
+    Track t;
+    t.Cmd(kCmdTempo, 75).Cmd(kCmdVol, 127);
+    for (int v = 0; v < 8; v++)
+    {
+        t.Cmd(kCmdVoice, v).Note(12, 60, 100).Wait(24);
+    }
+    t.Cmd(kCmdVoice, 8).Note(12, 36, 100).Wait(24).Note(12, 38, 100).Wait(24).Note(12, 40, 100).Wait(24);
+    t.Cmd(kCmdVoice, 9).Note(12, 50, 100).Wait(24).Note(12, 70, 100).Wait(24).Fine();
+    cart.Song({t}, voices);
+    const Rom rom = cart.ToRom();
+
+    return {rom, Detect(rom)};
+}
+
+// With --psg-exclusive, each zone of a PSG voice whose release is slower than FluidSynth's fade for an exclusive class
+// gets the class of its channel: 1 and 2 for the squares, 3 for the wave and 4 for the noise. The fixed-frequency bit
+// doesn't change the channel. A PSG voice with a quicker release and a sample voice get no class. The MIDI file stays
+// the same, and the SoundFont without the option has no class.
+void TestPsgExclusive()
+{
+    const ExclusiveSong song = MakeExclusiveSong();
+    ConvertSettings plain = TempSettings("exclusive_plain");
+    ConvertSettings exclusive = TempSettings("exclusive");
+    exclusive.psg_exclusive = true;
+
+    const SongReport a = ConvertSong(song.rom, song.info, 0, plain, nullptr);
+    const SongReport b = ConvertSong(song.rom, song.info, 0, exclusive, nullptr);
+
+    SEQLIB_CHECK(a.ok && b.ok);
+    SEQLIB_CHECK(ReadAll(a.midi_path) == ReadAll(b.midi_path));
+    const auto without = ExclusiveClasses(ReadSf2(a.sf2_path));
+    const auto with = ExclusiveClasses(ReadSf2(b.sf2_path));
+    SEQLIB_REQUIRE_EQ(without.size(), 10);
+    SEQLIB_REQUIRE_EQ(with.size(), 10);
+    for (const auto& [program, zones] : without)
+    {
+        SEQLIB_CHECK(AllOfClass(zones, 0));
+    }
+
+    SEQLIB_CHECK(AllOfClass(with.at(0), 1));
+    SEQLIB_CHECK(AllOfClass(with.at(1), 2));
+    SEQLIB_CHECK(AllOfClass(with.at(2), 3));
+    SEQLIB_CHECK(AllOfClass(with.at(3), 4));
+    SEQLIB_CHECK(AllOfClass(with.at(4), 1));
+    SEQLIB_CHECK(AllOfClass(with.at(5), 0));
+    SEQLIB_CHECK(AllOfClass(with.at(6), 0));
+    SEQLIB_CHECK(AllOfClass(with.at(7), 0));
+
+    // The drum kit's slow noise on key 36 has the class, and its quick noise and its sample don't. The key split's
+    // square 2 has class 2 on the keys up to 59, and its sample has none.
+    using Zones = std::vector<std::pair<int, int>>;
+    SEQLIB_CHECK((with.at(8) == Zones{{0x2424, 4}, {0x2626, 0}, {0x2828, 0}}));
+    SEQLIB_CHECK((with.at(9) == Zones{{0x2300, 2}, {0x3B24, 2}, {0x7F3C, 0}}));
+}
+
+// The exclusive classes go in a shared SoundFont too. They also go in the SoundFont of a conversion with a MIDI channel
+// for each of the driver's sound channels. The option doesn't change that conversion's MIDI file either.
+void TestPsgExclusiveShared()
+{
+    const ExclusiveSong song = MakeExclusiveSong();
+    ConvertSettings exclusive = TempSettings("exclusive_shared");
+    exclusive.psg_exclusive = true;
+    ConvertSettings voices = TempSettings("exclusive_voices_plain");
+    voices.voice_channels = true;
+    ConvertSettings exclusive_voices = TempSettings("exclusive_voices");
+    exclusive_voices.voice_channels = true;
+    exclusive_voices.psg_exclusive = true;
+    SoundfontBuilder shared(song.rom, song.info, true);
+    const std::string shared_path = Utf8(TempPath("exclusive_shared.sf2"));
+    std::string error;
+
+    const SongReport s = ConvertSong(song.rom, song.info, 0, exclusive, &shared);
+    const bool written = shared.File().Write(shared_path, error);
+    const SongReport v = ConvertSong(song.rom, song.info, 0, voices, nullptr);
+    const SongReport w = ConvertSong(song.rom, song.info, 0, exclusive_voices, nullptr);
+
+    SEQLIB_CHECK(s.ok && written && v.ok && w.ok);
+    SEQLIB_CHECK(ReadAll(v.midi_path) == ReadAll(w.midi_path));
+    for (const std::string& path : {shared_path, w.sf2_path})
+    {
+        const auto classes = ExclusiveClasses(ReadSf2(path));
+        SEQLIB_REQUIRE_EQ(classes.size(), 10);
+        SEQLIB_CHECK(AllOfClass(classes.at(0), 1) && AllOfClass(classes.at(3), 4) && AllOfClass(classes.at(5), 0));
+    }
+}
+
 // A compressed sample decodes to its first point and then a step from the table for each of the others: from the low
 // half of the second byte, and then from the high and low halves of each byte after it.
 void TestCompressedSample()
@@ -2273,6 +2423,8 @@ void RunTests()
     TestVoiceChannels();
     TestVoiceChannelsDrums();
     TestVoiceChannelsLoop();
+    TestPsgExclusive();
+    TestPsgExclusiveShared();
     TestCompressedSample();
     TestDroppedNotes();
     TestDoubledNote();

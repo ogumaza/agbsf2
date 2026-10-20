@@ -60,7 +60,7 @@ public:
     // The tunes that use the first tune's program map and instruments have their presets in bank 0, and each other pair
     // gets a bank of its own: 1, 2 and so on, past the drum channel's bank 128. The presets for notes with envelope
     // settings go in the banks after those.
-    void ShareSoundfont() override
+    void ShareSoundfont(const ConvertSettings&) override
     {
         std::map<std::pair<uint32_t, uint32_t>, int> banks;
         int next = 0;

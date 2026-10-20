@@ -1429,7 +1429,7 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
     }
 
     // The SoundFont's presets, in the song's file or the shared one.
-    SoundfontBuilder own(rom, info);
+    SoundfontBuilder own(rom, info, settings.psg_exclusive);
     SoundfontBuilder& sf = shared ? *shared : own;
     const Presets presets = AddPresets(sf, header, collected.notes, shared != nullptr);
     for (int program : presets.missing)

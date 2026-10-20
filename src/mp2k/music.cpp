@@ -69,11 +69,16 @@ public:
         return true;
     }
 
+    bool SupportsPsgExclusive() const override
+    {
+        return true;
+    }
+
     // Each voice that the songs play gets a preset, under its program number, in the first bank that doesn't have that
     // program yet (see SoundfontBuilder::SharedPreset()).
-    void ShareSoundfont() override
+    void ShareSoundfont(const ConvertSettings& settings) override
     {
-        shared_ = std::make_unique<SoundfontBuilder>(rom_, info_);
+        shared_ = std::make_unique<SoundfontBuilder>(rom_, info_, settings.psg_exclusive);
     }
 
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override

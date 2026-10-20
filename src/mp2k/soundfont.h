@@ -45,8 +45,12 @@ std::vector<int16_t> RenderSynth(const Rom& rom, const DriverInfo& info, Synth s
 class SoundfontBuilder
 {
 public:
-    // Keeps references to `rom` and `info`, which have to outlive the builder.
-    SoundfontBuilder(const Rom& rom, const DriverInfo& info);
+    // Keeps references to `rom` and `info`. Both have to outlive the builder. With `psg_exclusive`, each zone of a PSG
+    // voice whose release is slower than kExclusiveRelease gets the exclusive class of the voice's channel, 1 to 4. A
+    // note of the class then ends the notes of the class before it on its MIDI channel. The driver ends them there
+    // too: a track's next note on a PSG channel takes the channel. A quicker release gets no class. FluidSynth's fade
+    // would slow it down.
+    SoundfontBuilder(const Rom& rom, const DriverInfo& info, bool psg_exclusive = false);
 
     Sf2File& File()
     {
@@ -93,6 +97,7 @@ private:
 
     const Rom& rom_;
     const DriverInfo& info_;
+    bool psg_exclusive_;
     Sf2File file_;
     std::map<std::array<uint8_t, 12>, int> instruments_;    // by the voice's bytes
     std::map<std::pair<int, uint32_t>, int> samples_;       // by kind and source

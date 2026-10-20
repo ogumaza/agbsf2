@@ -67,6 +67,10 @@ void Usage(FILE* f)
                  "      --voice-channels  give each of the driver's sound channels a MIDI channel\n"
                  "                        (MP2K), so that notes stop where the game cuts them\n"
                  "                        off, though a track's notes then move between channels\n"
+                 "      --psg-exclusive   end a PSG note's slow release where its track's next\n"
+                 "                        note on the same PSG channel starts (MP2K). The game\n"
+                 "                        cuts it off there. A note that another track cuts off\n"
+                 "                        still fades out\n"
                  "      --frame-timing    put each event on the frame the game plays it in,\n"
                  "                        rather than on the song's beat\n"
                  "      --dump            also write a text listing of each song's sequence data\n"
@@ -343,6 +347,10 @@ std::optional<int> ParseArgs(const std::vector<std::string>& args, Options& o)
         {
             o.convert.voice_channels = true;
         }
+        else if (a == "--psg-exclusive")
+        {
+            o.convert.psg_exclusive = true;
+        }
         else if (a == "--frame-timing")
         {
             o.convert.frame_timing = true;
@@ -609,7 +617,7 @@ void ConvertSongs(Music& music, const ConvertSettings& settings, const std::stri
 
     if (o.single_sf2)
     {
-        music.ShareSoundfont();
+        music.ShareSoundfont(settings);
     }
 
     const fs::path out_dir = PathFromUtf8(settings.out_dir);
@@ -835,6 +843,16 @@ int ConvertFile(const std::string& input, const std::string& label, const Option
     if (o.convert.voice_channels && std::none_of(drivers.begin(), drivers.end(), voice_channels))
     {
         std::fprintf(stderr, "%swarning: --voice-channels only changes MP2K's conversions, so it's ignored\n",
+                     prefix.c_str());
+    }
+
+    const auto psg_exclusive = [](const FoundMusic& f)
+    {
+        return f.music->SupportsPsgExclusive();
+    };
+    if (o.convert.psg_exclusive && std::none_of(drivers.begin(), drivers.end(), psg_exclusive))
+    {
+        std::fprintf(stderr, "%swarning: --psg-exclusive only changes MP2K's SoundFonts and is ignored here\n",
                      prefix.c_str());
     }
 

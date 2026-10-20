@@ -59,7 +59,7 @@ public:
     }
 
     // SongBanks gives each song's presets their bank and programs in the shared SoundFont.
-    void ShareSoundfont() override
+    void ShareSoundfont(const ConvertSettings&) override
     {
         shared_ = std::make_unique<SoundfontBuilder>(rom_, info_, SongCount());
     }

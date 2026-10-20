@@ -47,6 +47,7 @@ struct ConvertSettings
     int loops = 2;                    // times a looping song's loop is played
     uint32_t track_mask = 0xFFFFFFFF; // tracks to include (bit t = track t; Krawall has 20, the others 16 at most)
     bool voice_channels = false;      // a MIDI channel for each of the driver's sound channels, where it can
+    bool psg_exclusive = false;       // an exclusive class for each PSG channel on the slow releases (MP2K)
     bool frame_timing = false;        // each event on the frame the driver plays it in, rather than on the beat
     std::string out_dir = ".";
     std::string base_name = "song";
@@ -97,8 +98,12 @@ public:
     // ConvertSettings::voice_channels. Only MP2K's conversion can.
     virtual bool SupportsVoiceChannels() const;
 
-    // Starts a shared SoundFont for all subsequent calls to ConvertSong().
-    virtual void ShareSoundfont() = 0;
+    // Returns true if the SoundFont can give the PSG voices an exclusive class for ConvertSettings::psg_exclusive. Only
+    // MP2K's conversion can.
+    virtual bool SupportsPsgExclusive() const;
+
+    // Starts a shared SoundFont for all subsequent calls to ConvertSong() with `settings`.
+    virtual void ShareSoundfont(const ConvertSettings& settings) = 0;
 
     // Writes the shared SoundFont. Returns false and sets `error` if it can't be written.
     virtual bool WriteSharedSoundfont(const std::string& path, std::string& error) = 0;

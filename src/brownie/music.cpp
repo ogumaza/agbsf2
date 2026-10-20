@@ -73,7 +73,7 @@ public:
     }
 
     // The shared SoundFont numbers the instruments of every song together.
-    void ShareSoundfont() override
+    void ShareSoundfont(const ConvertSettings&) override
     {
         shared_ = std::make_unique<InstrumentSet>();
     }

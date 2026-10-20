@@ -21,6 +21,10 @@ constexpr int kInstant = -12000;
 // The greatest attenuation, in centibels.
 constexpr int kSilent = 1440;
 
+// The release that FluidSynth gives a note when a note of the same exclusive class starts on its MIDI channel, in
+// timecents: 0.315 s for a fall of 96 dB. FluidSynth gives it in place of the zone's release, even a quicker one.
+constexpr int kExclusiveRelease = -2000;
+
 // The bank in which General MIDI players look for the drum channel's programs.
 constexpr int kDrumBank = 128;
 

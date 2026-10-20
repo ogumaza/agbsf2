@@ -161,6 +161,11 @@ bool Music::SupportsVoiceChannels() const
     return false;
 }
 
+bool Music::SupportsPsgExclusive() const
+{
+    return false;
+}
+
 std::string Music::FileNumber(int song) const
 {
     return SongNumber(song, 0);
