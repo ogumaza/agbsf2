@@ -3,10 +3,13 @@
 #include "konami/seqformat.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <string>
 
 #include "psg.h"
+#include "rom.h"
 
 namespace agbsf2::konami
 {

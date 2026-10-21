@@ -7,7 +7,7 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -19,8 +19,11 @@
 #include "midi.h"
 #include "music.h"
 #include "program.h"
+#include "rom.h"
 #include "sf2.h"
+#include "ubimilan/driver.h"
 #include "ubimilan/sequencer.h"
+#include "ubimilan/soundfont.h"
 
 namespace agbsf2::ubimilan
 {
@@ -46,15 +49,16 @@ struct Simulation
     std::vector<std::string> warnings;
 };
 
-// Plays a song for the conversion. A piece that loops plays its list of sequences `loops` times from its start, or with
-// `second`, from its second pass, which then plays the first once before it; one that doesn't plays until its track
-// stops and no voice plays. Notes that still sound at the end end with it.
-Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops, bool second)
+// Plays a song for the conversion. A piece that loops plays its list of sequences `loops` times from its start. From
+// LoopStart::kSecondPass, it plays them `loops` times from its second pass, after the first pass. A piece that doesn't
+// loop plays until its track stops and no voice plays. Notes that still sound at the end end with it.
+Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops, LoopStart start_pass)
 {
     Simulation sim;
     Sequencer seq(rom, info, song);
     const bool looping = seq.Piece().Loops();
     const size_t count = seq.Piece().sequences.size();
+    const bool second = start_pass == LoopStart::kSecondPass;
     const size_t passes = size_t(std::max(loops, 1)) + (second ? 1 : 0);
     bool done = false;
     while (!done && seq.Frame() < kMaxFrames)
@@ -100,8 +104,8 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops,
 }
 
 // Returns true if the notes of a looping song's second pass start as those of its first, in `sim`'s first two passes:
-// the same keys at the same frames from the pass's start, with the same velocity, kit offset or instrument, and
-// sample. The kit's offset is the setting that a pass can leave to the next.
+// the same keys at the same frames from the pass's start, with the same velocity, kit offset or instrument, and sample.
+// The kit's offset is the setting that a pass can leave to the next.
 bool FirstPassRepeats(const Simulation& sim)
 {
     if (!sim.plan.loops)
@@ -122,10 +126,10 @@ bool FirstPassRepeats(const Simulation& sim)
 // the next marks its second pass.
 Simulation SimulateConversion(const Rom& rom, const DriverInfo& info, int song, int loops)
 {
-    Simulation sim = Simulate(rom, info, song, loops, false);
-    if (sim.plan.loops && !FirstPassRepeats(Simulate(rom, info, song, 2, false)))
+    Simulation sim = Simulate(rom, info, song, loops, LoopStart::kFirstPass);
+    if (sim.plan.loops && !FirstPassRepeats(Simulate(rom, info, song, 2, LoopStart::kFirstPass)))
     {
-        sim = Simulate(rom, info, song, loops, true);
+        sim = Simulate(rom, info, song, loops, LoopStart::kSecondPass);
     }
 
     return sim;
@@ -146,8 +150,9 @@ int ChannelIndex(int channel)
 }
 
 // Returns a note's MIDI velocity, or 0 if the driver plays it silently. A kit note's velocity scales its sample, 64 to
-// the whole scale. A square's or the noise's starting volume scales the PSG, and an envelope that rises from 0 is
-// taken at full volume. The wave's volume code plays it at 100%, 50% or 25%.
+// the whole scale. A square's or the noise's starting volume scales the PSG, and an envelope that rises from 0 is taken
+// at full volume. The wave's volume code plays it at 100%, 50% or 25%. SquareRootValue() turns the level into the
+// velocity.
 int Velocity(const Note& n)
 {
     double level = 0;
@@ -167,7 +172,7 @@ int Velocity(const Note& n)
         level = (volume ? volume : rises ? 15 : 0) / 15.0;
     }
 
-    return level > 0 ? std::clamp(int(std::lround(level * 127)), 1, 127) : 0;
+    return level > 0 ? SquareRootValue(level, 1, 1) : 0;
 }
 
 // Returns the notes that sound on the sequence channels whose bits `track_mask` sets, and adds their instruments to
@@ -242,10 +247,13 @@ BeatGrid SongGrid(const Simulation& sim)
     return BeatGrid(starts, hints);
 }
 
-// Writes to `mt` the track of the channel at place `c` in kChannels. The channel plays `notes`. The track holds its
-// name, its end at tick `end`, and the notes at the ticks that `ticks` gives them. The channel plays on its MIDI
-// channel in kMidiChannels, in the bank that PresetBank() gives it. Unless the loop starts with the song, the channel
-// gives its bank and program again at its first note from tick `loop_start`.
+// Writes to `mt` the track of the channel at place `c` in kChannels. The channel plays `notes`, at least one. The
+// track holds its name, its end at tick `end`, and the notes at the ticks that `ticks` gives them. The channel plays
+// on its MIDI channel in kMidiChannels, in the bank that PresetBank() gives it. At tick 0, the track sets the first
+// note's bank and program. It sets CC7 and CC11 to 127, CC10 to 64, and CC91 and CC93 to 0. The notes' velocities
+// hold their levels. The mixer is mono and adds no reverb or chorus. The conversion writes no bends. The track
+// therefore sets no bend range. Unless the loop starts with the song, the channel gives its bank and program again
+// at its first note from tick `loop_start`.
 void WriteChannel(MidiTrack& mt, size_t c, const std::vector<Note>& notes, const BeatTicks& ticks, uint32_t loop_start,
                   uint32_t end)
 {
@@ -253,8 +261,15 @@ void WriteChannel(MidiTrack& mt, size_t c, const std::vector<Note>& notes, const
     mt.SetEnd(end);
     const int preset_bank = PresetBank(kChannels[c]);
     const int midi_channel = kMidiChannels[c];
-    int bank = -1;
-    int program = -1;
+    int bank = preset_bank;
+    int program = notes.front().program;
+    mt.Bank(0, midi_channel, bank);
+    mt.Program(0, midi_channel, program);
+    mt.Control(0, midi_channel, cc::kVolume, 127);
+    mt.Control(0, midi_channel, cc::kPan, 64);
+    mt.Control(0, midi_channel, cc::kExpression, 127);
+    mt.Control(0, midi_channel, cc::kReverb, 0);
+    mt.Control(0, midi_channel, cc::kChorus, 0);
     bool restated = loop_start == 0;
     for (const Note& n : notes)
     {

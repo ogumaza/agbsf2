@@ -7,16 +7,21 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "seqlib/testing/check.h"
+
 #include "brownie/convert.h"
 #include "brownie/driver.h"
 #include "brownie/sequencer.h"
 #include "brownie/song.h"
+#include "brownie/soundfont.h"
 #include "files.h"
+#include "gba.h"
 #include "midi.h"
 #include "music.h"
 #include "rom.h"
@@ -28,7 +33,7 @@ namespace agbsf2::brownie
 namespace
 {
 
-using test::FullBendRange;
+using test::HasGlobalZoneModulators;
 using test::LastWrite;
 using test::Le16;
 using test::Le32;
@@ -610,7 +615,7 @@ void TestConversion()
     SEQLIB_CHECK_EQ(sample_on.size() ? sample_on[0].bytes[1] : 0, 39);
     SEQLIB_CHECK(tuned);
     SEQLIB_CHECK(rooted);
-    SEQLIB_CHECK(FullBendRange(sf2));
+    SEQLIB_CHECK(HasGlobalZoneModulators(sf2));
     SEQLIB_CHECK(fading.size() > 10 && std::is_sorted(fading.rbegin(), fading.rend()));
 }
 
@@ -852,6 +857,22 @@ void TestVacationConversion()
     SEQLIB_CHECK_EQ(last, expected);
 }
 
+// A sample of 20 points that loops back to point 14 gets its loop of 6 points repeated 6 times: 36 points, the first
+// length of kMinLoop points or more.
+void TestShortLoop()
+{
+    test::CartImage image(0x20);
+    for (uint32_t i = 0; i < 20; i++)
+    {
+        image.Put8(kRomBase + i, uint8_t(i * 9));
+    }
+    const Rom rom = image.ToRom();
+    SoundfontBuilder sf(rom, 13379);
+    const int index = sf.GameSampleIndex({kRomBase, kRomBase + 20, kRomBase + 14});
+    SEQLIB_REQUIRE(index >= 0);
+    SEQLIB_CHECK(test::LengthenedLoop(sf.File().samples[size_t(index)], 14, 6));
+}
+
 } // namespace
 
 void RunTests()
@@ -869,6 +890,7 @@ void RunTests()
     TestMusic();
     TestVacation();
     TestVacationConversion();
+    TestShortLoop();
 }
 
 } // namespace agbsf2::brownie

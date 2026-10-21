@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <numbers>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -36,6 +37,18 @@ int Centibels(double level)
     return std::clamp(int(std::lround(-200.0 * std::log10(level))), 0, kSilent);
 }
 
+int SidesPan(double left, double right)
+{
+    if (left <= 0 && right <= 0)
+    {
+        return 0;
+    }
+
+    // Under the sin/cos pan law of MIDI RP-036, pan p from -1 to 1 plays the left side at cos((p + 1) * pi / 4) and the
+    // right side at sin((p + 1) * pi / 4). FluidSynth and most other SoundFont players follow that law.
+    return int(std::lround(500.0 * (4.0 / std::numbers::pi * std::atan2(right, left) - 1.0)));
+}
+
 double FadeStretch(double frames)
 {
     return std::clamp(3.0 + 3.0 * (frames - 5) / 11.0, 3.0, 6.0);
@@ -49,6 +62,7 @@ double FadeSeconds(double frames)
 void AddVolumeEnvelope(sf2::Zone& zone, const VolumeEnvelope& envelope)
 {
     const std::pair<uint16_t, int> phases[] = {{sf2::kAttackVolEnv, envelope.attack},
+                                               {sf2::kHoldVolEnv, envelope.hold},
                                                {sf2::kDecayVolEnv, envelope.decay},
                                                {sf2::kReleaseVolEnv, envelope.release}};
     for (const auto& [oper, value] : phases)
@@ -181,7 +195,7 @@ int PresetInstrument(const sf2::Preset& preset)
 sf2::Instrument MakeInstrument(const std::string& name, std::vector<sf2::Zone> zones)
 {
     sf2::Zone global;
-    global.modulators.assign(sf2::kNoVelocityFilterFullBend.begin(), sf2::kNoVelocityFilterFullBend.end());
+    global.modulators.assign(sf2::kGlobalZoneModulators.begin(), sf2::kGlobalZoneModulators.end());
     zones.insert(zones.begin(), std::move(global));
 
     return {name, std::move(zones)};

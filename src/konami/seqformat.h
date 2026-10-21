@@ -179,10 +179,9 @@ inline constexpr uint32_t kMaxWalkCommands = 200000;
 
 // Walks one track from its start until an end/jump command, an unknown opcode, or `max_commands`, and follows the F3
 // rebasing rule. Calls `visit(cmd, frame)` for each command (and each delay). The walk passes over a call (kCall). With
-// `follow_calls` set, the walk plays the call's commands with their delays and goes back after the last one. The
-// driver plays a call the same way. The walk leaves out a quirk of the Eternal Duelist and Dungeon Dice Monsters
-// revisions: they go back to the same place every 256 commands after that. Returns true if the track reached an end
-// command.
+// `follow_calls` set, the walk plays the call's commands with their delays and goes back after the last one. The driver
+// plays a call the same way. The walk leaves out a quirk of the Eternal Duelist and Dungeon Dice Monsters revisions:
+// they go back to the same place every 256 commands after that. Returns true if the track reached an end command.
 bool WalkTrack(const Rom& rom, const SongHeader& song, int track, Revision revision,
                const std::function<void(const Command&, uint32_t frame)>& visit,
                uint32_t max_commands = kMaxWalkCommands, bool follow_calls = false);

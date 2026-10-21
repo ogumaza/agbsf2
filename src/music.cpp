@@ -4,6 +4,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <numeric>
 #include <string>
 #include <tuple>
@@ -12,6 +16,7 @@
 
 #include "files.h"
 #include "program.h"
+#include "rom.h"
 
 namespace agbsf2
 {
@@ -221,7 +226,7 @@ uint64_t LoopLength(const std::vector<uint64_t>& lengths)
     return length;
 }
 
-SongPlan PlanSong(const std::vector<TrackLayout>& tracks, int loops, bool second)
+SongPlan PlanSong(const std::vector<TrackLayout>& tracks, int loops, LoopStart start_pass)
 {
     SongPlan plan;
     uint64_t longest_end = 0;
@@ -245,7 +250,7 @@ SongPlan PlanSong(const std::vector<TrackLayout>& tracks, int loops, bool second
     if (plan.loops)
     {
         const uint64_t length = LoopLength(lengths);
-        plan.loop_start = std::max(plan.loop_start, last_command) + (second ? length : 0);
+        plan.loop_start = std::max(plan.loop_start, last_command) + (start_pass == LoopStart::kSecondPass ? length : 0);
         plan.loop_end = plan.loop_start + length;
         plan.end = plan.loop_start + uint64_t(loops) * length;
     }
@@ -284,6 +289,40 @@ bool PassComparison::Alike() const
     }
 
     return sorted[0] == sorted[1];
+}
+
+bool PassComparison::Alike(double tolerance) const
+{
+    const auto earlier = [](const Start& a, const Start& b)
+    {
+        return std::tie(a.at, a.channel, a.key) < std::tie(b.at, b.channel, b.key);
+    };
+    std::array<std::vector<Start>, 2> sorted = passes_;
+    for (std::vector<Start>& pass : sorted)
+    {
+        std::stable_sort(pass.begin(), pass.end(), earlier);
+    }
+
+    const auto near = [&](const Start& a, const Start& b)
+    {
+        if (std::tie(a.at, a.channel, a.key) != std::tie(b.at, b.channel, b.key) ||
+            a.settings.size() != b.settings.size())
+        {
+            return false;
+        }
+
+        for (size_t i = 0; i < a.settings.size(); i++)
+        {
+            if (!(std::fabs(a.settings[i] - b.settings[i]) <= tolerance))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    };
+
+    return std::equal(sorted[0].begin(), sorted[0].end(), sorted[1].begin(), sorted[1].end(), near);
 }
 
 bool PassComparison::Start::operator<(const Start& other) const

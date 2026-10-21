@@ -2,6 +2,10 @@
 
 #include "song_banks.h"
 
+#include <cstddef>
+#include <optional>
+#include <vector>
+
 namespace agbsf2
 {
 

@@ -5,12 +5,24 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <map>
 #include <numeric>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "seqlib/sf2/units.h"
+
+#include "gba.h"
+#include "mp2k/driver.h"
 #include "mp2k/sequencer.h"
+#include "mp2k/song.h"
 #include "psg.h"
+#include "rom.h"
+#include "sf2.h"
+#include "song_banks.h"
 
 namespace agbsf2::mp2k
 {
@@ -118,6 +130,32 @@ struct Part
     bool fixed;
 };
 
+// Returns the pan of a zone that plays a drum kit's voice at pan `rhythm_pan`, from -128 to 127. The driver multiplies
+// a note's right level by 128 + rhythm_pan and its left level by 127 - rhythm_pan. Camelot's sequencer uses
+// 128 - rhythm_pan on the left. Every other note plays at a pan of 0. CC10 leaves out the factors at that pan. The zone
+// gives the ratio of the drum's factors to theirs. A PSG channel plays on one side alone where that side's level is at
+// least twice the other's (CgbPan). It plays in the middle otherwise.
+int RhythmZonePan(const DriverInfo& info, int rhythm_pan, bool psg)
+{
+    const int centre = info.camelot_sequencer ? 128 : 127;
+    const int left = centre - rhythm_pan;
+    const int right = 128 + rhythm_pan;
+    if (psg)
+    {
+        return right / 2 >= left ? 500 : (left / 2 >= right ? -500 : 0);
+    }
+
+    return SidesPan(left / double(centre), right / 128.0);
+}
+
+// The attenuation in centibels that halves a sound's power: 3.01 dB.
+constexpr double kHalfPower = 30.103;
+
+// The default modulator from CC91 to the reverb send (SoundFont 2.04, section 8.4.8) with an amount of 0. A zone that
+// holds it gets no reverb at any value of CC91.
+constexpr sf2::Modulator kNoReverb = {sf2::kController | 91, sf2::kReverbEffectsSend, 0, sf2::kNoController,
+                                      sf2::kLinear};
+
 // Adds a zone for each part that plays `voice` with SoundFont sample `sample`, with the drum kit's pan `rhythm_pan`.
 // With `exclusive`, a PSG voice with a slow release gets the exclusive class of its channel (see SoundfontBuilder()).
 void AddParts(const DriverInfo& info, const Voice& voice, int sample, bool loops, const std::vector<Part>& parts,
@@ -127,13 +165,27 @@ void AddParts(const DriverInfo& info, const Voice& voice, int sample, bool loops
     const int psg = voice.PsgChannel();
     const VolumeEnvelope env = EnvelopeFor(info, voice);
     const int exclusive_class = exclusive && psg && env.release > kExclusiveRelease ? psg : 0;
+    const int pan = RhythmZonePan(info, rhythm_pan, psg != 0);
+
+    // A PSG channel on one side alone plays that side at the level that each side gets in the middle. Under the RP-036
+    // pan law, a zone on one side alone plays 3 dB louder there than in the middle. The zone of such a PSG drum holds
+    // those 3 dB as attenuation.
+    const sf2::ZoneAttenuation side = psg && pan ? sf2::ToZoneAttenuation(kHalfPower) : sf2::ZoneAttenuation{};
     for (const Part& part : parts)
     {
         sf2::Zone z;
         z.generators.push_back(sf2::Generator::Range(sf2::kKeyRange, part.low, part.high));
-        if (rhythm_pan)
+        if (pan)
         {
-            z.generators.push_back(sf2::Generator::Value(sf2::kPan, std::clamp(rhythm_pan * 500 / 127, -500, 500)));
+            z.generators.push_back(sf2::Generator::Value(sf2::kPan, pan));
+        }
+        if (side.generator)
+        {
+            z.generators.push_back(sf2::Generator::Value(sf2::kInitialAttenuation, side.generator));
+        }
+        if (side.modulator)
+        {
+            z.modulators.push_back(*side.modulator);
         }
         AddVolumeEnvelope(z, env);
         AddTuning(z, int(std::lround(part.cents)));
@@ -150,6 +202,13 @@ void AddParts(const DriverInfo& info, const Voice& voice, int sample, bool loops
             z.generators.push_back(sf2::Generator::Value(sf2::kExclusiveClass, exclusive_class));
         }
         z.generators.push_back(sf2::Generator::Value(sf2::kSampleId, sample));
+
+        // The driver's reverb works on the mixer's output. The PSG doesn't pass through the mixer. A PSG zone therefore
+        // replaces the default modulator from CC91 to the reverb send with kNoReverb.
+        if (psg)
+        {
+            z.modulators.push_back(kNoReverb);
+        }
 
         // The pitch wheel doesn't move a fixed-pitch sample. This takes the place of the default modulator from it.
         if (psg == 0 && (voice.type & kVoiceFixed))
@@ -224,10 +283,13 @@ VolumeEnvelope EnvelopeFor(const DriverInfo& info, const Voice& voice)
         env.attack = Timecents((255.0 / voice.attack - 1) / kFrameRate);
     }
 
-    // The decay falls to the sustain level, and at a sustain of 0, the note stops when it gets there.
+    // The decay falls to the sustain level, and at a sustain of 0, the note stops when it gets there. The frame in
+    // which the attack reaches 255 plays at 255, and the decay starts on the next frame. The hold keeps the full level
+    // for that frame.
     const int sustain = voice.sustain;
     if (sustain < 255)
     {
+        env.hold = Timecents(1.0 / kFrameRate);
         env.sustain = Centibels(sustain / 255.0);
         env.decay = voice.decay ? SampleFadeTime(255, sustain ? sustain : 2, voice.decay) : kInstant;
     }
@@ -339,11 +401,7 @@ int SoundfontBuilder::InstrumentFor(uint32_t address, int key)
 
     instruments_[bytes] = -1;
 
-    // The global zone makes velocity and controller 7 scale the level in a straight line, as the driver does. The
-    // default curves square them, and these take the place of the defaults.
     sf2::Instrument si = MakeInstrument(AddressName("Voice", address));
-    si.zones.front().modulators.push_back(kLinearVelocity);
-    si.zones.front().modulators.push_back(kLinearVolume);
 
     bool plays = false;
     if (!top.IsSplit())

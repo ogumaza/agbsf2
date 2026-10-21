@@ -7,6 +7,10 @@
 #include <utility>
 #include <vector>
 
+#include "psg.h"
+#include "rom.h"
+#include "sf2.h"
+
 namespace agbsf2::quintet
 {
 namespace
@@ -77,6 +81,7 @@ int SoundfontBuilder::PcmSample(const PcmSound& sound)
     {
         out.loop_start = sound.first;
         out.loop_end = sound.first + loop_length;
+        LengthenLoop(out);
         AddLoopGuard(out);
     }
     else

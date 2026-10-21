@@ -3,19 +3,26 @@
 #include "rare/soundfont.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <string>
+#include <tuple>
 #include <utility>
 
+#include "gba.h"
+#include "rare/driver.h"
 #include "rare/sequencer.h"
+#include "rare/song.h"
+#include "rom.h"
+#include "sf2.h"
 
 namespace agbsf2::rare
 {
 namespace
 {
 
-// A modulator that mutes a note while its key's polyphonic key pressure is 64 or more. Its 96 dB of attenuation takes
-// a 16-bit sample below its smallest step.
+// A modulator that mutes a note while its key's polyphonic key pressure is 64 or more. Its 96 dB of attenuation takes a
+// 16-bit sample below its smallest step.
 constexpr sf2::Modulator kMute = {sf2::kPolyPressure | sf2::kSwitch, sf2::kInitialAttenuation, 960, 0, 0};
 
 // Returns the name of the SoundFont instrument for the driver's instrument at `address` played with the envelope
@@ -107,11 +114,7 @@ int SoundfontBuilder::InstrumentFor(uint32_t address, const EnvelopeSettings& se
         return -1;
     }
 
-    // The global zone makes velocity and controller 7 scale the level in a straight line, as the driver does. The
-    // default curves square them, and these take the place of the defaults.
     sf2::Instrument si = MakeInstrument(InstrumentName(address, settings));
-    si.zones.front().modulators.push_back(kLinearVelocity);
-    si.zones.front().modulators.push_back(kLinearVolume);
     if (mutes_)
     {
         si.zones.front().modulators.push_back(kMute);

@@ -2,9 +2,15 @@
 
 #include "quintet/sequencer.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
+#include "gba.h"
+#include "quintet/driver.h"
+#include "quintet/song.h"
+#include "rom.h"
 #include "warnings.h"
 
 namespace agbsf2::quintet
@@ -112,9 +118,9 @@ void RestartEffects(Channel& ch, int note)
     }
 }
 
-// Sets the channel's countdown to the frames until its next note. The next note comes `ticks` ticks after this one.
-// The channel counts the ticks it has played and the frames they take. A tick takes 37 / tempo frames. Working the
-// frames out from the whole count keeps the rounding from adding up. A note lasts at least a frame.
+// Sets the channel's countdown to the frames until its next note. The next note comes `ticks` ticks after this one. The
+// channel counts the ticks it has played and the frames they take. A tick takes 37 / tempo frames. Working the frames
+// out from the whole count keeps the rounding from adding up. A note lasts at least a frame.
 void WaitTicks(Channel& ch, uint16_t ticks)
 {
     ch.ticks += uint32_t(int32_t(int16_t(ticks)));

@@ -3,12 +3,18 @@
 #include "rd2/driver.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <initializer_list>
 #include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "xsflib/text.h"
+
 #include "rd2/sequencer.h"
+#include "rom.h"
 #include "thumb.h"
 
 namespace agbsf2::rd2

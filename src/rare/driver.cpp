@@ -2,10 +2,15 @@
 
 #include "rare/driver.h"
 
+#include <array>
+#include <cstdint>
 #include <initializer_list>
 #include <span>
+#include <string>
 
 #include "arm.h"
+#include "rare/song.h"
+#include "rom.h"
 #include "thumb.h"
 
 namespace agbsf2::rare

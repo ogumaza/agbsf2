@@ -16,6 +16,7 @@
 #include "rd2/sequencer.h"
 #include "rd2/song.h"
 #include "rd2/soundfont.h"
+#include "rom.h"
 #include "sf2.h"
 
 namespace agbsf2::rd2

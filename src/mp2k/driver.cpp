@@ -3,12 +3,17 @@
 #include "mp2k/driver.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <iterator>
+#include <string>
 #include <string_view>
+#include <vector>
 
 #include "xsflib/bytes.h"
 
 #include "mp2k/song.h"
+#include "rom.h"
 #include "thumb.h"
 
 namespace agbsf2::mp2k

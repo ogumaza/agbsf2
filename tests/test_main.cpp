@@ -11,11 +11,15 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
+#include <ios>
 #include <optional>
 #include <random>
 #include <string>
 #include <system_error>
 #include <vector>
+
+#include "seqlib/testing/check.h"
 
 #include "beat_grid.h"
 #include "files.h"

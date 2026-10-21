@@ -171,7 +171,8 @@ one. `-j` compares several tunes at once.
 `compare_notes.py` checks every note in a folder of MIDI files against what the
 driver plays on the same frame: the note's start and release, its velocity, the
 channel's volume, the sample that the SoundFont plays for it, and its pitch on
-every frame, from the SoundFont zone's tuning and the channel's pitch bend. The
+every frame, from the SoundFont zone's tuning and the channel's pitch bend. A
+velocity or volume of v has to be written as 127 × √(v/127). The
 script also checks the zone's envelope against the one that agbsf2 works out
 from the instrument and the settings from controllers 20-23 (in the revision
 that has them) that the driver's RAM held as each phase started. The MIDI file
@@ -447,11 +448,14 @@ and wave. It reports the first difference in each song that has one. `-j`
 compares several songs at once.
 
 `compare_notes.py` checks every note the driver starts against the MIDI file:
-the note's start and release, its velocity, its track's volume, the sound that
-the SoundFont zone plays for it, and its pitch on every frame until its
-release, from the zone's tuning and the channel's pitch bend. It reads the
-driver's channels just before the PSG routine runs in each frame, when the
-notes that the tracks started in the frame still have their start flag. A note
+the note's start and release, its velocity, its track's CC10 and CC11, the
+sound that the SoundFont zone plays for it, and its pitch on every frame until
+its release. The pitch comes from the zone's tuning and the channel's pitch
+bend. CC10 and CC11 have to come within a step of the values that the
+driver's levels on each side give. A velocity of v has to be written as
+127 × √(v/127). The script reads the driver's channels just
+before the PSG routine runs in each frame. The notes that the tracks started in
+the frame then still have their start flag. A note
 whose envelope never rises above 0 doesn't count. A PSG square or wave note can
 be two steps of the 11-bit frequency register from equal temperament (see
 `docs/mp2k.md`), and that much is allowed for. A sample without a loop that
@@ -460,7 +464,8 @@ note can end as late as the first tick after it. When a track changes its pitch
 in a tick in which it starts a note, the driver leaves the track's older notes
 behind until its next change, while the MIDI file bends them all, so an older
 note's pitch isn't compared until the driver catches it up. Track 9 plays on
-the drum channel, so its zones come from bank 128. A synth voice of Camelot's
+the drum channel only in a song that plays on all 16 channels. Its zones then
+come from bank 128. A synth voice of Camelot's
 mixer has to play the SoundFont's sample for its wave, and for a pulse or saw
 wave, the sample made for the key the driver plays it at, whose pitch is the
 driver's rate for that key. A song named in `--songs` that has no MIDI file

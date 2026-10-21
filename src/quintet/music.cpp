@@ -16,6 +16,7 @@
 #include "quintet/sequencer.h"
 #include "quintet/song.h"
 #include "quintet/soundfont.h"
+#include "rom.h"
 #include "sf2.h"
 
 namespace agbsf2::quintet

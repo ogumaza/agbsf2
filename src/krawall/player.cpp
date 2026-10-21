@@ -3,11 +3,16 @@
 #include "krawall/player.h"
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <string>
 #include <utility>
 
 #include "xsflib/bytes.h"
 
+#include "krawall/driver.h"
+#include "rom.h"
 #include "warnings.h"
 
 namespace agbsf2::krawall
@@ -553,8 +558,8 @@ void Player::SkipSilent(MixChannel& m, uint32_t amount)
     }
     else if (m.loop == 2)
     {
-        // Back and forth: each time the guess passes an end of the loop, it comes back by the loop's length,
-        // and an odd count of times turns it round.
+        // Back and forth: each time the guess passes an end of the loop, it comes back by the loop's length, and an odd
+        // count of times turns it round.
         uint32_t turns = 0;
         m.pos += guess;
         if (m.inc >= 0)

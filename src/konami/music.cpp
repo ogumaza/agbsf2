@@ -15,6 +15,7 @@
 #include "konami/seqformat.h"
 #include "konami/sequencer.h"
 #include "konami/soundfont.h"
+#include "rom.h"
 #include "sf2.h"
 
 namespace agbsf2::konami

@@ -11,9 +11,10 @@ driver_emu.py for as long as the MIDI file lasts and two frames more, and each n
 note on the MIDI channel of its track, with the same key, that starts within a frame and a half of it. For each pair,
 the script checks:
 
-  - the velocity, and the track's volume when the note starts;
+  - the velocity, and the track's CC10 and CC11 when the note starts, against the driver's velocity and levels on
+    each side. A velocity of v is written as 127 × √(v / 127);
   - the sound: the SoundFont zone that the note's program and key choose has to play the driver's sample, square
-    wave duty, wave pattern or noise type. Track 9 plays on the drum channel, so its zones come from bank 128;
+    wave duty, wave pattern or noise type. A note on the drum channel takes its zones from bank 128;
   - the pitch on every frame of the note until its release, from the zone's root key, tuning and sample rate and the
     channel's pitch bend, against the driver's rate for a sample, or its frequency setting for a PSG channel, which can
     be two steps of the 11-bit register from equal temperament;
@@ -44,21 +45,25 @@ from gbarom import ROM_BASE, load_rom
 from traces import parse_range
 
 FRAME_RATE = 16777216 / 280896
-TRACK_VOLUME = 18  # a track's volume, in its MusicPlayerTrack
+TRACK_LEVELS = 16  # a track's right and left levels (volMR and volML), in its MusicPlayerTrack
 TRACK_PITCH = 8  # a track's key and fine pitch offsets, in its MusicPlayerTrack
 SPECIAL_TEST = bytes.fromhex('0100d4e5300010e3')  # the newer mixer's test for reversed and compressed samples
 CAMELOT_PULSE = bytes.fromhex('0260d3e5062c82e00460d3e5066c92e00660e041')  # Camelot's mixer, which has synth voices
+CAMELOT_CHANNEL_SEARCH = bytes.fromhex('0a235034c72700220026032021783942')  # Camelot's note start
+MONO_VOLUME = bytes.fromhex('a078e17840186843400aa072')  # the mono mixer's volume for a channel
 FREQ_TABLE = [2147483648, 2275179671, 2410468894, 2553802834, 2705659852, 2866546760, 3037000500, 3217589947,
               3408917802, 3611622603, 3826380858, 4053909305]  # the driver's rates for the 12 semitones, from key 168
 
 
 def read_midi(path):
     """Returns the file's notes as (channel, key, velocity, on seconds, off seconds, program, seconds at the start of
-    the driver's tick before the off, a 24th of a quarter note), its volume changes and pitch bends as (seconds,
-    channel, value), each channel's bend range in semitones, and its length in seconds."""
+    the driver's tick before the off, a 24th of a quarter note), its changes of CC10 and CC11 and its pitch bends as
+    (seconds, channel, value), each channel's bend range in semitones, its length in seconds, and the MIDI channel of
+    each of the song's tracks. The file's track names give the song's tracks."""
     data = Path(path).read_bytes()
     division = struct.unpack('>H', data[12:14])[0]
     events = []
+    names, channels = {}, {}
     pos = 14
     track = 0
     while pos < len(data):
@@ -93,9 +98,12 @@ def read_midi(path):
                     events.append((tick, track, index, 'tempo', 0, int.from_bytes(body[i:i + 3], 'big'), 0))
                 elif kind == 0x2F:
                     events.append((tick, track, index, 'end', 0, 0, 0))
+                elif kind == 0x03:
+                    names[track] = body[i:i + length].decode('latin-1')
                 i += length
                 continue
             kind, ch = status & 0xF0, status & 0x0F
+            channels.setdefault(track, ch)
             n = 1 if kind in (0xC0, 0xD0) else 2
             args = body[i:i + n]
             i += n
@@ -126,7 +134,7 @@ def read_midi(path):
             at, tempo = t, value
         return s + (tick - at) * tempo / division / 1e6
 
-    notes, volumes, bends = [], [], []
+    notes, pans, expressions, bends = [], [], [], []
     end = seconds(max(e[0] for e in events))
     open_notes, rpn, ranges, program = {}, {}, {}, {}
     for tick, _, _, kind, ch, a, b in events:
@@ -141,13 +149,20 @@ def read_midi(path):
             program[ch] = a
         elif kind == 'bend':
             bends.append((t, ch, a))
-        elif kind == 'cc' and a == 7:
-            volumes.append((t, ch, b))
+        elif kind == 'cc' and a == 10:
+            pans.append((t, ch, b))
+        elif kind == 'cc' and a == 11:
+            expressions.append((t, ch, b))
         elif kind == 'cc' and a in (100, 101):
             rpn[(ch, a)] = b
         elif kind == 'cc' and a == 6 and rpn.get((ch, 101)) == 0 and rpn.get((ch, 100)) == 0:
             ranges[ch] = b
-    return notes, volumes, bends, ranges, end
+    song_channels = {}
+    for t, name in names.items():
+        words = name.split()
+        if len(words) == 2 and words[0] == 'Track' and words[1].isdigit() and t in channels:
+            song_channels[int(words[1])] = channels[t]
+    return notes, pans, expressions, bends, ranges, end, song_channels
 
 
 def read_sf2(path):
@@ -221,13 +236,46 @@ def value_at(changes, ch, t, default):
     return values[i - 1] if i else default
 
 
+def round_half_up(x):
+    """Rounds a value of 0 or more to the nearest whole number. Halves go up. C++'s std::lround() does the same."""
+    whole = math.floor(x)
+    return int(whole) + (1 if x - whole >= 0.5 else 0)
+
+
+def levels_to_controllers(left, right):
+    """Returns CC10 and CC11 for levels on the left and right. 128 is full scale. seqlib's LevelsToControllers() gives
+    the same. CC10 is None when both levels are 0. Only CC11 changes then."""
+    gl, gr = left / 128.0, right / 128.0
+    amp = math.sqrt(gl * gl + gr * gr)
+    if amp <= 0:
+        return None, 0
+    cc10 = 64 if left == right else min(max(round_half_up(math.atan2(gr, gl) / (math.pi / 2) * 127), 0), 127)
+    loudest_centred = math.sqrt(2.0) * 127.0 / 128.0
+    return cc10, min(max(round_half_up(127 * math.sqrt(amp / loudest_centred)), 0), 127)
+
+
+def track_controllers(left, right, psg, mono, camelot_sequencer):
+    """Returns CC10 and CC11 for a track's levels. agbsf2's TrackControllers() gives the same. A sample note plays at
+    the levels. A mono mixer plays it at their average on both sides. A PSG note plays on one side alone where that
+    side is at least twice the other, or else on both. The driver's CgbPan decides that, here for a note at full
+    velocity. Each side that the note plays on gets the average of the two levels."""
+    centre = (left + right) / 2.0
+    if not psg:
+        return levels_to_controllers(centre, centre) if mono else levels_to_controllers(left, right)
+    note_right = min((127 * 128 * right) >> 14, 255)
+    note_left = min((127 * (128 if camelot_sequencer else 127) * left) >> 14, 255)
+    right_only = note_right >= note_left and note_right // 2 >= note_left
+    left_only = note_right < note_left and note_left // 2 >= note_right
+    return levels_to_controllers(0 if right_only else centre, 0 if left_only else centre)
+
+
 def driver_notes(rom, song, frames):
     """Runs the driver and returns its notes and the mixer's rate in Hz. The notes are dicts of track, key, velocity,
-    start and release frames (the end, for a note the driver didn't release), the track's volume at the start, what
-    the note plays, its frequency on each frame, whether it sounds, whether its channel stopped by itself before the
-    driver released it, and the frames in which its pitch is behind its track's. The channels are read just before the
-    PSG and mixer routines run each frame, when the notes the tracks started in the frame still have their start
-    flag."""
+    start and release frames (the end, for a note the driver didn't release), the track's levels on the left and right
+    at the start, whether it's a PSG note, what the note plays, its frequency on each frame, whether it sounds, whether
+    its channel stopped by itself before the driver released it, and the frames in which its pitch is behind its
+    track's. The channels are read just before the PSG and mixer routines run each frame, when the notes the tracks
+    started in the frame still have their start flag."""
     emu = driver_emu.emulator(rom)
     emu.play(song)
     snapshot = []
@@ -258,10 +306,11 @@ def driver_notes(rom, song, frames):
                     note['stopped'] = not starts
                 current.pop(name)
             if starts and not c.status & 0x40 and c.track >= 0:
-                volume = emu.u8(player_tracks + driver_emu.TRACK_SIZE * c.track + TRACK_VOLUME)
+                at = player_tracks + driver_emu.TRACK_SIZE * c.track + TRACK_LEVELS
+                levels = (emu.u8(at + 1), emu.u8(at))
                 note = dict(track=c.track, key=c.midi_key, play_key=c.key, velocity=c.velocity, start=f,
-                            release=None, type=c.type, wave=c.wav, volume=volume, frequencies={}, sounds=False,
-                            stopped=False, lagging=False, behind=set())
+                            release=None, type=c.type, wave=c.wav, levels=levels, psg=c.kind != 'd', frequencies={},
+                            sounds=False, stopped=False, lagging=False, behind=set())
                 notes.append(note)
                 current[name] = note
                 started.add(c.track)
@@ -376,8 +425,8 @@ def zone_hz(zone, key, cents_from_bend):
 def check_song(rom, song, midi_path, sf2_path, frames_limit, report):
     """Checks one song, and passes report() its number, the notes checked, the differences and the largest pitch
     error. Returns true if there are no differences."""
-    notes, volumes, bends, ranges, length = read_midi(midi_path)
-    volumes, bends = by_channel(volumes), by_channel(bends)
+    notes, pans, expressions, bends, ranges, length, channel_of = read_midi(midi_path)
+    pans, expressions, bends = by_channel(pans), by_channel(expressions), by_channel(bends)
     presets = read_sf2(sf2_path)
     # The file ends at frame `end`. The driver plays a note up to a frame after the file has it, so it runs two frames
     # longer, for the notes at the end.
@@ -386,6 +435,8 @@ def check_song(rom, song, midi_path, sf2_path, frames_limit, report):
     played, mix_rate = driver_notes(rom, song, frames)
     special = SPECIAL_TEST in rom
     camelot = CAMELOT_PULSE in rom
+    camelot_sequencer = CAMELOT_CHANNEL_SEARCH in rom
+    mono = MONO_VOLUME in rom
 
     midi = [dict(channel=n[0], key=n[1], velocity=n[2], on=n[3] * FRAME_RATE,
                  off=(n[4] if n[4] is not None else length) * FRAME_RATE, program=n[5],
@@ -405,8 +456,10 @@ def check_song(rom, song, midi_path, sf2_path, frames_limit, report):
     worst_cents = 0.0
     checked = 0
     for (track, key, start), group in sorted(groups.items(), key=lambda item: item[0][2]):
-        velocity = min(127, sum(d['velocity'] for d in group))
-        candidates = [m for m in by_key.get((track, key), []) if not m['matched'] and -1.5 <= m['on'] - start <= 1.5]
+        driver_velocity = min(127, sum(d['velocity'] for d in group))
+        velocity = conversion.square_root_value(driver_velocity, 127, 1)
+        channel = channel_of.get(track, track)
+        candidates = [m for m in by_key.get((channel, key), []) if not m['matched'] and -1.5 <= m['on'] - start <= 1.5]
         if not candidates:
             # A note in the file's last half frame or after it can be the loop starting again, which the file leaves
             # out.
@@ -421,17 +474,27 @@ def check_song(rom, song, midi_path, sf2_path, frames_limit, report):
         checked += len(group)
         where = 'frame %d, track %d key %d' % (start, track, key)
         if m['velocity'] != velocity:
-            problems.append('%s: velocity %d, the driver\'s %d' % (where, m['velocity'], velocity))
+            problems.append('%s: velocity %d for the driver\'s %d, not %d' % (where, m['velocity'], driver_velocity,
+                                                                              velocity))
 
-        # The driver's track volume is read at the end of the frame, after all of its ticks.
-        volumes_seen = [value_at(volumes, track, (start + shift / 10) / FRAME_RATE, 100) for shift in range(-10, 16)]
-        if group[0]['volume'] not in volumes_seen:
-            midi_volume = value_at(volumes, track, start / FRAME_RATE, 100)
-            problems.append('%s: volume %d, the driver\'s %d' % (where, midi_volume, group[0]['volume']))
+        # The driver's track levels are read at the end of the frame, after all of its ticks. A PSG note's track
+        # follows the PSG's rule unless a sample note of the track plays too. Either rule's values pass for a PSG note.
+        # One step either way is allowed for rounding.
+        left, right = group[0]['levels']
+        wanted = {track_controllers(left, right, False, mono, camelot_sequencer)}
+        if group[0]['psg']:
+            wanted.add(track_controllers(left, right, True, mono, camelot_sequencer))
+        seen = [(value_at(pans, channel, (start + shift / 10) / FRAME_RATE, 64),
+                 value_at(expressions, channel, (start + shift / 10) / FRAME_RATE, 127)) for shift in range(-10, 16)]
+        if not any(abs(s[1] - w[1]) <= 1 and (w[0] is None or abs(s[0] - w[0]) <= 1) for s in seen for w in wanted):
+            pan = value_at(pans, channel, start / FRAME_RATE, 64)
+            expression = value_at(expressions, channel, start / FRAME_RATE, 127)
+            problems.append('%s: CC10 %d and CC11 %d, where the driver\'s levels %d and %d give %s' % (
+                where, pan, expression, left, right, ' or '.join('%s and %d' % w for w in sorted(wanted, key=str))))
 
-        # The zone that the note's program and key choose has to play the driver's sound. Track 9 plays on the drum
-        # channel, which takes its presets from bank 128.
-        bank = 128 if track == 9 else 0
+        # The zone that the note's program and key choose has to play the driver's sound. The drum channel takes its
+        # presets from bank 128. Track 9 plays there only in a song that plays on all 16 channels.
+        bank = 128 if channel == 9 else 0
         zones = [z for z in presets.get((bank, m['program']), []) if z['low'] <= key <= z['high']]
         if not zones:
             problems.append('%s: program %d in bank %d has no zone for the key' % (where, m['program'], bank))
@@ -449,7 +512,7 @@ def check_song(rom, song, midi_path, sf2_path, frames_limit, report):
         # the frames either side, and the closest counts. A zone that keeps the pitch wheel from moving it doesn't
         # follow the bend. While the note is behind its track's pitch, which the MIDI channel shares with the track's
         # newer note, it isn't compared.
-        bend_range = 0 if zone['no_bend'] else ranges.get(track, 2)
+        bend_range = 0 if zone['no_bend'] else ranges.get(channel, 2)
         for d in group:
             for f, frequency in sorted(d['frequencies'].items()):
                 if f >= min(end - 0.5, frames - 1) or f >= d['release'] or f in d['behind']:
@@ -457,7 +520,7 @@ def check_song(rom, song, midi_path, sf2_path, frames_limit, report):
                 want = driver_hz(d, frequency, mix_rate)
                 errors = []
                 for step in range(-30, 60):
-                    bend = value_at(bends, track, (f + step / 30 + 1e-6) / FRAME_RATE, 8192)
+                    bend = value_at(bends, channel, (f + step / 30 + 1e-6) / FRAME_RATE, 8192)
                     have = zone_hz(zone, key, (bend - 8192) / 8192 * bend_range * 100)
                     errors.append(1200 * math.log2(have / want))
                 error = min(errors, key=abs)
@@ -472,7 +535,7 @@ def check_song(rom, song, midi_path, sf2_path, frames_limit, report):
         # without a loop, can stop between ticks, and then the MIDI note ends on the first tick after it.
         release = max(d['release'] for d in group)
         ends_file = m['off'] >= end - 1.5
-        again = any(o is not m and abs(o['on'] - m['off']) < 0.01 for o in by_key[(track, key)])
+        again = any(o is not m and abs(o['on'] - m['off']) < 0.01 for o in by_key[(channel, key)])
         stopped = all(d['stopped'] for d in group) and m['last_tick'] <= release + 1.5
         late = m['off'] > release + 1.5 and not stopped
         early = m['off'] < release - 1.5 and not again and not ends_file

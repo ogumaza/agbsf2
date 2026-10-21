@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <span>
 #include <string>
 #include <vector>
@@ -11,6 +12,7 @@
 #include "arm.h"
 #include "gba.h"
 #include "psg.h"
+#include "rom.h"
 
 namespace agbsf2::brownie
 {

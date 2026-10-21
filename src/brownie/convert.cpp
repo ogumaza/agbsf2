@@ -10,20 +10,22 @@
 #include <functional>
 #include <optional>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "xsflib/bytes.h"
 
 #include "beat_grid.h"
 #include "beat_midi.h"
+#include "brownie/driver.h"
 #include "brownie/sequencer.h"
+#include "brownie/soundfont.h"
 #include "files.h"
 #include "gba.h"
 #include "midi.h"
 #include "music.h"
 #include "program.h"
 #include "psg.h"
+#include "rom.h"
 #include "sf2.h"
 
 namespace agbsf2::brownie
@@ -146,8 +148,8 @@ public:
     FramePlan MakePlan(uint32_t frames, int loops) const;
 
 private:
-    // Returns true if every channel of the song has been through its loop twice or has ended. Two passes show where
-    // the loop starts.
+    // Returns true if every channel of the song has been through its loop twice or has ended. Two passes show where the
+    // loop starts.
     bool Ready() const;
 
     // Returns the frame that comes as far after the end of the loop channel's `n`th pass as the song's loop starts

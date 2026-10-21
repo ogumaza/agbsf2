@@ -13,6 +13,7 @@
 
 #include "seqlib/midi/reader.h"
 #include "seqlib/sf2/reader.h"
+#include "seqlib/sf2/soundfont.h"
 #include "seqlib/testing/check.h"
 #include "xsflib/bytes.h"
 
@@ -29,8 +30,8 @@ inline std::filesystem::path g_temp;
 // Returns the path of `name` in this run's temp folder.
 std::filesystem::path TempPath(const std::string& name);
 
-// Returns the default settings for a conversion that writes its files to this run's temp folder. The files' names
-// start with `base_name`.
+// Returns the default settings for a conversion that writes its files to this run's temp folder. The files' names start
+// with `base_name`.
 ConvertSettings TempSettings(const std::string& base_name);
 
 // Opens `name` in this run's temp folder for writing, in binary mode, or returns null if it can't be opened.
@@ -69,8 +70,14 @@ bool RepeatsTempoAtLoopStart(const MidiEvents& midi);
 Sf2Records ReadSf2(const std::string& path);
 
 // Returns true if the SoundFont has an instrument and every instrument starts with a global zone that holds the
-// modulators of seqlib's kNoVelocityFilterFullBend. The pitch wheel then covers the whole range that RPN 0 sets.
-bool FullBendRange(const Sf2Records& sf);
+// modulators of seqlib's kGlobalZoneModulators. The pitch wheel then covers the whole range that RPN 0 sets. CC10
+// gets the pan range that most synthesizers give it.
+bool HasGlobalZoneModulators(const Sf2Records& sf);
+
+// Returns true if `s` loops from point `loop_start` over `length` points, repeated as many times as it takes to reach
+// kMinLoop points, and its data ends kLoopGuard points after the loop. Every point after the first pass repeats the
+// point `length` before it.
+bool LengthenedLoop(const seqlib::sf2::Sample& s, uint32_t loop_start, uint32_t length);
 
 // A cartridge image that a test builds in memory. Its first byte is at kRomBase, where the GBA maps the ROM. Each
 // driver's tests build their cartridges on it.

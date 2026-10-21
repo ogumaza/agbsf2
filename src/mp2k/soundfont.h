@@ -47,9 +47,9 @@ class SoundfontBuilder
 public:
     // Keeps references to `rom` and `info`. Both have to outlive the builder. With `psg_exclusive`, each zone of a PSG
     // voice whose release is slower than kExclusiveRelease gets the exclusive class of the voice's channel, 1 to 4. A
-    // note of the class then ends the notes of the class before it on its MIDI channel. The driver ends them there
-    // too: a track's next note on a PSG channel takes the channel. A quicker release gets no class. FluidSynth's fade
-    // would slow it down.
+    // note of the class then ends the notes of the class before it on its MIDI channel. The driver ends them there too:
+    // a track's next note on a PSG channel takes the channel. A quicker release gets no class. FluidSynth's fade would
+    // slow it down.
     SoundfontBuilder(const Rom& rom, const DriverInfo& info, bool psg_exclusive = false);
 
     Sf2File& File()

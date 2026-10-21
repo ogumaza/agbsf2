@@ -476,8 +476,10 @@ a channel at volume 0.
 
 `agbsf2`'s model makes the same choices, frame by frame. Where the mixer
 leaves out every note of a key on a channel, the MIDI file mutes the key with
-polyphonic key pressure until the mixer takes one of its notes again. The
-README describes the mutes.
+polyphonic key pressure until the mixer takes one of its notes again. Each
+channel that mutes a key also starts with the General MIDI 2 Controller
+Destination Setting message. With the message, a key's pressure of 127
+silences that key's notes on the channel. The README describes the mutes.
 
 For each output sample, the mixer interpolates the voice's sample linearly
 between the byte at its position and the next, by the position's fraction,

@@ -3,8 +3,16 @@
 #include "konami/sequencer.h"
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <cstdio>
+#include <memory>
 #include <optional>
+#include <string>
+
+#include "konami/driver.h"
+#include "konami/seqformat.h"
+#include "rom.h"
 
 namespace agbsf2::konami
 {

@@ -4,8 +4,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
+
+#include "konami/driver.h"
+#include "rom.h"
 
 namespace agbsf2::konami
 {

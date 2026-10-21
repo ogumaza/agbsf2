@@ -11,10 +11,16 @@
 #include <string>
 #include <vector>
 
+#include "seqlib/midi/reader.h"
 #include "seqlib/read_error.h"
+#include "seqlib/sf2/reader.h"
 #include "seqlib/sf2/soundfont.h"
 
 #include "files.h"
+#include "gba.h"
+#include "music.h"
+#include "rom.h"
+#include "sf2.h"
 
 namespace agbsf2::test
 {
@@ -29,6 +35,7 @@ ConvertSettings TempSettings(const std::string& base_name)
     ConvertSettings settings;
     settings.out_dir = Utf8(g_temp);
     settings.base_name = base_name;
+
     return settings;
 }
 
@@ -197,7 +204,7 @@ Sf2Records ReadSf2(const std::string& path)
     }
 }
 
-bool FullBendRange(const Sf2Records& sf)
+bool HasGlobalZoneModulators(const Sf2Records& sf)
 {
     const size_t records = sf.Count("inst", 22);
     if (records < 2)
@@ -216,7 +223,7 @@ bool FullBendRange(const Sf2Records& sf)
 
         const uint16_t first = Le16(sf.Record("ibag", 4, bag) + 2);
         const uint16_t end = Le16(sf.Record("ibag", 4, bag + 1) + 2);
-        for (const seqlib::sf2::Modulator& wanted : seqlib::sf2::kNoVelocityFilterFullBend)
+        for (const seqlib::sf2::Modulator& wanted : seqlib::sf2::kGlobalZoneModulators)
         {
             bool found = false;
             for (uint16_t m = first; m < end; m++)
@@ -230,6 +237,30 @@ bool FullBendRange(const Sf2Records& sf)
             {
                 return false;
             }
+        }
+    }
+
+    return true;
+}
+
+bool LengthenedLoop(const seqlib::sf2::Sample& s, uint32_t loop_start, uint32_t length)
+{
+    if (length == 0)
+    {
+        return false;
+    }
+
+    const uint32_t repeats = (kMinLoop + length - 1) / length;
+    if (s.loop_start != loop_start || s.loop_end != loop_start + repeats * length ||
+        s.data.size() != size_t(s.loop_end) + kLoopGuard)
+    {
+        return false;
+    }
+    for (size_t i = size_t(loop_start) + length; i < s.data.size(); i++)
+    {
+        if (s.data[i] != s.data[i - length])
+        {
+            return false;
         }
     }
 

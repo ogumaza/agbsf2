@@ -121,8 +121,8 @@ public:
     // Returns the frame a loop goes back to, or 0 if it has none. A loop sends every track back to its loop point at
     // once, so that's the earliest frame on which a track passed its loop point, where a player that loops leaves out
     // none of the loop's notes, or 0 if the track that loops the song has no loop point and goes back to its start.
-    // Only loop points within kLoopPointWindow frames before the looping track's count. A track whose loop point
-    // comes far earlier, such as at its first command, would make a looping player replay the other tracks' intros.
+    // Only loop points within kLoopPointWindow frames before the looping track's count. A track whose loop point comes
+    // far earlier, such as at its first command, would make a looping player replay the other tracks' intros.
     int LoopStartFrame() const;
 
     // Returns true if a track's loop point starts with a delay that the first pass skips. The later passes then play

@@ -8,21 +8,31 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <initializer_list>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
+#include "seqlib/midi/reader.h"
+#include "seqlib/testing/check.h"
+#include "xsflib/bytes.h"
+
 #include "files.h"
+#include "gba.h"
 #include "midi.h"
 #include "mp2k/convert.h"
 #include "mp2k/driver.h"
 #include "mp2k/sequencer.h"
 #include "mp2k/song.h"
+#include "mp2k/soundfont.h"
 #include "music.h"
 #include "rom.h"
 #include "sf2.h"
+#include "song_banks.h"
 #include "test_util.h"
 
 namespace agbsf2::mp2k
@@ -30,7 +40,7 @@ namespace agbsf2::mp2k
 namespace
 {
 
-using test::FullBendRange;
+using test::HasGlobalZoneModulators;
 using test::Le16;
 using test::MidiEvents;
 using test::ReadAll;
@@ -504,6 +514,37 @@ std::vector<Action> Actions(Sequencer& seq, int frames, Action::Kind kind)
     return out;
 }
 
+// Returns the CC10 and CC11 events of the MIDI track named after track `t`, in order. Each is a tick, a controller and
+// a value.
+std::vector<std::tuple<uint32_t, int, int>> LevelEvents(const MidiEvents& m, int t)
+{
+    const std::string name = "Track " + std::to_string(t);
+    std::vector<std::tuple<uint32_t, int, int>> out;
+    for (const auto& track : m.tracks)
+    {
+        if (track.events.empty())
+        {
+            continue;
+        }
+
+        const std::vector<uint8_t>& first = track.events.front().bytes;
+        if (first.size() < 3 || std::string(first.begin() + 3, first.end()) != name)
+        {
+            continue;
+        }
+
+        for (const auto& e : track.events)
+        {
+            if ((e.bytes[0] & 0xF0) == 0xB0 && (e.bytes[1] == cc::kPan || e.bytes[1] == cc::kExpression))
+            {
+                out.emplace_back(uint32_t(e.tick), e.bytes[1], e.bytes[2]);
+            }
+        }
+    }
+
+    return out;
+}
+
 void TestDecoding()
 {
     Cart cart;
@@ -582,7 +623,7 @@ void TestDetection()
     SEQLIB_CHECK_EQ(info.player_table, kPlayerTable);
     SEQLIB_CHECK_EQ(info.song_count, 2);
     SEQLIB_REQUIRE_EQ(info.players.size(), 2);
-    SEQLIB_CHECK(info.players.size() == 2 && info.players[1].track_count == 3);
+    SEQLIB_CHECK(info.players[1].track_count == 3);
     SEQLIB_CHECK_EQ(info.sound_mode, kMode);
     SEQLIB_CHECK_EQ(info.max_channels, 5);
     SEQLIB_CHECK_EQ(info.master_volume, 12);
@@ -853,6 +894,33 @@ void TestEnvelope()
     SEQLIB_CHECK(levels(1) == kEcho);
 }
 
+void TestEnvelopeHold()
+{
+    // The frame in which a sample note's attack reaches 255 plays at 255, and the decay starts on the next frame. The
+    // SoundFont holds the full level for that frame where the decay changes the level: below a sustain of 255. A PSG
+    // voice's envelope steps on the hardware's counter instead.
+    const DriverInfo info;
+    Voice sample;
+    sample.attack = 255;
+    sample.sustain = 128;
+    Voice full = sample;
+    full.sustain = 255;
+    Voice square;
+    square.type = 1;
+    square.attack = 0;
+    square.decay = 2;
+    square.sustain = 7;
+
+    const VolumeEnvelope held = EnvelopeFor(info, sample);
+    const VolumeEnvelope sustained = EnvelopeFor(info, full);
+    const VolumeEnvelope psg = EnvelopeFor(info, square);
+
+    SEQLIB_CHECK_EQ(held.hold, Timecents(1.0 / kFrameRate));
+    SEQLIB_CHECK_EQ(held.decay, kInstant);
+    SEQLIB_CHECK_EQ(sustained.hold, kInstant);
+    SEQLIB_CHECK_EQ(psg.hold, kInstant);
+}
+
 void TestPitch()
 {
     // A sample's rate for a key: its rate at key 60, in 1/1024 Hz, times 2^(n/12), with a fine tune that runs in a
@@ -900,6 +968,35 @@ void TestPitch()
 
     SEQLIB_CHECK_EQ(before, 13379);
     SEQLIB_CHECK_EQ(after, KeyToFrequency(13379 * 1024, 63, 0));
+}
+
+void TestLevelReports()
+{
+    // A track sets volume 100 and pan 0x50, and a tick later volume 1 and pan 0x20.
+    Cart cart;
+    const uint32_t voices = cart.VoiceGroup({{0, Cart::Voice(0, cart.Wave(Saw(), 13379, 0))}});
+    cart.Song({Track()
+                   .Cmd(kCmdVoice, 0)
+                   .Cmd(kCmdVol, 100)
+                   .Cmd(kCmdPan, 0x50)
+                   .Wait(1)
+                   .Cmd(kCmdVol, 1)
+                   .Cmd(kCmdPan, 0x20)
+                   .Wait(1)
+                   .Fine()},
+              voices);
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+    Sequencer seq(rom, info, 0);
+
+    const std::vector<Action> reports = Actions(seq, 4, Action::kLevels);
+
+    // Volume 100 gives a level of 200. Pan 0x50 gives the left 95/256 of it and the right 160/256: 74 and 125, rounded
+    // down. Volume 1 gives a level of 2, and pan 0x20 gives the left 191/256 of it and the right 64/256. Rounded down,
+    // the left plays at 1 and the right not at all.
+    SEQLIB_REQUIRE_EQ(reports.size(), 2);
+    SEQLIB_CHECK(reports[0].tick == 0 && reports[0].left == 74 && reports[0].right == 125);
+    SEQLIB_CHECK(reports[1].tick == 1 && reports[1].left == 1 && reports[1].right == 0);
 }
 
 void TestLoops()
@@ -1007,6 +1104,79 @@ void TestLoopStartsAtSecondPass()
     SEQLIB_REQUIRE_EQ(m.Find(0x90).size(), 3);
 }
 
+void TestLoopLevelsAtSecondPass()
+{
+    // A track plays at volume 100 and the centre before its loop. The loop sets the volume as it starts. The loop's
+    // second note plays at another pan. The next pass keeps that pan. In song 0 it's 0x7F. In song 1 the loop also sets
+    // the pan to the centre as it starts. In song 2 the second note's pan is 0x42.
+    Cart cart;
+    const uint32_t voices = cart.VoiceGroup({{0, Cart::Voice(0, cart.Wave(Saw(), 13379, 0))}});
+    for (int song = 0; song < 3; song++)
+    {
+        Track t;
+        t.Cmd(kCmdTempo, 75).Cmd(kCmdVoice, 0).Cmd(kCmdVol, 100).Cmd(kCmdPan, 0x40).Wait(12);
+        const size_t loop = t.Here();
+        t.Cmd(kCmdVol, 100);
+        if (song == 1)
+        {
+            t.Cmd(kCmdPan, 0x40);
+        }
+        t.Note(12, 60, 100).Wait(12).Cmd(kCmdPan, song == 2 ? 0x42 : 0x7F).Note(12, 62, 100).Wait(12).Goto(loop);
+        cart.Song({t}, voices);
+    }
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+    ConvertSettings opt = TempSettings("loop_levels");
+
+    std::vector<SongReport> reports;
+    for (int song = 0; song < 3; song++)
+    {
+        reports.push_back(ConvertSong(rom, info, song, opt, nullptr));
+    }
+
+    // In song 0, a player that loops on the markers would play the loop's first note at the centre. The game plays it
+    // on the right in the later passes. The marked loop therefore starts at the second pass, from tick 36. In song 1
+    // the passes play alike. In song 2 each side of the later passes' first note plays less than 1 dB away from the
+    // centre's level. Both keep the loop at the first pass, from tick 12.
+    SEQLIB_CHECK(reports[0].ok && AtFrames(reports[0].loop_start, 36) && AtFrames(reports[0].loop_end, 60));
+    SEQLIB_CHECK(reports[1].ok && AtFrames(reports[1].loop_start, 12) && AtFrames(reports[1].loop_end, 36));
+    SEQLIB_CHECK(reports[2].ok && AtFrames(reports[2].loop_start, 12) && AtFrames(reports[2].loop_end, 36));
+}
+
+void TestLoopLevelsWithDroppedNote()
+{
+    // Two tracks loop from tick 12 for 24 ticks, at one volume and pan throughout. Track 0 plays a note on square 1 at
+    // tick 30 that lasts past the loop's end. Track 1 plays square 1 as its loop starts. The channel is free in the
+    // first pass. In the later ones, track 0's note holds it. The driver then drops track 1's note.
+    Cart cart;
+    const uint32_t voices = cart.VoiceGroup({{1, Cart::Voice(1, 2, 60, {0, 0, 15, 0})}});
+    Track first;
+    first.Cmd(kCmdTempo, 75).Cmd(kCmdVoice, 1).Cmd(kCmdVol, 100).Wait(12);
+    const size_t first_loop = first.Here();
+    first.Wait(18).Note(12, 70, 127).Wait(6).Goto(first_loop);
+    Track second;
+    second.Cmd(kCmdVoice, 1).Cmd(kCmdVol, 100).Wait(12);
+    const size_t second_loop = second.Here();
+    second.Note(6, 60, 127).Wait(24).Goto(second_loop);
+    cart.Song({first, second}, voices);
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+    ConvertSettings opt = TempSettings("loop_dropped");
+
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
+
+    // The passes start other notes. The notes that both start play at the same levels. The loop therefore stays at the
+    // first pass.
+    SEQLIB_CHECK(r.ok && AtFrames(r.loop_start, 12) && AtFrames(r.loop_end, 36));
+    const MidiEvents m = ReadMidi(r.midi_path);
+    std::vector<uint32_t> ons;
+    for (const auto& e : m.Find(0x91))
+    {
+        ons.push_back(uint32_t(e.tick));
+    }
+    SEQLIB_CHECK((ons == std::vector<uint32_t>{12 * kMidiTicks}));
+}
+
 void TestLoopLengths()
 {
     // Two tracks loop 36 and 48 ticks from the start, and a third, without a loop, plays a note of 30 ticks at tick 10.
@@ -1068,9 +1238,9 @@ void TestLoopAfterTie()
 
 // A track's volume is 100 when its loop starts the first time, and the loop sets 60 for its second note. In song 0 the
 // loop sets 100 again as it starts, and in song 1 just before it jumps back, in the tick of the loop's end, which the
-// next pass starts on. Either way the marked pass gives volume 100 again at its start, for a player that jumps back
-// there from volume 60. In song 2 the loop doesn't set it again, so the game plays the later passes' first note at 60,
-// as such a player does, and nothing is written again.
+// next pass starts on. Either way the marked pass gives the levels of volume 100 again at its start: CC10 64 and CC11
+// 112. A player that jumps back there from volume 60 then plays at volume 100. In song 2 the loop doesn't set it again.
+// The game then plays the later passes' first note at 60, and so does such a player. Nothing is written again.
 void TestLoopSettingsAgain()
 {
     Cart cart;
@@ -1100,19 +1270,18 @@ void TestLoopSettingsAgain()
     {
         const SongReport r = ConvertSong(rom, info, song, opt, nullptr);
 
-        std::vector<std::pair<uint32_t, int>> volumes;
+        std::map<int, int> at_start;
         for (const auto& [tick, bytes] : ReadMidi(r.midi_path).Find(0xB0))
         {
-            if (bytes[1] == cc::kVolume)
+            if (tick == 12 * kMidiTicks && (bytes[1] == cc::kPan || bytes[1] == cc::kExpression))
             {
-                volumes.emplace_back(uint32_t(tick), bytes[2]);
+                at_start[bytes[1]] = bytes[2];
             }
         }
 
-        const bool again =
-            std::find(volumes.begin(), volumes.end(), std::make_pair(12 * kMidiTicks, 100)) != volumes.end();
+        const std::map<int, int> kAgain = {{cc::kPan, 64}, {cc::kExpression, 112}};
         SEQLIB_CHECK(r.ok && AtFrames(r.loop_start, 12));
-        SEQLIB_CHECK(again == (song < 2));
+        SEQLIB_CHECK(at_start == (song < 2 ? kAgain : std::map<int, int>()));
     }
 }
 
@@ -1158,15 +1327,17 @@ void TestHourLimit()
 
 void TestConversion()
 {
-    // A sample voice with a bend, a key split of a sample and a square wave, and a drum kit of a fixed-pitch sample,
-    // panned left, and a noise voice.
+    // A sample voice with a bend, a key split of a sample and a square wave, and a drum kit. The kit has a fixed-pitch
+    // sample panned left and three noise voices: one with no pan, one panned right and one panned a little left.
     Cart cart;
     const uint32_t lead = cart.Wave(Saw(), 11025, 32);
     const uint32_t low = cart.Wave(Saw(100), 8000);
     const uint32_t kick = cart.Wave(Saw(50), 13379);
     const uint32_t split_table = cart.VoiceGroup({{0, Cart::Voice(0, low)}, {1, Cart::Voice(1, 2, 60, {0, 0, 15, 0})}});
-    const uint32_t kit_table = cart.VoiceGroup(
-        {{36, Cart::Voice(kFixed, kick, 50, {255, 0, 255, 0}, 0xA0)}, {38, Cart::Voice(4, 0, 40, {0, 2, 0, 0})}});
+    const uint32_t kit_table = cart.VoiceGroup({{36, Cart::Voice(kFixed, kick, 50, {255, 0, 255, 0}, 0xA0)},
+                                                {38, Cart::Voice(4, 0, 40, {0, 2, 0, 0})},
+                                                {40, Cart::Voice(4, 0, 40, {0, 2, 0, 0}, 0xD8)},
+                                                {41, Cart::Voice(4, 0, 40, {0, 2, 0, 0}, 0xB0)}});
     const uint32_t voices = cart.VoiceGroup({{1, Cart::Voice(0, lead, 60, {255, 200, 128, 200})},
                                              {2, cart.KeySplit(split_table, 59)},
                                              {3, Cart::Voice(kVoiceDrumKit, kit_table)}});
@@ -1201,23 +1372,27 @@ void TestConversion()
     SEQLIB_CHECK(PathFromUtf8(r.midi_path).filename() == "convert_00.mid");
 
     // 960 ticks a quarter note, the tempo at the GBA's speed, and a conductor track, then a track on the MIDI channel
-    // of each of the song's tracks that plays notes.
+    // of each of the song's tracks that plays notes. Track 9 moves off the drum channel to channel 11, the first free
+    // one after it.
     const MidiEvents m = ReadMidi(r.midi_path);
     SEQLIB_CHECK_EQ(m.division, 24 * kMidiTicks);
     SEQLIB_REQUIRE_EQ(m.tracks.size(), 4);
     const auto tempos = Tempos(m);
     SEQLIB_CHECK(std::any_of(tempos.begin(), tempos.end(), [](const auto& t) { return t.second == 401825; }));
 
+    // A velocity of v is written as 127 × √(v / 127), rounded: the lead's 100 as 113.
     const auto lead_notes = m.Find(0x90);
     SEQLIB_CHECK(lead_notes.size() == 1 && lead_notes[0].tick == 0 && lead_notes[0].bytes[1] == 60 &&
-                 lead_notes[0].bytes[2] == 100);
+                 lead_notes[0].bytes[2] == 113);
     const auto lead_offs = m.Find(0x80);
     SEQLIB_CHECK(lead_offs.size() == 1 && lead_offs[0].tick == 24 * kMidiTicks);
     SEQLIB_REQUIRE_EQ(m.Find(0x91).size(), 2);
-    SEQLIB_REQUIRE_EQ(m.Find(0x99).size(), 2);
+    SEQLIB_REQUIRE_EQ(m.Find(0x9A).size(), 2);
+    SEQLIB_CHECK(m.Find(0x99).empty());
 
-    // The program changes, the volume, the pan, the song's reverb, and a bend range of 3 semitones that the bend of 3
-    // semitones fills.
+    // The program change, full volume and the song's reverb. The track's volume of 100 and pan of 0x50 give it levels
+    // of 74 on the left and 125 on the right, out of 128. CC10 84 and CC11 114 give those levels under a constant-power
+    // pan law and the SF2 default curve of CC11. A bend range of 3 semitones fills the bend of 3 semitones.
     const auto programs = m.Find(0xC0);
     SEQLIB_CHECK(programs.size() == 1 && programs[0].bytes[1] == 1);
     std::map<int, int> controls;
@@ -1225,12 +1400,13 @@ void TestConversion()
     {
         controls[e.bytes[1]] = e.bytes[2];
     }
-    SEQLIB_CHECK(controls[cc::kVolume] == 100 && controls[cc::kPan] == 0x50 && controls[cc::kReverb] == 40);
+    SEQLIB_CHECK(controls[cc::kVolume] == 127 && controls[cc::kReverb] == 40);
+    SEQLIB_CHECK(controls[cc::kPan] == 84 && controls[cc::kExpression] == 114);
     SEQLIB_CHECK_EQ(controls[cc::kDataEntry], 3);
     const auto bends = m.Find(0xE0);
     SEQLIB_CHECK(!bends.empty() && bends.back().bytes[1] == 0x7F && bends.back().bytes[2] == 0x7F);
 
-    // The SoundFont: a preset for each voice, and the drum channel's in bank 128 too.
+    // The SoundFont: a preset in bank 0 for each voice. No note plays on the drum channel. Bank 128 has no presets.
     const Sf2Records sf = ReadSf2(r.sf2_path);
     std::map<std::pair<int, int>, int> presets;
     for (size_t p = 0; p + 1 < sf.Count("phdr", 38); p++)
@@ -1239,9 +1415,9 @@ void TestConversion()
         presets[{Le16(h + 22), Le16(h + 20)}] =
             Le16(sf.Record("pgen", 4, Le16(sf.Record("pbag", 4, Le16(h + 24)))) + 2);
     }
-    SEQLIB_CHECK(presets.count({0, 1}) && presets.count({0, 2}) && presets.count({0, 3}) && presets.count({128, 3}));
-    SEQLIB_REQUIRE_EQ(presets.size(), 4);
-    SEQLIB_CHECK(FullBendRange(sf));
+    SEQLIB_CHECK(presets.count({0, 1}) && presets.count({0, 2}) && presets.count({0, 3}));
+    SEQLIB_REQUIRE_EQ(presets.size(), 3);
+    SEQLIB_CHECK(HasGlobalZoneModulators(sf));
 
     auto zone_of = [&](int instrument, int index)
     {
@@ -1265,15 +1441,29 @@ void TestConversion()
     SEQLIB_CHECK(!square_zone.count(sf2::kInitialAttenuation));
     SEQLIB_CHECK(std::fabs(20 * std::log10(sf.SamplePeak(square_zone.at(sf2::kSampleId)) / 32767.0) + 6.3) < 0.01);
 
-    // The drum kit's fixed-pitch sample plays at the mixer's rate whatever the key or the bend, panned to the left by
-    // its pan of 0xA0, and its noise plays the noise setting of its key.
+    // The drum kit's fixed-pitch sample plays at the mixer's rate whatever the key or the bend. Its pan of 0xA0 gives
+    // it 191/127 of the left level of a note with no pan and 64/128 of the right level. Pan -296 gives the sides that
+    // ratio under a sin/cos pan law. The noise voice with no pan plays the noise setting of its key. Its zone holds no
+    // pan.
     const auto kick_zone = zone_of(presets[{0, 3}], 1);
     SEQLIB_CHECK_EQ(kick_zone.at(sf2::kKeyRange), 0x2424);
     SEQLIB_CHECK_EQ(kick_zone.at(sf2::kScaleTuning), 0);
-    SEQLIB_CHECK_EQ(int16_t(kick_zone.at(sf2::kPan)), -251);
+    SEQLIB_CHECK_EQ(int16_t(kick_zone.at(sf2::kPan)), -296);
     const auto noise_zone = zone_of(presets[{0, 3}], 2);
     SEQLIB_CHECK_EQ(noise_zone.at(sf2::kKeyRange), 0x2626);
     SEQLIB_CHECK_EQ(noise_zone.at(sf2::kScaleTuning), 0);
+    SEQLIB_CHECK(!noise_zone.count(sf2::kPan));
+
+    // The PSG plays a note on one side alone where that side's level is at least twice the other's. It plays in the
+    // middle otherwise. The pan of 0xD8 gives 176 on the right and 79 on the left. The pan of 0xB0 gives 96 on the
+    // right and 159 on the left. On one side alone, the zone's attenuation cancels the 3 dB that the RP-036 pan law
+    // adds there. Most players apply 0.4 of a zone's attenuation. The zone therefore holds 75 cB.
+    const auto right_zone = zone_of(presets[{0, 3}], 3), middle_zone = zone_of(presets[{0, 3}], 4);
+    SEQLIB_CHECK(right_zone.at(sf2::kKeyRange) == 0x2828 && middle_zone.at(sf2::kKeyRange) == 0x2929);
+    SEQLIB_CHECK(right_zone.count(sf2::kPan) && int16_t(right_zone.at(sf2::kPan)) == 500);
+    SEQLIB_CHECK(right_zone.count(sf2::kInitialAttenuation) && right_zone.at(sf2::kInitialAttenuation) == 75);
+    SEQLIB_CHECK(!middle_zone.count(sf2::kPan) && !middle_zone.count(sf2::kInitialAttenuation));
+    SEQLIB_CHECK(!noise_zone.count(sf2::kInitialAttenuation));
     bool wheel_off = false;
     for (size_t i = 0; i < sf.Count("imod", 10); i++)
     {
@@ -1281,6 +1471,109 @@ void TestConversion()
         wheel_off = wheel_off || (Le16(mod) == 0x020E && Le16(mod + 2) == sf2::kFineTune && Le16(mod + 4) == 0);
     }
     SEQLIB_CHECK(wheel_off);
+}
+
+void TestLevels()
+{
+    // A sample voice, and a voice for each square channel.
+    Cart cart;
+    const uint32_t voices = cart.VoiceGroup({{0, Cart::Voice(0, cart.Wave(Saw(), 13379, 0))},
+                                             {1, Cart::Voice(1, 2, 60, {0, 0, 15, 0})},
+                                             {2, Cart::Voice(2, 2, 60, {0, 0, 15, 0})}});
+
+    // Tracks 0 to 2 play the sample voice: at volume 80 and pan 0x7F, at volume 127 and pan 0x7F, and at volume 100
+    // and pan 0x50. Tracks 3 to 5 play square 1 at volume 100 in turn: at pan 0x50 from tick 0, 0x60 from tick 24 and
+    // 0x20 from tick 48. Track 6 plays square 2, the sample voice and square 2 again from ticks 0, 24 and 48, at volume
+    // 100 and pan 0x60.
+    std::vector<Track> tracks;
+    const std::vector<std::pair<int, int>> kSamples = {{80, 0x7F}, {127, 0x7F}, {100, 0x50}};
+    for (const auto& [volume, pan] : kSamples)
+    {
+        tracks.push_back(
+            Track().Cmd(kCmdVoice, 0).Cmd(kCmdVol, volume).Cmd(kCmdPan, pan).Note(12, 60, 127).Wait(12).Fine());
+    }
+    tracks.push_back(Track().Cmd(kCmdVoice, 1).Cmd(kCmdVol, 100).Cmd(kCmdPan, 0x50).Note(12, 60, 127).Wait(12).Fine());
+    tracks.push_back(
+        Track().Cmd(kCmdVoice, 1).Cmd(kCmdVol, 100).Cmd(kCmdPan, 0x60).Wait(24).Note(12, 60, 127).Wait(12).Fine());
+    tracks.push_back(
+        Track().Cmd(kCmdVoice, 1).Cmd(kCmdVol, 100).Cmd(kCmdPan, 0x20).Wait(48).Note(12, 60, 127).Wait(12).Fine());
+    tracks.push_back(Track()
+                         .Cmd(kCmdVol, 100)
+                         .Cmd(kCmdPan, 0x60)
+                         .Cmd(kCmdVoice, 2)
+                         .Note(12, 60, 127)
+                         .Wait(24)
+                         .Cmd(kCmdVoice, 0)
+                         .Note(12, 60, 127)
+                         .Wait(24)
+                         .Cmd(kCmdVoice, 2)
+                         .Note(12, 60, 127)
+                         .Wait(12)
+                         .Fine());
+    cart.Song(tracks, voices);
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+    ConvertSettings opt = TempSettings("levels");
+
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
+
+    // A sample plays at the levels that the volume and pan give each side, out of 128. Volume 80 at pan 0x7F gives 0
+    // and 158. Volume 127 gives 0 and 252. CC11 can't reach that: it stops at the centre's loudest level. Volume 100 at
+    // pan 0x50 gives 74 and 125.
+    using Levels = std::vector<std::tuple<uint32_t, int, int>>;
+    SEQLIB_REQUIRE(r.ok);
+    const MidiEvents m = ReadMidi(r.midi_path);
+    SEQLIB_CHECK((LevelEvents(m, 0) == Levels{{0, cc::kPan, 127}, {0, cc::kExpression, 119}}));
+    SEQLIB_CHECK((LevelEvents(m, 1) == Levels{{0, cc::kPan, 127}, {0, cc::kExpression, 127}}));
+    SEQLIB_CHECK((LevelEvents(m, 2) == Levels{{0, cc::kPan, 84}, {0, cc::kExpression, 114}}));
+
+    // A square plays on one side alone where that side's level is at least twice the other's. That side plays at the
+    // level of the centre: the average of the two. Otherwise the square plays on both sides at that level. Pan 0x50
+    // gives 74 and 125. The square then plays on both sides at 99.5. Pan 0x60 gives 49 and 150, on the right alone.
+    // Pan 0x20 gives 149 and 50, on the left alone. A track's controllers follow the PSG's rule from the start where
+    // its first note is a PSG note.
+    SEQLIB_CHECK((LevelEvents(m, 3) == Levels{{0, cc::kPan, 64}, {0, cc::kExpression, 112}}));
+    SEQLIB_CHECK((LevelEvents(m, 4) == Levels{{0, cc::kPan, 127}, {0, cc::kExpression, 95}}));
+    SEQLIB_CHECK((LevelEvents(m, 5) == Levels{{0, cc::kPan, 0}, {0, cc::kExpression, 95}}));
+
+    // A track that plays both kinds of voice follows the rule of the notes that it plays.
+    SEQLIB_CHECK((LevelEvents(m, 6) == Levels{{0, cc::kPan, 127},
+                                              {0, cc::kExpression, 95},
+                                              {24 * kMidiTicks, cc::kPan, 101},
+                                              {24 * kMidiTicks, cc::kExpression, 119},
+                                              {48 * kMidiTicks, cc::kPan, 127},
+                                              {48 * kMidiTicks, cc::kExpression, 95}}));
+}
+
+void TestMonoLevels()
+{
+    // A cartridge with the mono mixer, a sample voice and a square voice.
+    Cart cart;
+    const uint8_t kMono[] = {0xA0, 0x78, 0xE1, 0x78, 0x40, 0x18, 0x68, 0x43, 0x40, 0x0A, 0xA0, 0x72};
+    for (uint32_t i = 0; i < 12; i++)
+    {
+        cart.Put8(kMonoVolume + i, kMono[i]);
+    }
+    const uint32_t voices =
+        cart.VoiceGroup({{0, Cart::Voice(0, cart.Wave(Saw(), 13379, 0))}, {1, Cart::Voice(1, 2, 60, {0, 0, 15, 0})}});
+
+    // Track 0 plays the sample voice at volume 80 and pan 0x7F, and track 1 the square at volume 100 and pan 0x60.
+    cart.Song({Track().Cmd(kCmdVoice, 0).Cmd(kCmdVol, 80).Cmd(kCmdPan, 0x7F).Note(12, 60, 127).Wait(12).Fine(),
+               Track().Cmd(kCmdVoice, 1).Cmd(kCmdVol, 100).Cmd(kCmdPan, 0x60).Note(12, 60, 127).Wait(12).Fine()},
+              voices);
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+    ConvertSettings opt = TempSettings("mono_levels");
+
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
+
+    // The mixer plays the sample on both sides at the average of its levels, 0 and 158. The PSG still plays the square
+    // on the right alone.
+    using Levels = std::vector<std::tuple<uint32_t, int, int>>;
+    SEQLIB_REQUIRE(info.mono && r.ok);
+    const MidiEvents m = ReadMidi(r.midi_path);
+    SEQLIB_CHECK((LevelEvents(m, 0) == Levels{{0, cc::kPan, 64}, {0, cc::kExpression, 100}}));
+    SEQLIB_CHECK((LevelEvents(m, 1) == Levels{{0, cc::kPan, 127}, {0, cc::kExpression, 95}}));
 }
 
 void TestSlowAttackAtEnd()
@@ -1462,6 +1755,56 @@ void TestSharedDrumChannel()
     SEQLIB_CHECK(!warns(first) && warns(second));
 }
 
+void TestDrumChannel()
+{
+    // Two songs whose tracks play one after another. In song 0, track 8 only ends. In song 1, all 16 tracks play.
+    Cart cart(kMode, {16});
+    const uint32_t voices = cart.VoiceGroup({{2, Cart::Voice(0, cart.Wave(Saw(70)))}});
+    for (int song = 0; song < 2; song++)
+    {
+        std::vector<Track> tracks;
+        for (int t = 0; t < 16; t++)
+        {
+            Track track;
+            if (song == 1 || t != 8)
+            {
+                track.Wait(24 * t).Cmd(kCmdVoice, 2).Note(24, 60, 100).Wait(24);
+            }
+            tracks.push_back(track.Fine());
+        }
+        cart.Song(tracks, voices);
+    }
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+    ConvertSettings opt = TempSettings("drum_channel");
+
+    const SongReport first = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport second = ConvertSong(rom, info, 1, opt, nullptr);
+
+    // In song 0, a track plays on every channel after the drum channel. Track 9 moves to channel 9, the last free one
+    // before it. Its voice gets no copy in the drum bank. In song 1, track 9 stays on the drum channel. Its voice gets
+    // a copy in the drum bank there.
+    auto preset_list = [](const std::string& path)
+    {
+        const Sf2Records sf = ReadSf2(path);
+        std::set<std::pair<int, int>> presets;
+        for (size_t p = 0; p + 1 < sf.Count("phdr", 38); p++)
+        {
+            const uint8_t* h = sf.Record("phdr", 38, p);
+            presets.insert({Le16(h + 22), Le16(h + 20)});
+        }
+        return presets;
+    };
+    using Presets = std::set<std::pair<int, int>>;
+    SEQLIB_REQUIRE(first.ok && second.ok);
+    const MidiEvents a = ReadMidi(first.midi_path);
+    const MidiEvents b = ReadMidi(second.midi_path);
+    SEQLIB_CHECK(a.Find(0x99).empty() && a.Find(0x98).size() == 1);
+    SEQLIB_CHECK(b.Find(0x99).size() == 1);
+    SEQLIB_CHECK(preset_list(first.sf2_path) == (Presets{{0, 2}}));
+    SEQLIB_CHECK(preset_list(second.sf2_path) == (Presets{{0, 2}, {128, 2}}));
+}
+
 void TestVoiceChannels()
 {
     // Track 0 plays a note with a slow release and turns its volume down while the note is held, and again while it
@@ -1537,16 +1880,18 @@ void TestVoiceChannels()
         return -1;
     };
 
-    // On the first channel, track 0's note is released at tick 12, and follows its track's volume before and after
-    // that. At tick 24 an All Sound Off cuts off its release, and the channel takes track 1's voice and volume for the
-    // chord's last note.
-    SEQLIB_CHECK(find(0, {0xC0, 1}) >= 0 && find(0, {0x90, 60, 100}) >= 0 && find(12, {0x80, 60, 0}) >= 0);
-    SEQLIB_CHECK(find(0, {0xB0, cc::kVolume, 127}) >= 0 && find(6, {0xB0, cc::kVolume, 80}) >= 0 &&
-                 find(18, {0xB0, cc::kVolume, 50}) >= 0);
+    // On the first channel, track 0's note is released at tick 12. The note follows its track's volume before and
+    // after that, at the centre: volumes of 127, 80 and 50 give CC11 127, 100 and 79. At tick 24 an All Sound Off cuts
+    // off its release. The channel then takes track 1's voice and volume for the chord's last note. A velocity of 100
+    // is written as 127 × √(100 / 127), rounded: 113.
+    SEQLIB_CHECK(find(0, {0xC0, 1}) >= 0 && find(0, {0x90, 60, 113}) >= 0 && find(12, {0x80, 60, 0}) >= 0);
+    SEQLIB_CHECK(find(0, {0xB0, cc::kVolume, 127}) >= 0 && find(0, {0xB0, cc::kPan, 64}) >= 0);
+    SEQLIB_CHECK(find(0, {0xB0, cc::kExpression, 127}) >= 0 && find(6, {0xB0, cc::kExpression, 100}) >= 0 &&
+                 find(18, {0xB0, cc::kExpression, 79}) >= 0);
     const int cut = find(24, {0xB0, cc::kAllSoundOff, 0});
-    const int chord = find(24, {0x90, 69, 100});
+    const int chord = find(24, {0x90, 69, 113});
     SEQLIB_CHECK(cut >= 0 && chord > cut);
-    SEQLIB_CHECK(find(24, {0xC0, 2}) >= 0 && find(24, {0xB0, cc::kVolume, 100}) >= 0);
+    SEQLIB_CHECK(find(24, {0xC0, 2}) >= 0 && find(24, {0xB0, cc::kExpression, 112}) >= 0);
 
     // The chord's other notes take the 4 free channels.
     for (uint8_t ch = 1; ch < 5; ch++)
@@ -1629,19 +1974,20 @@ void TestVoiceChannelsLoop()
 
     const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
 
-    // The loop's first note, at tick 12, sets the channel's program, volume and pitch bend again, though the note
-    // before it left them the same, since a player that jumps back to the loop's start comes from track 0's note.
+    // The loop's first note, at tick 12, sets the channel's program, CC10, CC11 and pitch bend again. The note before
+    // it left them the same. A player that jumps back to the loop's start comes from track 0's note. Both tracks play
+    // at the centre. CC11 is 87 for volume 60 and 112 for volume 100.
     using Events = std::vector<seqlib::midi::Event>;
     SEQLIB_CHECK(r.ok);
     SEQLIB_CHECK(AtFrames(r.loop_start, 6));
     SEQLIB_CHECK(AtFrames(r.loop_end, 54));
     const MidiEvents m = ReadMidi(r.midi_path);
-    Events volumes;
+    Events levels;
     for (const auto& e : m.Find(0xB0))
     {
-        if (e.bytes[1] == cc::kVolume)
+        if (e.bytes[1] == cc::kPan || e.bytes[1] == cc::kExpression)
         {
-            volumes.push_back(e);
+            levels.push_back(e);
         }
     }
     SEQLIB_CHECK((m.Find(0xC0) == Events{{0, {0xC0, 2}},
@@ -1649,11 +1995,13 @@ void TestVoiceChannelsLoop()
                                          {24 * kMidiTicks, {0xC0, 1}},
                                          {60 * kMidiTicks, {0xC0, 2}},
                                          {72 * kMidiTicks, {0xC0, 1}}}));
-    SEQLIB_CHECK((volumes == Events{{0, {0xB0, cc::kVolume, 60}},
-                                    {12 * kMidiTicks, {0xB0, cc::kVolume, 60}},
-                                    {24 * kMidiTicks, {0xB0, cc::kVolume, 100}},
-                                    {60 * kMidiTicks, {0xB0, cc::kVolume, 60}},
-                                    {72 * kMidiTicks, {0xB0, cc::kVolume, 100}}}));
+    SEQLIB_CHECK((levels == Events{{0, {0xB0, cc::kPan, 64}},
+                                   {0, {0xB0, cc::kExpression, 87}},
+                                   {12 * kMidiTicks, {0xB0, cc::kPan, 64}},
+                                   {12 * kMidiTicks, {0xB0, cc::kExpression, 87}},
+                                   {24 * kMidiTicks, {0xB0, cc::kExpression, 112}},
+                                   {60 * kMidiTicks, {0xB0, cc::kExpression, 87}},
+                                   {72 * kMidiTicks, {0xB0, cc::kExpression, 112}}}));
     SEQLIB_CHECK((m.Find(0xE0) == Events{{12 * kMidiTicks, {0xE0, 0x00, 0x40}}}));
 }
 
@@ -1805,6 +2153,62 @@ void TestPsgExclusiveShared()
         SEQLIB_REQUIRE_EQ(classes.size(), 10);
         SEQLIB_CHECK(AllOfClass(classes.at(0), 1) && AllOfClass(classes.at(3), 4) && AllOfClass(classes.at(5), 0));
     }
+}
+
+// For each preset of bank 0, by program, returns one flag for each zone of the instrument that the preset plays, after
+// the global zone. A flag is true if its zone holds a modulator from CC91 to the reverb send with an amount of 0.
+std::map<int, std::vector<bool>> DryZones(const Sf2Records& sf)
+{
+    std::map<int, std::vector<bool>> out;
+    for (size_t p = 0; p + 1 < sf.Count("phdr", 38); p++)
+    {
+        const uint8_t* h = sf.Record("phdr", 38, p);
+        if (Le16(h + 22) != 0)
+        {
+            continue;
+        }
+
+        const size_t instrument = Le16(sf.Record("pgen", 4, Le16(sf.Record("pbag", 4, Le16(h + 24)))) + 2);
+        const size_t first = Le16(sf.Record("inst", 22, instrument) + 20);
+        const size_t end = Le16(sf.Record("inst", 22, instrument + 1) + 20);
+        for (size_t z = first + 1; z < end; z++)
+        {
+            bool dry = false;
+            for (size_t m = Le16(sf.Record("ibag", 4, z) + 2); m < Le16(sf.Record("ibag", 4, z + 1) + 2); m++)
+            {
+                const uint8_t* mod = sf.Record("imod", 10, m);
+                dry =
+                    dry || (Le16(mod) == (sf2::kController | 91) && Le16(mod + 2) == sf2::kReverbEffectsSend &&
+                            Le16(mod + 4) == 0 && Le16(mod + 6) == sf2::kNoController && Le16(mod + 8) == sf2::kLinear);
+            }
+            out[Le16(h + 20)].push_back(dry);
+        }
+    }
+
+    return out;
+}
+
+// Every zone of a PSG voice holds kNoReverb: the default modulator from CC91 to the reverb send, at an amount of 0. A
+// sample's zone keeps the default.
+void TestPsgNoReverb()
+{
+    const ExclusiveSong song = MakeExclusiveSong();
+    const SongReport r = ConvertSong(song.rom, song.info, 0, TempSettings("no_reverb"), nullptr);
+
+    SEQLIB_CHECK(r.ok);
+    const auto dry = DryZones(ReadSf2(r.sf2_path));
+    SEQLIB_REQUIRE_EQ(dry.size(), 10);
+    for (int program = 0; program < 7; program++)
+    {
+        const std::vector<bool>& zones = dry.at(program);
+        SEQLIB_CHECK(!zones.empty() && std::all_of(zones.begin(), zones.end(), [](bool d) { return d; }));
+    }
+    SEQLIB_CHECK(!dry.at(7).empty() && std::none_of(dry.at(7).begin(), dry.at(7).end(), [](bool d) { return d; }));
+
+    // In the drum kit, the zones of both noises are dry. The sample's zone isn't. In the key split, the two zones of
+    // square 2 cover the keys up to 59 and are dry. The sample's zone isn't.
+    SEQLIB_CHECK((dry.at(8) == std::vector<bool>{true, true, false}));
+    SEQLIB_CHECK((dry.at(9) == std::vector<bool>{true, true, false}));
 }
 
 // A compressed sample decodes to its first point and then a step from the table for each of the others: from the low
@@ -2036,9 +2440,9 @@ void TestPsgRelease()
 
     SEQLIB_CHECK(r.ok);
     SEQLIB_REQUIRE_EQ(bends.size(), 2);
-    SEQLIB_CHECK(bends.size() == 2 && bends[0].tick == 0 && bends[1].tick == 24 * kMidiTicks);
-    SEQLIB_CHECK(bends.size() == 2 && std::abs((bends[0].bytes[1] | (bends[0].bytes[2] << 7)) - kNoise) <= 1);
-    SEQLIB_CHECK(bends.size() == 2 && (bends[1].bytes[1] | (bends[1].bytes[2] << 7)) == kSample);
+    SEQLIB_CHECK(bends[0].tick == 0 && bends[1].tick == 24 * kMidiTicks);
+    SEQLIB_CHECK(std::abs((bends[0].bytes[1] | (bends[0].bytes[2] << 7)) - kNoise) <= 1);
+    SEQLIB_CHECK((bends[1].bytes[1] | (bends[1].bytes[2] << 7)) == kSample);
 }
 
 void TestQuietPsg()
@@ -2406,25 +2810,33 @@ void RunTests()
     TestNotes();
     TestChannels();
     TestEnvelope();
+    TestEnvelopeHold();
     TestPitch();
+    TestLevelReports();
     TestLoops();
     TestLoopStarts();
     TestLoopStartsAtSecondPass();
+    TestLoopLevelsAtSecondPass();
+    TestLoopLevelsWithDroppedNote();
     TestLoopLengths();
     TestLoopAfterTie();
     TestLoopSettingsAgain();
     TestHourLimit();
     TestConversion();
+    TestLevels();
+    TestMonoLevels();
     TestSlowAttackAtEnd();
     TestTwoVoicesInATick();
     TestSharedSoundfont();
     TestSharedPresets();
     TestSharedDrumChannel();
+    TestDrumChannel();
     TestVoiceChannels();
     TestVoiceChannelsDrums();
     TestVoiceChannelsLoop();
     TestPsgExclusive();
     TestPsgExclusiveShared();
+    TestPsgNoReverb();
     TestCompressedSample();
     TestDroppedNotes();
     TestDoubledNote();

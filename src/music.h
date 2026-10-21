@@ -148,9 +148,9 @@ Driver DriverNamed(const std::string& name);
 std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std::string& error);
 
 // Finds every sound driver that `overrides` allows in the game in `rom`, and reads their tables. A game can have more
-// than one driver. `rom` has to outlive the results. The results come in the order OpenMusic() looks for the drivers.
-// A driver whose tables can't be read is left out, and `unread` gets the error. Returns none and sets `error` if the
-// game has none of the drivers, or if no driver's tables can be read, to the first driver's error.
+// than one driver. `rom` has to outlive the results. The results come in the order OpenMusic() looks for the drivers. A
+// driver whose tables can't be read is left out, and `unread` gets the error. Returns none and sets `error` if the game
+// has none of the drivers, or if no driver's tables can be read, to the first driver's error.
 std::vector<FoundMusic> OpenAllMusic(const Rom& rom, const Overrides& overrides, std::string& error,
                                      std::vector<std::string>& unread);
 
@@ -190,12 +190,19 @@ struct SongPlan
     uint64_t end = 0;
 };
 
+// The pass through a song's loop that the marked loop starts at.
+enum class LoopStart
+{
+    kFirstPass,
+    kSecondPass, // the song plays the first pass before the marked loop
+};
+
 // Plans a conversion from the layouts of a song's tracks: looping songs play `loops` passes; other songs run until the
 // last track ends. Tracks can have different loop points and lengths. The overall loop starts once all looping tracks
 // have entered their loops and all other tracks have played their last command. It ends when all looping tracks return
-// to their loop starts, subject to the length limit in LoopLength(). With `second`, the loop starts at the song's
-// second pass through it, and the song plays the first pass before it.
-SongPlan PlanSong(const std::vector<TrackLayout>& tracks, int loops, bool second);
+// to their loop starts, subject to the length limit in LoopLength(). `start_pass` is the pass through the loop that the
+// marked loop starts at.
+SongPlan PlanSong(const std::vector<TrackLayout>& tracks, int loops, LoopStart start_pass);
 
 // Collects the notes that start in a song's first two passes through its loop, to tell whether a player that loops on
 // the markers can repeat the first. A driver can carry a setting, such as a pan, a level, a program or the tempo, from
@@ -213,6 +220,11 @@ public:
 
     // Returns true if the two passes start the same notes at the same times from their starts, with the same settings.
     bool Alike() const;
+
+    // Returns true if the two passes start the same notes at the same times from their starts. Their settings may
+    // differ by `tolerance` at most. Notes that start at the same time on the same channel with the same key are
+    // compared in the order they were added.
+    bool Alike(double tolerance) const;
 
 private:
     struct Start

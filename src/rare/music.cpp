@@ -4,7 +4,9 @@
 
 #include "music.h"
 
+#include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <map>
 #include <memory>
 #include <string>
@@ -16,6 +18,7 @@
 #include "rare/sequencer.h"
 #include "rare/song.h"
 #include "rare/soundfont.h"
+#include "rom.h"
 #include "sf2.h"
 
 namespace agbsf2::rare

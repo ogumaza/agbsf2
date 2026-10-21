@@ -4,12 +4,17 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <optional>
+#include <span>
+#include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
+#include <vector>
 
 #include "xsflib/bytes.h"
 #include "xsflib/psf/psf.h"

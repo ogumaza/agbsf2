@@ -3,14 +3,17 @@
 #include "psg.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "gba.h"
+#include "sf2.h"
 
 namespace agbsf2
 {
@@ -520,8 +523,8 @@ NamedZones PsgSamples::WaveInstrument(Sf2File& file, const WaveShapes& shapes, i
     NamedZones made;
     made.zones = SwitchZones(first_sample, frames, second_sample, cents);
 
-    // The note's key allows for how often the first shape repeats. The second shape plays from the first's root key,
-    // at the same rate.
+    // The note's key allows for how often the first shape repeats. The second shape plays from the first's root key, at
+    // the same rate.
     const int first_offset = WaveKeyOffset(shapes[first]);
     const int second_offset = WaveKeyOffset(shapes[second]);
     if (made.zones.size() == 2 && first_offset != second_offset)

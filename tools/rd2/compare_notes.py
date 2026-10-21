@@ -325,7 +325,7 @@ def check_song(rom, raw_rom, tables, bank_starts, song, midi_path, sf2_path, fra
             v = note['voice']
             key, note_pitch = expected(rom, tables, note)
             channel = note['track'] if note['track'] < DRUM_CHANNEL else note['track'] + 1
-            velocity = min(127, max(1, round(127 * math.sqrt(note['velocity'] / 127))))
+            velocity = conversion.square_root_value(note['velocity'], 127, 1)
 
             # The MIDI note: on the track's channel, with the key, starting in the frame or the one before. Notes that a
             # track starts on the same key and tick are one MIDI note, the first's, which lasts as long as the longest

@@ -15,6 +15,7 @@
 #include "mp2k/sequencer.h"
 #include "mp2k/song.h"
 #include "mp2k/soundfont.h"
+#include "rom.h"
 #include "sf2.h"
 
 namespace agbsf2::mp2k

@@ -251,8 +251,11 @@ settings such as its volume, pan or octave when
 it loops, and a song keeps its tempo. If the intro leaves different ones
 from the end of the loop, the first pass can sound different from later
 passes. With Konami's, Quintet's, Nintendo R&D2's, Brownie Brown's and Ubisoft
-Milan's drivers and Krawall, and with MP2K's tempo, the marked loop then
-starts on the second pass, and the file plays the first pass once before it.
+Milan's drivers and Krawall, the marked loop then starts on the second pass.
+With MP2K, the marked loop starts on the second pass where the tempo differs
+between passes, or where a player that loops on the markers would play a note
+more than 1 dB louder or quieter on either side than the next pass. The file
+plays the first pass once before the marked loop.
 Quintet's driver also discards fractional frames when a track loops. If this
 would make a looping player play a note at the loop's start twice, the marked
 loop moves to the second pass as well. A player that silences its notes when it
@@ -358,10 +361,10 @@ and a song's instruments past the 128th, take free programs in the other banks.
 
 The tune format resembles MIDI: note, controller, program and pitch bend
 commands on 16 MIDI channels, separated by delays in ticks. The MIDI file
-keeps the tune's ticks per quarter note, channels, keys, velocities, programs
-and volumes (controller 7). Each source track that plays notes gets a MIDI
-track named `Track 0`, `Track 1` and so on. A separate first track holds the
-tempo and loop markers.
+keeps the tune's ticks per quarter note, channels, keys and programs. A
+velocity or volume (controller 7) of v is written as 127 × √(v/127). Each
+source track that plays notes gets a MIDI track named `Track 0`, `Track 1`
+and so on. A separate first track holds the tempo and loop markers.
 
 The driver counts each frame as 1/60 s, but the GBA shows 59.73 frames a
 second, so the games play every tune 0.46% slower than its tempo says. The
@@ -380,17 +383,22 @@ tune's commands:
   (aftertouch) of 127. A key pressure of 0 unmutes the key when the mixer takes
   one of its notes again. The SoundFont turns a key pressure of 64 or more into
   96 dB of attenuation. A player that applies the SoundFont's modulators, such
-  as FluidSynth, then silences the muted notes. A player that ignores key
-  pressure or the modulator plays every note. Where the mixer takes one note of
-  a key and leaves out another on the same channel, the MIDI file plays both.
-  In *Donkey Kong Country 3*, the mixer also leaves out the notes of a channel
-  at volume 0. Those notes don't count towards the limit. A file whose
-  SoundFont has the mute modulator starts with a key pressure of 0 for each key
-  that the file plays before giving the key a pressure. A player that keeps key
-  pressures from one file to the next would otherwise mute the keys that the
-  file before left muted. With `--single-sf2`, the shared SoundFont has the
-  modulator once any tune of the set has mutes. Every file of the set then
-  starts with those key pressures.
+  as FluidSynth, then silences the muted notes. Each channel that mutes a key
+  also starts with the General MIDI 2 Controller Destination Setting message.
+  With the message, the pressure of a key scales the level of that key's notes
+  on the channel. The level goes from full at a pressure of 0 to silence at 127.
+  A player that follows the message, such as BASSMIDI, then silences the muted
+  notes. A player that ignores key pressure, or both the modulator and the
+  message, plays every note. Where the mixer takes one note of a key and leaves
+  out another on the same channel, the MIDI file plays both. In *Donkey Kong
+  Country 3*, the mixer also leaves out the notes of a channel at volume 0.
+  Those notes don't count towards the limit. A file whose SoundFont has the mute
+  modulator starts with a key pressure of 0 for each key that the file plays
+  before giving the key a pressure. A player that keeps key pressures from one
+  file to the next would otherwise mute the keys that the file before left
+  muted. With `--single-sf2`, the shared SoundFont has the modulator once any
+  tune of the set has mutes. Every file of the set then starts with those key
+  pressures.
 * A note off releases only one note with that key on the channel. Since a
   MIDI channel can't play the same key twice at once, the conversion ends
   the older note when the newer one starts.
@@ -427,9 +435,9 @@ channel's settings give there. That's the release the driver would give it.
   driver's fades are straight lines in level, where a SoundFont's are straight
   lines in decibels, so decays and releases are stretched to keep the
   loudness close.
-* **Volume and velocity** scale the level in a straight line, as in the
-  driver, through modulators in each instrument. The SoundFont default would
-  square them.
+* **Volume and velocity** scale the level in a straight line. The driver does
+  the same. A SoundFont player squares both by default. The MIDI file
+  therefore holds their square roots.
 * **Mutes.** Where the MIDI file mutes notes that the mixer leaves out, each
   instrument has a modulator that adds 96 dB of attenuation while the note's
   key has a key pressure of 64 or more. That takes a 16-bit sample below its
@@ -499,21 +507,39 @@ and a song's instruments past the 128th, take free programs in the other banks.
 ### MIDI from MP2K
 
 Each of the song's tracks that plays notes gets a MIDI track, named `Track 0`,
-`Track 1` and so on, on the MIDI channel with its number. A separate first
+`Track 1` and so on, on the MIDI channel with its number. Players keep channel
+10 for drums. Track 9 moves from it to the first free channel after 10, or else
+to the last free one before it. A song that plays on all 16 channels keeps
+track 9 on channel 10. A separate first
 track holds the tempo and loop markers. The MIDI file has 960 ticks per
 quarter note, 40 for each of the driver's 24. A player such as FluidSynth
 rounds its position to a whole tick at each tempo change, and at 24 ticks it
-rushed songs that change the tempo often. The file keeps each note's key and
-velocity. As with Rare's driver, the tempos are slowed down by 0.46% to match
-the GBA's frame rate.
+rushed songs that change the tempo often. The file keeps each note's key. As
+with Rare's driver, the tempos are slowed down by 0.46% to match the GBA's
+frame rate.
 
 | Game | MIDI |
 |---|---|
-| note | note on/off, with the note's velocity |
+| note | note on/off; a velocity of v is written as 127 × √(v/127) |
 | `VOICE` | program change, with the voice's number |
-| `VOL`, `PAN` | CC7 (volume), CC10 (pan) |
+| `VOL`, `PAN` | CC11 (expression) for loudness and CC10 for pan (see below) |
 | `BEND`, `BENDR`, `TUNE`, `KEYSH`, vibrato | pitch bend, with the bend range set per channel by RPN 0 |
 | the song's reverb | CC91 (reverb send) |
+
+The driver computes each side's level from the track's volume and pan. CC11
+and CC10 together give those levels under the constant-power pan law of MIDI
+RP-036. Most SoundFont players use that law. CC7 stays at 127. As in the other
+drivers' files, CC11 can't go above the level of the loudest centred track. A
+track that the game pans hard to one side at a volume above 90 therefore plays
+up to 3 dB quieter on that side.
+
+The PSG plays a note in the middle, or on one side alone where that side's
+level is at least twice the other's. Each side that plays gets the same level
+at every pan. While every note a track plays is a PSG note, the track's CC10
+and CC11 follow that rule. In some games the mixer is mono. It plays each
+DirectSound note in the middle. The note's level is the average of the two
+sides. The MIDI files of those games keep CC10 at 64 on every track that the
+PSG's rule doesn't cover.
 
 In Camelot's version of the driver, in *Golden Sun: The Lost Age*, the mixer
 has an echo in place of the reverb, the same in every song, so every track gets
@@ -533,8 +559,8 @@ song's commands:
   next tick at the old tempo, and the MIDI file's tempo for that tick does the
   same.
 * The driver's LFO, when it modulates the pitch, is written out as pitch bends,
-  a tick at a time. When it modulates the volume or the pan, it's written into
-  CC7 or CC10.
+  a tick at a time. When the LFO modulates the volume or the pan, CC11 and
+  CC10 follow it.
 * The key shift is part of the pitch bend, so that key splits and drum kits
   pick the same voices as in the game.
 * While every note a track plays is a PSG note, its pitch bends follow what the
@@ -559,9 +585,10 @@ next note cuts off. It changes only the SoundFont.
 
 ### SoundFont from MP2K
 
-Each song's SoundFont has a preset for each voice the song plays, named
-`Program N` and with the voice's number, in bank 0, and in bank 128 too for
-those played on channel 10.
+Each song's SoundFont has a preset in bank 0 for each voice the song plays.
+The preset is named `Program N` and has the voice's number. A song that plays
+on all 16 channels also has copies in bank 128 of the voices that track 9 plays
+on channel 10.
 
 * **Samples** are the game's 8-bit samples, widened to 16 bits, with their
   rate and loop. A compressed sample is decoded, and a reversed one is stored
@@ -578,17 +605,30 @@ those played on channel 10.
   pattern, or noise from the Game Boy's LFSR. Noise gets a zone for each of the
   driver's noise settings, at its rate, though settings below 32 Hz play at
   about 32 Hz, the lowest a zone can be tuned to. The PSG voices are 6.3 dB
-  quieter than a sample at its full level, as on the GBA.
+  quieter than a sample at its full level, as on the GBA. CC91 gives them no
+  reverb. On the GBA, the driver's reverb works on the mixer's output. The PSG
+  doesn't pass through the mixer.
 * **Key splits and drum kits** become a zone for each range of keys that plays
   the same voice. A drum kit's zones play at their voices' keys and pans.
-* **Envelopes** follow the voice's attack, decay, sustain and release. A
-  sample's decay and release fall by a fraction each frame, which is a straight
-  line in decibels, as in a SoundFont. The PSG's fades, and the releases of
-  Camelot's mixer, are straight lines in level, and they're stretched to keep
-  the loudness close.
-* **Volume and velocity** scale the level in a straight line, as in the driver,
-  and the driver's master volume scales the samples. Camelot's mixer leaves the
-  master volume out, and plays the samples a little louder against the PSG.
+  Each sample drum's zone splits it between the sides in the driver's ratio. A
+  sample drum panned hard to one side plays up to 3 dB quieter there than in
+  the game. A PSG drum follows the PSG's rule on pans (see
+  [MIDI from MP2K](#midi-from-mp2k)). On one side alone, its zone holds 7.5 dB
+  of attenuation. FluidSynth, BASSMIDI and most other SoundFont players apply
+  0.4 of it. That takes off the 3 dB that the RP-036 pan law adds on that side.
+  A player that follows the SoundFont specification plays the drum 4.5 dB too
+  quietly there.
+* **Envelopes** follow the voice's attack, decay, sustain and release.
+  Between a sample's attack and decay, the full level lasts one frame. The
+  driver does the same. A sample's decay and release fall by a fraction each
+  frame, which is a straight line in decibels, as in a SoundFont. The PSG's
+  fades, and the releases of Camelot's mixer, are straight lines in level, and
+  they're stretched to keep the loudness close.
+* **Velocity** scales the level in a straight line. The driver does the same.
+  A SoundFont player squares the velocity by default. The MIDI file therefore
+  holds the square root of the driver's velocity.
+  The driver's master volume scales the samples. Camelot's mixer leaves the
+  master volume out. It plays the samples a little louder against the PSG.
   The samples themselves hold these levels and the PSG's. A zone's attenuation
   could hold them too, but FluidSynth and BASSMIDI apply only 0.4 of it.
 
@@ -612,11 +652,9 @@ FluidSynth. The All Sound Off alone would stop it at once (see
 With `--single-sf2`, each voice keeps its number as its program, and banks tell
 apart the voices that songs play under the same number: the first one is in
 bank 0, the next in bank 1, and so on. Each program change in the MIDI files
-comes with a bank change. Track 9 would play on channel 10, where players look
-for programs in bank 128, so it moves to the first free channel after 10, or
-else the last free one before it. A song that plays on all 16 channels keeps
-track 9 on channel 10, with copies of its voices in bank 128, and a warning if
-another song has one of those programs there already. If the songs played more
+comes with a bank change. A song that plays on all 16 channels keeps track 9
+on channel 10. Its voices get copies in bank 128. If another song has one of
+those programs there already, a warning says so. If the songs played more
 than 128 voices under one number, the rest would take free program numbers.
 
 ### MIDI from Nintendo R&D2's driver
@@ -647,6 +685,9 @@ The MIDI file follows what the driver plays:
   tempo when it starts. The driver also releases it when its track starts or
   ends legato, ends, or restarts.
 * A track's pitch bend follows its newest note.
+* The PSG plays a note in the middle at the centre pan, 0x40. At any other
+  pan, it plays the note at twice the level on one side alone. On a track whose
+  notes are all PSG notes other than drums, CC10 and CC11 follow that rule.
 
 ### SoundFont from Nintendo R&D2's driver
 
@@ -656,9 +697,13 @@ named after its bank and number.
 * **Samples** are the game's 8-bit samples, widened to 16 bits, with their rate
   and loop, tuned to play at their rate on the note their region gives.
 * **Drum kits and key splits** become a zone for each key or range of keys that
-  plays the same region. A drum plays at its region's pitch and pan, and so
-  does an instrument with a sample for each key.
+  plays the same region. A drum plays at its region's pitch and pan. An
+  instrument with a sample for each key plays at its region's pitch too.
   As in the driver, the track's pan doesn't move a drum.
+  Each drum's zone splits it between the sides in the driver's ratio. A drum
+  panned hard to one side plays up to 3 dB quieter there than in the game.
+  On a track that the game pans, a drum plays at the track's loudness. The
+  drum can then play up to 3 dB louder or quieter than in the game.
 * **PSG voices** play the Game Boy's square waves, the voice's 32-step wave, or
   noise from the Game Boy's LFSR, with a zone for each key's noise setting.
   Their level relative to the samples matches the driver's mix. As with MP2K,
@@ -667,6 +712,11 @@ named after its bank and number.
   frame each, and holds the last entry. Their zones play that entry.
 * **Envelopes.** The driver's envelopes are straight lines in level between
   points, and the SoundFont's attack, hold, decay and sustain approximate them.
+  An envelope that peaks below the full level gives its zone the difference
+  as attenuation. FluidSynth, BASSMIDI and most other SoundFont players apply
+  only 0.4 of a zone's attenuation. The zone therefore holds 2.5 times the
+  attenuation. A player that follows the SoundFont specification applies all
+  of it. That player plays the zone too quietly: 6 dB down becomes 15 dB.
   A sample's release reduces its level by a fraction each frame, which is a
   straight line in decibels, as in a SoundFont.
   The driver leaves out the wave voice's envelope. The voice holds its level
@@ -809,10 +859,14 @@ silence comes before its first note.
 
 | Game | MIDI |
 |---|---|
-| note on channel 9 | note on MIDI channel 11: its key plays one of the kit's samples; a velocity of v is written as 127 × v / 64 |
-| note on channels 0-2 | note at the square's or the wave's pitch, with the starting volume as its velocity |
+| note on channel 9 | note on MIDI channel 11: its key plays one of the kit's samples; a velocity of v is written as 127 × √(v/64) |
+| note on channels 0-2 | note at the square's or the wave's pitch; a square's starting volume of v is written as a velocity of 127 × √(v/15), and the wave's volume of 100%, 50% or 25% as 127, 90 or 64 |
 | program on channel 9 | bank select 9 and program change: an offset into the kit. Key k plays the kit's entry k + offset |
 | program on channels 0-2 | bank select of the channel's number and program change: the channel's instrument |
+
+Each track starts with CC7 (volume) and CC11 (expression) at 127, CC10 (pan)
+at 64, and CC91 (reverb) and CC93 (chorus) at 0. The velocities hold the
+levels. The music is mono. The driver adds no reverb or chorus.
 
 Channel 9's keys up to 11 play the PSG's noise, and its keys above that the
 kit's samples. The mixer plays a sample at a fixed rate. A key chooses a
@@ -839,10 +893,12 @@ Each song's SoundFont holds the instruments its notes play:
   channel: a square with the instrument's duty, or the wave program's 64
   points, tuned as the driver's frequency table is.
 
-As in the driver, velocity scales the level in a straight line. The driver
-sets the PSG's master volume to 3 of 7. A PSG channel at full volume is
-therefore 60/512 as loud as a full-scale sample. With `--single-sf2`, the kit's
-presets and the PSG's instruments of all the songs go in the one SoundFont.
+As in the driver, velocity scales the level in a straight line. A SoundFont
+player squares the velocity by default. The MIDI file therefore holds the
+square root of the driver's level. The driver sets the PSG's master volume to
+3 of 7. A PSG channel at full volume is therefore 60/512 as loud as a
+full-scale sample. With `--single-sf2`, the kit's presets and the PSG's
+instruments of all the songs go in the one SoundFont.
 
 ### Sequence listing (`--dump`)
 
@@ -886,18 +942,19 @@ SoundFonts.
   no mixer, and plays 8-bit samples at their own rate of 10 kHz. A SoundFont
   player plays the same samples more cleanly.
 * **PSG DC offset.** The Game Boy channels output a unipolar signal. The
-  SoundFont uses the same waveforms without the DC offset, which the hardware's
-  output capacitor removes anyway.
+  hardware's output capacitor removes the signal's DC offset. In the
+  SoundFont, the wave channel's patterns have no DC offset. The square waves
+  have one at duty cycles other than 50%.
 
 ### Rare's driver
 
 * **Voice limit.** The driver mixes at most 8 voices at a time and leaves the
   rest silent until voices free up. The MIDI file mutes the notes that the
-  driver leaves out with key pressure (see "MIDI from Rare's driver"). A
-  player that ignores key pressure or the SoundFont's mute modulator plays
-  every note. A busy passage then has notes that the game doesn't let you
-  hear. Where the driver leaves out one of two notes of a key on a channel, the
-  MIDI file plays both.
+  driver leaves out with key pressure (see "MIDI from Rare's driver"). A player
+  that ignores key pressure, or both the SoundFont's mute modulator and the
+  General MIDI 2 message, plays every note. A busy passage then has notes that
+  the game doesn't let you hear. Where the driver leaves out one of two notes of
+  a key on a channel, the MIDI file plays both.
 * **Envelopes.** The SoundFont's envelopes approximate the driver's straight
   fades, and some players treat very short envelope phases differently.
 * **Timing.** The driver runs once a frame, so it plays every event on a frame
@@ -933,9 +990,10 @@ SoundFonts.
   makes it at the rate the note starts at. A note whose rate then changes, with
   a slide or the LFO, keeps those lengths.
 * **Mixer character.** The GBA plays the FIFOs' 8-bit samples without
-  interpolation. A SoundFont player plays them more cleanly. The PSG's
-  waveforms are without the DC offset, which the hardware's output capacitor
-  removes anyway.
+  interpolation. A SoundFont player plays them more cleanly. In the SoundFont,
+  the wave channel's patterns have no DC offset. The square waves have one at
+  duty cycles other than 50%. On the hardware, the output capacitor removes the
+  DC offset.
 * **Sound effects** aren't converted. The driver plays them on channels of its
   own, which only the game's code starts.
 
@@ -956,6 +1014,9 @@ SoundFonts.
   send, but only the game's code turns it on, so the conversion leaves it out.
 * **PSG.** The PSG's envelope steps the level through 16 values, where the
   SoundFont's envelope is smooth. The PSG's notes keep equal-tempered keys.
+  The driver caps a note's doubled level at the PSG's highest level. The MIDI
+  file doubles every such note. A loud one can then play up to 6 dB louder than
+  in the game.
 * **Mixer character.** The driver mixes in stereo at 10512 Hz without
   interpolation, and writes 8-bit output. A SoundFont player plays the same
   samples more cleanly.
@@ -1012,9 +1073,7 @@ SoundFonts.
   conversion leaves these out, with a warning.
 * **Mixer character.** The driver mixes at its own rate, often 13379 Hz, with
   linear interpolation, and writes 8-bit output. A SoundFont player plays the
-  same samples more cleanly. Some games' mixer is mono, and plays every
-  DirectSound note in the middle, whatever its pan; the MIDI file keeps each
-  track's pan.
+  same samples more cleanly.
 * **Camelot's synth voices.** The mixer makes its waves at its rate, 31536 Hz,
   and the SoundFont's samples hold them at the pitch of each key. A pitch bend,
   and a track's key shift, which the MIDI file puts in the pitch bend, move a
@@ -1039,8 +1098,9 @@ SoundFonts.
 * **Mixer character.** The driver mixes at 16384 Hz and plays the lower octaves
   by repeating each point, interpolating only between the points it plays twice
   when it mixes all five voices, and writes 8-bit output. A SoundFont player
-  plays the same samples more cleanly. The PSG's waveforms are without the DC
-  offset. In *Magical Vacation*'s revision, which plays each sample straight
+  plays the same samples more cleanly. In the SoundFont, the wave channel's
+  patterns have no DC offset. The square waves have one at duty cycles other
+  than 50%. In *Magical Vacation*'s revision, which plays each sample straight
   through a FIFO, the driver scales each point to the volume, a step lower for
   most negative points, and a sample that doesn't loop stops about 20 points
   before its end, which then play at the start of the FIFO's next note.
@@ -1094,8 +1154,11 @@ SoundFonts.
 
 ### FluidSynth
 
-SoundFont output follows the specification. One of FluidSynth's departures
-from it affects every driver's conversions:
+SoundFont output follows the specification, apart from the attenuation of
+Nintendo R&D2's zones and of MP2K's PSG drums on one side alone (see
+[SoundFont from Nintendo R&D2's driver](#soundfont-from-nintendo-rd2s-driver)
+and [SoundFont from MP2K](#soundfont-from-mp2k)).
+One of FluidSynth's departures from it affects every driver's conversions:
 
 * **Level.** FluidSynth runs the SoundFont low-pass filter on every note. That
   includes notes whose filter is open. The filter divides the level by the
@@ -1113,6 +1176,22 @@ Another affects MP2K's conversions with `--voice-channels`:
   with a slow release cuts off another. The cut-off note then fades out in
   0.32 s. A player that follows the MIDI specification stops the note at once.
   agbsf2 keeps the All Sound Off where the game cuts the note off.
+
+### BASSMIDI
+
+BASSMIDI 2.4.16 applies only some of the SoundFont's modulators. It ignores
+the modulators from key pressure and the pitch wheel:
+
+* **Mutes.** BASSMIDI silences the notes that the MIDI files of Rare's driver
+  mute with key pressure. It follows the General MIDI 2 Controller Destination
+  Setting message at the start of those files, not the SoundFont's modulator.
+* **Fixed pitch.** Samples that a game plays at a fixed pitch follow the pitch
+  wheel.
+
+With `--psg-exclusive`, BASSMIDI ends a note of a class in about 4 ms. The PSG
+notes whose release is quicker than FluidSynth's fade get no class. In
+BASSMIDI, those notes fade out over their release where the game cuts them
+off.
 
 ## Internals
 

@@ -6,6 +6,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -99,8 +100,7 @@ struct Action
         kNoteEnd,     // the end of a channel's note: its sound ended, or a later note took the channel
         kAudible,     // the first time a channel's note got louder than silence
         kVoice,       // value = the voice
-        kVolume,      // value = the track's volume, 0-127
-        kPan,         // value = the pan, with 64 the centre
+        kLevels,      // left and right = the levels that the track's volume and pan give each side
         kPitch,       // value = the pitch offset in 256ths of a semitone
         kTempo,       // value = the tempo, in quarter notes a minute at 60 frames a second
     };
@@ -110,7 +110,9 @@ struct Action
     uint8_t key = 0;       // kNoteOn, kNoteDropped: the key
     uint8_t velocity = 0;  // kNoteOn, kNoteDropped: the velocity
     uint8_t play_key = 0;  // kNoteOn: the key the note plays at, after a drum kit
-    int32_t value = 0;     // kVoice, kVolume, kPan, kPitch and kTempo: the setting
+    int32_t value = 0;     // kVoice, kPitch and kTempo: the setting
+    uint8_t left = 0;      // kLevels: the level on the left, 0-255
+    uint8_t right = 0;     // kLevels: the level on the right
     int32_t old_tempo = 0; // kTempo: the tempo before it, which the rest of this tick's progress counted at
     int32_t counter = 0;   // kTempo: the progress towards the next tick, in the tempo's units, after this one
     uint64_t tick = 0;     // the player's tick count when it happened
@@ -139,9 +141,10 @@ public:
     // Runs one frame of the driver's per-frame routine. Returns what the tracks and channels did in it, in order.
     const std::vector<Action>& Step();
 
-    // From tick `tick` on, has each track report its volume, pan and pitch where it first sets each of them, with a
-    // command or by clearing its LFO's swing, even if that leaves it unchanged. A player that jumps back to a loop's
-    // start keeps the settings that the loop's end left, as the game does until the loop sets them again.
+    // From tick `tick` on, has each track report its levels where it first sets its volume or pan. The track reports
+    // its pitch where it first sets that. A command sets them, and so does clearing the LFO's swing. The reports come
+    // even where the settings stay the same. A player that jumps back to a loop's start keeps the settings that the
+    // loop's end left. The game does the same until the loop sets them again.
     void RestateFrom(uint64_t tick)
     {
         restate_from_ = tick;
@@ -227,9 +230,16 @@ private:
         // The conversion's view of the track.
         int voice = -1;
         bool modified = false; // an extended command changed its copy of its voice
-        int last_volume = -1, last_pan = -1, last_pitch = 0x7FFFFFFF;
+        int last_left = -1, last_right = -1, last_pitch = 0x7FFFFFFF;
         uint8_t sets = 0;    // the settings it set in the tick, changed or not
         uint8_t restate = 0; // the settings it reports where it next sets them
+    };
+
+    // A track's levels on each side.
+    struct SideLevels
+    {
+        uint8_t left = 0;
+        uint8_t right = 0;
     };
 
     // The player's status once every track has ended.
@@ -249,6 +259,10 @@ private:
     void MemAcc(int t);
     void Jump(Track& track);
     void ClearModulation(Track& track);
+
+    // Returns the levels that a track's volume and pan give each side. The LFO's swing counts when it modulates them.
+    // The driver's TrkVolPitSet computes the same.
+    static SideLevels TrackLevels(const Track& track);
 
     // Recalculates a track's volumes and pitch, as the driver's TrkVolPitSet does, if its flags ask for it.
     void UpdateTrack(Track& track);
@@ -279,8 +293,8 @@ private:
     // Moves a synth voice of Camelot's mixer on by a frame.
     void MixSynth(Channel& c) const;
 
-    // Records the track's volume, pan and pitch for the conversion if they changed, or if it set them for the first
-    // time from RestateFrom()'s tick on.
+    // Records the track's levels and pitch for the conversion if they changed, or if it set them for the first time
+    // from RestateFrom()'s tick on.
     void ReportTrack(int t);
 
     // Returns a track's pitch in 256ths of a semitone: its tune, bend and key shift, and the LFO's swing when it
@@ -347,8 +361,8 @@ inline uint32_t SynthStep(uint32_t frequency, uint32_t step_scale)
     return (frequency * step_scale) << 3;
 }
 
-// Returns the point of a synth voice's saw wave at `phase`. The wave rises from -112 to 111 over a cycle, by three
-// quarters of a step for each of the phase's 256 steps, with a jump of 32 halfway.
+// Returns the point of a synth voice's saw wave at `phase`. The wave rises from -112 to 112 over a cycle. It rises 3
+// for every 4 of the phase's 256 steps and jumps 32 halfway.
 inline int32_t SawPoint(uint32_t phase)
 {
     return int32_t(phase >> 24) - 0x70 - int32_t((phase >> 26) & 0x1F);

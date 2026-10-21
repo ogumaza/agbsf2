@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 """Find a driver's files in a folder of agbsf2's output. Compare a conversion on the song's beat with one on the
-driver's frames.
+driver's frames. Give the MIDI value that agbsf2 writes for a driver's level.
 
 A conversion names each song's MIDI file and SoundFont after the game and the song's number, such as game_05.mid and
 game_05.sf2. In a game with more than one driver, it converts each one's songs, and the files of every driver but the
@@ -11,6 +11,7 @@ For drivers that count frames, the default conversion estimates the beat from th
 With --frame-timing, events stay on the frames where the driver plays them. The tools check this conversion against
 the driver, frame by frame, then compare the default conversion with it.
 """
+import math
 import re
 import struct
 import subprocess
@@ -30,6 +31,15 @@ def midi_files(folder, driver):
         if m:
             found.setdefault(m.group(2), []).append((int(m.group(3)), path))
     return sorted(found.get(driver) or found.get(None, []))
+
+
+def square_root_value(level, full, lowest):
+    """Returns the MIDI value that agbsf2's SquareRootValue() writes for a level of `level` / `full`: 127 × √(level /
+    full), rounded to the nearest with halves up, from `lowest` to 127. A SoundFont player squares velocity and
+    controller 7 by default. The level then plays in a straight line."""
+    value = 127 * math.sqrt(max(0, level) / full)
+    whole = math.floor(value)
+    return min(127, max(lowest, whole + (1 if value - whole >= 0.5 else 0)))
 
 
 def frame_timed(tool, rom, driver, folder, songs=None):

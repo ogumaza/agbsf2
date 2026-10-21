@@ -3,7 +3,14 @@
 #include "mp2k/sequencer.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <vector>
 
+#include "mp2k/driver.h"
+#include "mp2k/song.h"
+#include "rom.h"
 #include "warnings.h"
 
 namespace agbsf2::mp2k
@@ -971,26 +978,33 @@ void Sequencer::ClearModulation(Track& track)
     track.sets |= track.mod_t == 0 ? kSetPitch : track.mod_t == 1 ? kSetVolume : kSetPan;
 }
 
+Sequencer::SideLevels Sequencer::TrackLevels(const Track& track)
+{
+    // The volume and pan give each side a level. The pan moves the level in a straight line from one side to the
+    // other. Each side's level is a byte. A level that the LFO raises past 255 wraps around.
+    uint32_t level = (uint32_t(track.vol) * track.vol_x) >> 5;
+    if (track.mod_t == 1)
+    {
+        level = (level * uint32_t(track.mod_m + 128)) >> 7;
+    }
+
+    int32_t pan = 2 * track.pan;
+    if (track.mod_t == 2)
+    {
+        pan += track.mod_m;
+    }
+    pan = std::clamp(pan, -128, 127);
+
+    return {uint8_t((uint32_t(127 - pan) * level) >> 8), uint8_t((uint32_t(pan + 128) * level) >> 8)};
+}
+
 void Sequencer::UpdateTrack(Track& track)
 {
-    // The volume and pan give each side a level, with the pan in a straight line from one side to the other.
     if (track.flags & kFlagVolSet)
     {
-        uint32_t level = (uint32_t(track.vol) * track.vol_x) >> 5;
-        if (track.mod_t == 1)
-        {
-            level = (level * uint32_t(track.mod_m + 128)) >> 7;
-        }
-
-        int32_t pan = 2 * track.pan;
-        if (track.mod_t == 2)
-        {
-            pan += track.mod_m;
-        }
-        pan = std::clamp(pan, -128, 127);
-
-        track.vol_mr = uint8_t((uint32_t(pan + 128) * level) >> 8);
-        track.vol_ml = uint8_t((uint32_t(127 - pan) * level) >> 8);
+        const SideLevels levels = TrackLevels(track);
+        track.vol_mr = levels.right;
+        track.vol_ml = levels.left;
     }
 
     // The pitch is in 256ths of a semitone: the key offset in the high bits, and the fine tune in the low 8.
@@ -1590,28 +1604,17 @@ void Sequencer::ReportTrack(int t)
     const uint8_t again = track.sets & track.restate;
     track.sets = 0;
 
-    // The conversion's volume and pan, with the LFO's swing when it modulates them.
-    int volume = track.vol;
-    if (track.mod_t == 1)
+    // The levels on each side. The driver computes them from the track's settings at the end of the frame, or when the
+    // track starts a note.
+    const SideLevels levels = TrackLevels(track);
+    if (levels.left != track.last_left || levels.right != track.last_right || (again & (kSetVolume | kSetPan)))
     {
-        volume = std::min(127, (volume * (track.mod_m + 128)) >> 7);
-    }
-    if (volume != track.last_volume || (again & kSetVolume))
-    {
-        track.restate &= uint8_t(~kSetVolume);
-        track.last_volume = volume;
-        a.kind = Action::kVolume;
-        a.value = volume;
-        AddAction(a);
-    }
-
-    const int pan = std::clamp(64 + track.pan + (track.mod_t == 2 ? track.mod_m / 2 : 0), 0, 127);
-    if (pan != track.last_pan || (again & kSetPan))
-    {
-        track.restate &= uint8_t(~kSetPan);
-        track.last_pan = pan;
-        a.kind = Action::kPan;
-        a.value = pan;
+        track.restate &= uint8_t(~(kSetVolume | kSetPan));
+        track.last_left = levels.left;
+        track.last_right = levels.right;
+        a.kind = Action::kLevels;
+        a.left = levels.left;
+        a.right = levels.right;
         AddAction(a);
     }
 

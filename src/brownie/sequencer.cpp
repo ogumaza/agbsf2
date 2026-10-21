@@ -3,15 +3,19 @@
 #include "brownie/sequencer.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
 #include "xsflib/bytes.h"
 
+#include "brownie/driver.h"
 #include "brownie/song.h"
 #include "gba.h"
+#include "rom.h"
 #include "warnings.h"
 
 namespace agbsf2::brownie
@@ -42,8 +46,8 @@ constexpr uint16_t kFifoAInterrupt = 0x0200;
 // the driver never gives the DMA addresses: on, with an interrupt, at the FIFO's request, repeating, a word at a time.
 constexpr uint16_t kFifoDmaOn = 0xF600;
 
-// The NRx2 that a PSG note starts with when its envelope's first level is below the channel's volume: volume 0 with
-// the direction bit set. It's silent, and it keeps the channel's DAC on. A later step below the volume writes 0.
+// The NRx2 that a PSG note starts with when its envelope's first level is below the channel's volume: volume 0 with the
+// direction bit set. It's silent, and it keeps the channel's DAC on. A later step below the volume writes 0.
 constexpr uint32_t kSilentNrx2 = 0x08;
 
 // The bytes a FIFO holds, and the most it can hold when it asks for more after playing a point.

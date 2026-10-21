@@ -4,6 +4,8 @@
 
 #include "music.h"
 
+#include <array>
+#include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -11,6 +13,7 @@
 #include <vector>
 
 #include "gba.h"
+#include "rom.h"
 #include "sf2.h"
 #include "ubimilan/convert.h"
 #include "ubimilan/driver.h"

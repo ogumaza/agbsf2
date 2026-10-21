@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -28,9 +29,9 @@ enum class Revision : uint8_t
     kJ, // Super Robot Taisen J's: kRevisionTraits gives how it differs
 };
 
-// How each revision of the driver behaves where the two differ. The fields follow the rows of the documentation's
-// table of the J revision's differences. The wave channel's volume codes go in bits 13 to 15 of SOUND3CNT_H: 0 for
-// silence, 3 for 25%, 2 for 50%, 1 for 100%, and 4 for 75%.
+// How each revision of the driver behaves where the two differ. The fields follow the rows of the documentation's table
+// of the J revision's differences. The wave channel's volume codes go in bits 13 to 15 of SOUND3CNT_H: 0 for silence, 3
+// for 25%, 2 for 50%, 1 for 100%, and 4 for 75%.
 struct RevisionTraits
 {
     bool banks = false;                     // F0 switches between bank 0 and bank 1 of the samples and noise macros

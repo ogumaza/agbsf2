@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
@@ -12,18 +13,23 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "beat_grid.h"
 #include "beat_midi.h"
 #include "files.h"
 #include "gba.h"
+#include "konami/driver.h"
 #include "konami/seqformat.h"
 #include "konami/sequencer.h"
+#include "konami/soundfont.h"
 #include "midi.h"
 #include "music.h"
 #include "program.h"
 #include "psg.h"
+#include "rom.h"
 #include "sf2.h"
 #include "song_banks.h"
 
@@ -80,9 +86,9 @@ struct Simulation
 };
 
 // Records each frame's track outputs and echo settings until the song stops, all tracks end, or the loop has played
-// `loops` times. With `second`, the marked loop is the song's second pass through it, and the song plays the first pass
-// before it. An invalid song header produces a warning and no frames.
-Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops, bool second)
+// `loops` times. From LoopStart::kSecondPass, the marked loop is the song's second pass through it. The song then plays
+// the first pass before it. An invalid song header produces a warning and no frames.
+Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops, LoopStart start_pass)
 {
     Simulation sim;
     const std::unique_ptr<Sequencer> sequencer = Sequencer::Create(rom, info, song);
@@ -106,13 +112,13 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops,
                 sim.first_loop_end = int(f);
                 sim.delayed_loop_point = seq.LoopPointDelayed();
             }
-            else if (second && seq.LoopsDone() == 2)
+            else if (start_pass == LoopStart::kSecondPass && seq.LoopsDone() == 2)
             {
                 sim.loop_start = sim.loop_end;
                 sim.loop_end = int(f);
             }
 
-            if (seq.LoopsDone() >= loops + (second ? 1 : 0))
+            if (seq.LoopsDone() >= loops + (start_pass == LoopStart::kSecondPass ? 1 : 0))
             {
                 ended = true; // this frame already belongs to the next pass
                 break;
@@ -157,9 +163,9 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops,
     }
     else if (!ended)
     {
-        sim.warnings.push_back("song reached the frame limit after playing its loop " +
-                               std::to_string(seq.LoopsDone()) + " of " + std::to_string(loops + (second ? 1 : 0)) +
-                               " times; output truncated");
+        sim.warnings.push_back(
+            "song reached the frame limit after playing its loop " + std::to_string(seq.LoopsDone()) + " of " +
+            std::to_string(loops + (start_pass == LoopStart::kSecondPass ? 1 : 0)) + " times; output truncated");
     }
 
     return sim;
@@ -195,8 +201,8 @@ struct Levels
     double left = 0, right = 0;
 };
 
-// Writes the events of one track's notes, and holds the state of the note that's playing. The renderers of the
-// output stages build on it.
+// Writes the events of one track's notes, and holds the state of the note that's playing. The renderers of the output
+// stages build on it.
 class NoteWriter
 {
 public:
@@ -1638,11 +1644,11 @@ void WriteTrack(MidiTrack& mt, int ch, int range, const std::vector<Event>& even
 // track's notes there. The comparison of passes times each track's notes from its first note and misses the move.
 Simulation MarkedSimulation(const Rom& rom, const DriverInfo& info, int song, int loops)
 {
-    Simulation sim = Simulate(rom, info, song, loops, false);
+    Simulation sim = Simulate(rom, info, song, loops, LoopStart::kFirstPass);
     if (sim.loop_end >= 0 &&
-        (sim.delayed_loop_point || !FirstPassRepeats(rom, info, Simulate(rom, info, song, 2, false))))
+        (sim.delayed_loop_point || !FirstPassRepeats(rom, info, Simulate(rom, info, song, 2, LoopStart::kFirstPass))))
     {
-        sim = Simulate(rom, info, song, loops, true);
+        sim = Simulate(rom, info, song, loops, LoopStart::kSecondPass);
     }
 
     return sim;

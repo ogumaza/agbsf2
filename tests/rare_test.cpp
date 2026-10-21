@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <initializer_list>
 #include <map>
 #include <memory>
 #include <string>
@@ -15,7 +16,11 @@
 #include <utility>
 #include <vector>
 
+#include "seqlib/midi/reader.h"
+#include "seqlib/testing/check.h"
+
 #include "files.h"
+#include "gba.h"
 #include "music.h"
 #include "rare/convert.h"
 #include "rare/driver.h"
@@ -31,7 +36,7 @@ namespace agbsf2::rare
 namespace
 {
 
-using test::FullBendRange;
+using test::HasGlobalZoneModulators;
 using test::Le16;
 using test::Le32;
 using test::MidiEvents;
@@ -1266,7 +1271,8 @@ void TestFrameTiming()
     {
         offs.push_back({uint32_t(e.tick), e.bytes[1]});
     }
-    const std::vector<std::pair<uint32_t, int>> kOns = {{0, 100}, {991, 50}, {992, 100}, {1983, 50}};
+    // A velocity of v is written as 127 × √(v / 127), rounded: 100 as 113 and 50 as 80.
+    const std::vector<std::pair<uint32_t, int>> kOns = {{0, 113}, {991, 80}, {992, 113}, {1983, 80}};
     const std::vector<std::pair<uint32_t, int>> kOffs = {{495, 60}, {992, 60}, {1487, 60}, {1999, 60}};
     SEQLIB_CHECK(ons == kOns);
     SEQLIB_CHECK(offs == kOffs);
@@ -1327,11 +1333,12 @@ void TestConversion()
     }
     SEQLIB_CHECK(tempo);
 
-    // Key 64 played twice at once is one note, as loud as both: (30 + 1) + (40 + 1) - 1.
+    // Key 64 played twice at once is one note. The note is as loud as both: (30 + 1) + (40 + 1) - 1 = 71. A velocity
+    // of v is written as 127 × √(v / 127), rounded: 64 as 90 and 71 as 95.
     const auto ch0 = m.Find(0x90);
     SEQLIB_REQUIRE_EQ(ch0.size(), 2);
-    SEQLIB_CHECK(ch0[0].tick == 0 && ch0[0].bytes[1] == 60 && ch0[0].bytes[2] == 64);
-    SEQLIB_CHECK(ch0[1].tick == 240 && ch0[1].bytes[1] == 64 && ch0[1].bytes[2] == 71);
+    SEQLIB_CHECK(ch0[0].tick == 0 && ch0[0].bytes[1] == 60 && ch0[0].bytes[2] == 90);
+    SEQLIB_CHECK(ch0[1].tick == 240 && ch0[1].bytes[1] == 64 && ch0[1].bytes[2] == 95);
 
     const auto offs = m.Find(0x80);
     SEQLIB_CHECK(offs.size() == 2 && offs[1].tick == 480);
@@ -1345,6 +1352,17 @@ void TestConversion()
         range = range || (e.bytes[1] == 6 && e.bytes[2] == 2);
     }
     SEQLIB_CHECK(range);
+
+    // The channel's volume of 100 is written in controller 7 as 127 × √(100 / 127), rounded: 113.
+    std::vector<int> volumes;
+    for (const auto& e : m.Find(0xB0))
+    {
+        if (e.bytes[1] == 7)
+        {
+            volumes.push_back(e.bytes[2]);
+        }
+    }
+    SEQLIB_CHECK(volumes == std::vector<int>({113}));
 
     // The drum channel's note comes before its program change, at the same tick, and gets that program, so the MIDI
     // file puts the change first.
@@ -1380,9 +1398,9 @@ void TestConversion()
                  presets.count({128, 127}));
     SEQLIB_REQUIRE_EQ(presets.size(), 4);
 
-    // Each instrument's global zone has seqlib's three modulators and the driver's two.
-    SEQLIB_CHECK(FullBendRange(sf));
-    SEQLIB_CHECK_EQ(sf.Count("imod", 10), 3 * (3 + 2) + 1);
+    // Each instrument's global zone has seqlib's four modulators.
+    SEQLIB_CHECK(HasGlobalZoneModulators(sf));
+    SEQLIB_CHECK_EQ(sf.Count("imod", 10), 3 * 4 + 1);
 
     // The lead's zone has its envelope and fine tune. The key split's zones split at key 60. Its high sample loops in
     // loop mode 4. The drum kit's zone plays at its sample's pitch whatever the key.
@@ -1829,6 +1847,32 @@ Pressures KeyPressures(const MidiEvents& m, int ch)
     return out;
 }
 
+// Returns the General MIDI 2 Controller Destination Setting message that makes key pressure mute channel `ch`'s notes,
+// as seqlib's reader gives it: F0, its length, then the rest.
+std::vector<uint8_t> MuteMessage(int ch)
+{
+    return {0xF0, 0x08, 0x7F, 0x7F, 0x09, 0x02, uint8_t(ch), 0x02, 0x00, 0xF7};
+}
+
+// Returns true if no track of a MIDI file has a system exclusive event after a key pressure.
+bool SysExFirst(const MidiEvents& m)
+{
+    for (const auto& track : m.tracks)
+    {
+        bool pressure = false;
+        for (const auto& e : track.events)
+        {
+            pressure = pressure || (e.bytes[0] & 0xF0) == 0xA0;
+            if (e.bytes[0] == 0xF0 && pressure)
+            {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
 // Returns true if every instrument's global zone has the modulator that mutes a note while its key's pressure is high.
 bool MutesNotes(const Sf2Records& sf)
 {
@@ -1855,7 +1899,8 @@ bool MutesNotes(const Sf2Records& sf)
 // The notes of TestVoiceLimit's older revision. The ninth note, key 72 on channel 1, starts muted, and plays from the
 // frame in which the first note is released, at tick 47. That note is muted from that frame. The SoundFont's instrument
 // mutes a note while its key's pressure is high. The file starts with pressure 0 for the keys that play before it gives
-// them a pressure: all but key 72. Those come before key 72's pressure at tick 0.
+// them a pressure: all but key 72. Those come before key 72's pressure at tick 0. Channels 0 and 1 mute keys. Each
+// starts with General MIDI 2's message that makes key pressure mute its notes, before its pressures.
 void TestKeyPressures()
 {
     const Format kFormat = Format::kChannelByte;
@@ -1881,11 +1926,15 @@ void TestKeyPressures()
     SEQLIB_CHECK(KeyPressures(m, 0) == kChannel0);
     SEQLIB_CHECK(KeyPressuresInOrder(m, 1) == Pressures({{0, 70, 0}, {0, 71, 0}, {0, 72, 127}, {47, 72, 0}}));
     SEQLIB_CHECK(MutesNotes(ReadSf2(r.sf2_path)));
+    const std::vector<seqlib::midi::Event> kMessages = {{0, MuteMessage(0)}, {0, MuteMessage(1)}};
+    SEQLIB_CHECK(m.Find(0xF0) == kMessages);
+    SEQLIB_CHECK(SysExFirst(m));
 }
 
 // Track 0 plays a ninth note at tick 32. The driver plays it a frame late, in the frame that starts at tick 47. The
-// note starts muted: its pressure goes at its note on. Another tune plays key 70 twice on channel 1 with seven other
-// notes, and the mixer leaves out one of the two. The key isn't muted, and the SoundFont has no modulator for it.
+// note starts muted: its pressure goes at its note on. Channel 3 alone gets General MIDI 2's mute message. Another tune
+// plays key 70 twice on channel 1 with seven other notes, and the mixer leaves out one of the two. The key isn't muted.
+// The SoundFont has no modulator for it, and the file has no message.
 void TestPressureTiming()
 {
     const Format kFormat = Format::kChannelByte;
@@ -1923,17 +1972,20 @@ void TestPressureTiming()
     SEQLIB_CHECK(KeyPressures(m, 3) == Pressures({{32, 90, 127}}));
     SEQLIB_REQUIRE_EQ(m.Find(0x93).size(), 1);
     SEQLIB_CHECK_EQ(m.Find(0x93)[0].tick, 32);
+    SEQLIB_CHECK(m.Find(0xF0) == std::vector<seqlib::midi::Event>({{0, MuteMessage(3)}}));
 
     const MidiEvents s = ReadMidi(shared.midi_path);
     SEQLIB_CHECK(KeyPressures(s, 0).empty() && KeyPressures(s, 1).empty());
     SEQLIB_CHECK(!MutesNotes(ReadSf2(shared.sf2_path)));
+    SEQLIB_CHECK(s.Find(0xF0).empty());
 }
 
-// A loop starts with key 90 on channel 3 alone, and later plays it with nine other notes. The mixer then leaves out
-// key 91 and the released key 90. Key 90 plays again from the frame that starts the next pass, at tick 287, before the
+// A loop starts with key 90 on channel 3 alone, and later plays it with nine other notes. The mixer then leaves out key
+// 91 and the released key 90. Key 90 plays again from the frame that starts the next pass, at tick 287, before the
 // loop's end. Key 91 stays muted. A player that jumps back would keep it muted. The file therefore gives its pressure
 // from the loop's start, 0, again there. Key 90 plays before the file gives it a pressure. The file starts with
-// pressure 0 for it too.
+// pressure 0 for it too. In the next pass, the mixer also leaves out the release of key 71 on channel 1. Channels 1 and
+// 3 therefore get General MIDI 2's mute message.
 void TestLoopPressures()
 {
     const Format kFormat = Format::kChannelByte;
@@ -1966,12 +2018,15 @@ void TestLoopPressures()
     SEQLIB_CHECK(r.ok && !r.silent);
     const Pressures kPressures = {{0, 90, 0},   {0, 91, 0},     {95, 90, 127}, {95, 91, 127},
                                   {287, 90, 0}, {383, 90, 127}, {575, 90, 0}};
-    SEQLIB_CHECK(KeyPressures(ReadMidi(r.midi_path), 3) == kPressures);
+    const MidiEvents m = ReadMidi(r.midi_path);
+    SEQLIB_CHECK(KeyPressures(m, 3) == kPressures);
+    const std::vector<seqlib::midi::Event> kMessages = {{0, MuteMessage(1)}, {0, MuteMessage(3)}};
+    SEQLIB_CHECK(m.Find(0xF0) == kMessages);
 }
 
 // A tune that the mixer leaves no note out of gets no key pressures with a SoundFont of its own. With the shared
 // SoundFont of --single-sf2, which another tune's mutes can give the modulator, the file starts with pressure 0 for
-// each key that it plays.
+// each key that it plays. Neither file mutes a key, and neither has General MIDI 2's mute message.
 void TestStartPressures()
 {
     const Format kFormat = Format::kChannelByte;
@@ -1997,6 +2052,7 @@ void TestStartPressures()
     SEQLIB_CHECK(KeyPressures(a, 0).empty() && KeyPressures(a, 2).empty());
     SEQLIB_CHECK(KeyPressuresInOrder(s, 0) == Pressures({{0, 60, 0}, {0, 62, 0}}));
     SEQLIB_CHECK(KeyPressuresInOrder(s, 2) == Pressures({{0, 64, 0}}));
+    SEQLIB_CHECK(a.Find(0xF0).empty() && s.Find(0xF0).empty());
 }
 
 void TestTrackChoice()

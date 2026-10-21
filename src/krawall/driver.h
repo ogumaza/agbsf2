@@ -6,6 +6,7 @@
 #pragma once
 
 #include <array>
+#include <compare>
 #include <cstdint>
 #include <string>
 #include <vector>

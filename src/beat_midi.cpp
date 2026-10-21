@@ -7,7 +7,9 @@
 #include <cstdint>
 #include <string>
 
+#include "beat_grid.h"
 #include "gba.h"
+#include "midi.h"
 
 namespace agbsf2
 {

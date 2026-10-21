@@ -8,7 +8,6 @@
 #include <string>
 #include <vector>
 
-#include "gba.h"
 #include "rom.h"
 
 namespace agbsf2::rd2

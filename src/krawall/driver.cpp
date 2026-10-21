@@ -3,11 +3,14 @@
 #include "krawall/driver.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
 #include "program.h"
+#include "rom.h"
 #include "thumb.h"
 
 namespace agbsf2::krawall
@@ -316,8 +319,8 @@ void ReadGameSettings(const Rom& rom, DriverInfo& info)
 }
 
 // Lists the modules: from the given table, or the headers that a scan of the ROM finds. A count given for the modules
-// applies to a given table and to the game's table that the scan finds. The count leaves out the modules that the
-// table doesn't list. Returns the table that the list comes from, or 0 for a list from the scan.
+// applies to a given table and to the game's table that the scan finds. The count leaves out the modules that the table
+// doesn't list. Returns the table that the list comes from, or 0 for a list from the scan.
 uint32_t ListModules(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info)
 {
     std::vector<uint32_t> found;

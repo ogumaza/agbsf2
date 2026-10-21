@@ -2,12 +2,16 @@
 
 #include "quintet/driver.h"
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <iterator>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include "quintet/song.h"
+#include "rom.h"
 #include "thumb.h"
 
 namespace agbsf2::quintet
@@ -375,6 +379,7 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
     }
 
     ReportDetection(info);
+
     return true;
 }
 

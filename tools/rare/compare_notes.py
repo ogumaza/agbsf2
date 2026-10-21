@@ -10,7 +10,8 @@ NAME_rare_NN.sf2 if detection finds another of the game's drivers first. For eve
 driver_emu.py for as long as the MIDI file lasts, and each note it plays is matched with a MIDI note on the same channel
 and key that starts within a frame and a half of it. For each pair, the script checks:
 
-  - the velocity, and the channel's volume when the note starts;
+  - the velocity, and the channel's volume when the note starts. A velocity or volume of v is written as
+    127 × √(v / 127);
   - the sample: the SoundFont zone that the note's bank, program and key choose has to play the driver's sample;
   - the envelope: the zone's attack, decay, sustain and release, for each phase that the driver's note reached, have to
     be those that agbsf2 works out from the instrument and the settings from controllers 20-23 that the phase
@@ -68,10 +69,11 @@ def read_midi(path):
             if body[i] >= 0x80:
                 status = body[i]
                 i += 1
-            if status == 0xFF:
-                kind = body[i]
-                length = 0
-                i += 1
+            if status in (0xF0, 0xF7, 0xFF):
+                kind, length = None, 0
+                if status == 0xFF:
+                    kind = body[i]
+                    i += 1
                 while True:
                     b = body[i]
                     i += 1
@@ -350,7 +352,8 @@ def check_song(rom, song, midi_path, sf2_path, frames_limit, report):
     for (channel, key, start), group in sorted(groups.items(), key=lambda item: item[0][2]):
         lasting = [d for d in group if d['release'] > d['start']]
         voices = lasting or group
-        velocity = min(127, sum(d['velocity'] + 1 for d in voices) - 1)
+        driver_velocity = min(127, sum(d['velocity'] + 1 for d in voices) - 1)
+        velocity = conversion.square_root_value(driver_velocity, 127, 1)
         candidates = [m for m in by_key.get((channel, key), []) if not m['matched'] and -1.5 <= m['on'] - start <= 1.5]
         if not candidates:
             problems.append('frame %d: the driver plays key %d on channel %d, which the MIDI file doesn\'t' % (
@@ -370,14 +373,17 @@ def check_song(rom, song, midi_path, sf2_path, frames_limit, report):
         checked += len(group)
         where = 'frame %d, channel %d key %d' % (start, channel, key)
         if m['velocity'] != velocity:
-            problems.append('%s: velocity %d, the driver\'s %d' % (where, m['velocity'], velocity))
+            problems.append('%s: velocity %d for the driver\'s %d, not %d' % (where, m['velocity'], driver_velocity,
+                                                                              velocity))
 
         # The driver mixes the frame at the volume the channel has at its end.
         driver_volume = volume[start][channel]
+        expected_volume = conversion.square_root_value(driver_volume, 127, 0)
         volumes_seen = [value_at(volumes, channel, (start + 1 + shift) / FRAME_RATE, 100)
                         for shift in (-1.000001, -0.000001, 0.999999)]
-        if driver_volume not in volumes_seen:
-            problems.append('%s: volume %d, the driver\'s %d' % (where, volumes_seen[1], driver_volume))
+        if expected_volume not in volumes_seen:
+            problems.append('%s: volume %d for the driver\'s %d, not %d' % (where, volumes_seen[1], driver_volume,
+                                                                            expected_volume))
 
         # The zone that the note's bank, program and key choose.
         zones = [z for z in presets.get((m['bank'], m['program']), []) if z['low'] <= key <= z['high']]

@@ -5,6 +5,7 @@
 
 #include "ubimilan/driver.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <optional>
@@ -12,6 +13,7 @@
 #include <vector>
 
 #include "gba.h"
+#include "rom.h"
 #include "thumb.h"
 
 namespace agbsf2::ubimilan

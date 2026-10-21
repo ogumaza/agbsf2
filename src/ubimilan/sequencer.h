@@ -6,6 +6,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -154,15 +155,21 @@ private:
     // The track.
     uint32_t wait_ = 0;
     uint32_t pointer_ = 0;
+
     // The next sequence's countdown and commands, or 0. From an end command to the sound update, it holds the address
     // of the resource that the game's callback gave the track.
     uint32_t next_ = 0;
+
     bool active_ = false;
+
     // The game's flag that the piece plays. The game's callback clears it once the track stops.
     bool piece_playing_ = false;
+
     bool ending_ = false; // an end command was read
+
     // A sequence ended. The game's sound update notes it.
     bool changed_ = false;
+
     int index_ = 0; // the sequence of the piece that plays
 
     // The kit, its voices and the PSG.

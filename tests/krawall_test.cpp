@@ -6,14 +6,18 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <initializer_list>
 #include <memory>
 #include <set>
 #include <string>
 #include <vector>
 
+#include "seqlib/testing/check.h"
+
 #include "krawall/convert.h"
 #include "krawall/driver.h"
 #include "krawall/player.h"
+#include "krawall/soundfont.h"
 #include "midi.h"
 #include "music.h"
 #include "rom.h"
@@ -25,7 +29,7 @@ namespace agbsf2::krawall
 namespace
 {
 
-using test::FullBendRange;
+using test::HasGlobalZoneModulators;
 using test::Le16;
 using test::Le32;
 using test::ReadAll;
@@ -573,9 +577,9 @@ void TestConversion()
     const auto first_on = midi.Find(0x90);
     const auto second_on = midi.Find(0x91);
     SEQLIB_REQUIRE_EQ(first_on.size(), 2u);
-    SEQLIB_CHECK(first_on.size() == 2 && first_on[0].tick == 0 && first_on[0].bytes[1] == 60 && first_on[1].tick == 15);
+    SEQLIB_CHECK(first_on[0].tick == 0 && first_on[0].bytes[1] == 60 && first_on[1].tick == 15);
     SEQLIB_REQUIRE_EQ(second_on.size(), 4u);
-    SEQLIB_CHECK(second_on.size() == 4 && second_on[0].bytes[1] == 64 && second_on[1].tick == 6);
+    SEQLIB_CHECK(second_on[0].bytes[1] == 64 && second_on[1].tick == 6);
     const auto programs = midi.Find(0xC1);
     SEQLIB_CHECK(programs.size() >= 2 && programs[0].bytes[1] != programs[1].bytes[1]);
 
@@ -603,7 +607,7 @@ void TestConversion()
 
     // The SoundFont: a preset for each sample and point, and the note from point 256 starting there.
     SEQLIB_CHECK_EQ(sf2.Count("phdr", 38), 4u);
-    SEQLIB_CHECK(FullBendRange(sf2));
+    SEQLIB_CHECK(HasGlobalZoneModulators(sf2));
     bool offset_zone = false;
     for (size_t z = 0; z + 1 < sf2.Count("ibag", 4); z++)
     {
@@ -765,6 +769,29 @@ void TestMusic()
     SEQLIB_CHECK(trace_text.find("\n1 m0 ") != std::string::npos);
 }
 
+// A sample of 20 points that loops forwards over its last 6 gets its loop repeated 6 times: 36 points, the first length
+// of kMinLoop points or more.
+void TestShortLoop()
+{
+    Cart cart;
+    constexpr uint32_t kHeader = kRomBase + 0xF000;
+    cart.Put32(kHeader + kSampleLoopLength, 6);
+    cart.Put32(kHeader + kSampleEnd, kHeader + kSamplePoints + 20);
+    cart.Put32(kHeader + 8, 8363);
+    cart.Put8(kHeader + kSampleLoop, 1);
+    for (uint32_t i = 0; i < 20; i++)
+    {
+        cart.Put8(kHeader + kSamplePoints + i, uint8_t(i * 9));
+    }
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+    InstrumentSet set;
+    set.Program(kHeader, 0, 0);
+    const Sf2File sf = set.Build(rom, info);
+    SEQLIB_REQUIRE_EQ(sf.samples.size(), 1);
+    SEQLIB_CHECK(test::LengthenedLoop(sf.samples[0], 14, 6));
+}
+
 } // namespace
 
 void RunTests()
@@ -778,6 +805,7 @@ void RunTests()
     TestLoopStartsAtSecondPass();
     TestManyChannels();
     TestMusic();
+    TestShortLoop();
 }
 
 } // namespace agbsf2::krawall

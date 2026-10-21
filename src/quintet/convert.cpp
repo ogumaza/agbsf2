@@ -20,7 +20,11 @@
 #include "music.h"
 #include "program.h"
 #include "psg.h"
+#include "quintet/driver.h"
 #include "quintet/sequencer.h"
+#include "quintet/song.h"
+#include "quintet/soundfont.h"
+#include "rom.h"
 #include "sf2.h"
 #include "song_banks.h"
 
@@ -76,13 +80,6 @@ enum class Timing
 {
     kBeat,   // on the song's ticks within the frames that the driver plays them in
     kFrames, // at the start of the frames that the driver plays them in
-};
-
-// The pass through the song's loop that the marked loop starts at.
-enum class LoopStart
-{
-    kFirstPass,
-    kSecondPass, // the song plays the first pass before the marked loop
 };
 
 // The stretch of a song that the conversion covers, in MIDI ticks.
@@ -216,11 +213,11 @@ std::vector<int> LoopStartEvents(const std::array<ChannelLoop, kChannels>& chann
     return events;
 }
 
-// Works out the song's loop from the events so far. Returns true once every channel has looped, ended or stopped at
-// its loop point. Each call sets the loop channel: the channel with the longest loop, or -1. When a channel loops, the
-// call that returns true also sets `times` and `run_on`. Channels may have different loop points and lengths. The
-// song's loop starts once all looping channels have entered their loops and the others have ended or stopped. `times`
-// is the number of passes of the longest loop that LoopLength() gives for the channels' loops.
+// Works out the song's loop from the events so far. Returns true once every channel has looped, ended or stopped at its
+// loop point. Each call sets the loop channel: the channel with the longest loop, or -1. When a channel loops, the call
+// that returns true also sets `times` and `run_on`. Channels may have different loop points and lengths. The song's
+// loop starts once all looping channels have entered their loops and the others have ended or stopped. `times` is the
+// number of passes of the longest loop that LoopLength() gives for the channels' loops.
 bool TryPlan(Simulation& sim, uint32_t& run_on)
 {
     bool planned = true;
@@ -340,13 +337,13 @@ Simulation RunModel(const Rom& rom, const DriverInfo& info, int song, int loops)
 }
 
 // Times the events of `sim` for `timing`. Then plans the stretch of the song that the MIDI file covers: `loops` passes
-// through the loop from `loop_start`. The loop starts where every looping channel has started its loop and every other
+// through the loop from `start_pass`. The loop starts where every looping channel has started its loop and every other
 // channel has ended or stopped. The delay is how far that comes after the loop channel's loop point. The loop ends that
 // delay after the end of the loop channel's `times`th pass. From the second pass, the loop starts and ends a loop
 // later: that delay after the ends of its `times`th and twice `times`th passes. The song's next pass through the loop
 // ends a loop after the loop's end. The song ends that delay after its last pass. If the song doesn't loop, it ends
 // where the last channel ends or stops. A song that the model cut off ends where it stopped.
-void PlanLoop(Simulation& sim, Timing timing, int loops, LoopStart loop_start)
+void PlanLoop(Simulation& sim, Timing timing, int loops, LoopStart start_pass)
 {
     sim.event_ticks = timing == Timing::kFrames ? FrameStartTicks(sim) : BeatTicks(sim);
     sim.plan = Plan();
@@ -374,7 +371,7 @@ void PlanLoop(Simulation& sim, Timing timing, int loops, LoopStart loop_start)
         };
 
         // The loop channel's passes before the marked loop, and up to the song's end.
-        const size_t skip = loop_start == LoopStart::kSecondPass ? sim.times : 0;
+        const size_t skip = start_pass == LoopStart::kSecondPass ? sim.times : 0;
         const size_t last = size_t(loops) * sim.times + skip;
         plan.loops = true;
         plan.loop_start = pass_end(skip);
@@ -402,10 +399,10 @@ void PlanLoop(Simulation& sim, Timing timing, int loops, LoopStart loop_start)
 // Runs the model until every channel has looped, ended or stopped at its loop point and the song has played its loop
 // `loops` times. Then works out the MIDI file's timing. From LoopStart::kSecondPass, the song plays the first pass
 // through the loop before the marked loop.
-Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops, Timing timing, LoopStart loop_start)
+Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops, Timing timing, LoopStart start_pass)
 {
-    Simulation sim = RunModel(rom, info, song, loops + (loop_start == LoopStart::kSecondPass ? 1 : 0));
-    PlanLoop(sim, timing, loops, loop_start);
+    Simulation sim = RunModel(rom, info, song, loops + (start_pass == LoopStart::kSecondPass ? 1 : 0));
+    PlanLoop(sim, timing, loops, start_pass);
 
     return sim;
 }

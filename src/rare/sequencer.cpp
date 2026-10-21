@@ -4,8 +4,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <initializer_list>
+#include <string>
+#include <vector>
 
+#include "rare/driver.h"
+#include "rare/song.h"
+#include "rom.h"
 #include "warnings.h"
 
 namespace agbsf2::rare
@@ -16,8 +23,8 @@ namespace
 // Maximum number of commands a track may run per frame. A loop without a delay in it would hang the driver.
 constexpr int kMaxCommandsPerFrame = 100000;
 
-// The music volume, out of 128, at which Donkey Kong Country 3 plays most of its tunes. The driver's init sets 128.
-// The game sets the volume for each tune after it requests the tune.
+// The music volume, out of 128, at which Donkey Kong Country 3 plays most of its tunes. The driver's init sets 128. The
+// game sets the volume for each tune after it requests the tune.
 constexpr uint32_t kGameMusicVolume = 69;
 
 // A quotient and remainder from the driver's 16-bit division.
@@ -631,10 +638,10 @@ void Sequencer::Mix()
                 continue;
             }
 
-            // A note's level before its velocity and envelope count is the music volume × (the channel's volume + 1)
-            // / 128, × the channel's level / 128. Only the game turns the channel's level down. In Donkey Kong Country
-            // 3's revision, a note at a level of 0 isn't mixed and doesn't count towards the limit. At the game's music
-            // volume, that leaves out the notes of a channel at a volume of 0.
+            // A note's level before its velocity and envelope count is the music volume × (the channel's
+            // volume + 1) / 128, × the channel's level / 128. Only the game turns the channel's level down. In Donkey
+            // Kong Country 3's revision, a note at a level of 0 isn't mixed and doesn't count towards the limit. At the
+            // game's music volume, that leaves out the notes of a channel at a volume of 0.
             if (info_.skips_silent_notes && (kGameMusicVolume * (channels_[size_t(s.channel)].volume + 1)) >> 7 == 0)
             {
                 s.mix = MixResult::kSilent;

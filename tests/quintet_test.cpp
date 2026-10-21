@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <initializer_list>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -15,13 +16,17 @@
 #include <utility>
 #include <vector>
 
+#include "seqlib/testing/check.h"
+
 #include "files.h"
+#include "gba.h"
 #include "midi.h"
 #include "music.h"
 #include "quintet/convert.h"
 #include "quintet/driver.h"
 #include "quintet/sequencer.h"
 #include "quintet/song.h"
+#include "quintet/soundfont.h"
 #include "rom.h"
 #include "sf2.h"
 #include "test_util.h"
@@ -31,7 +36,7 @@ namespace agbsf2::quintet
 namespace
 {
 
-using test::FullBendRange;
+using test::HasGlobalZoneModulators;
 using test::LastWrite;
 using test::Le16;
 using test::Le32;
@@ -592,8 +597,8 @@ void TestHold()
 }
 
 // Square 2 repeats a command 255 times 255 times, without a note, and the guard ends it after 10000 commands. Square 1
-// loops a quarter note. The plan takes square 2 as ended. The song therefore loops, without running for the hour that
-// a song cut off there takes.
+// loops a quarter note. The plan takes square 2 as ended. The song therefore loops, without running for the hour that a
+// song cut off there takes.
 void TestCommandGuard()
 {
     Cart cart(Revision::kA);
@@ -644,7 +649,7 @@ void TestWaveSwitch()
         return key != gens.end() ? int(key->second) : int(sf2.Record("shdr", 46, gens.at(sf2::kSampleId))[40]);
     };
 
-    SEQLIB_CHECK(FullBendRange(sf2));
+    SEQLIB_CHECK(HasGlobalZoneModulators(sf2));
     SEQLIB_CHECK(sum.ok && zones == 2);
     if (zones == 2)
     {
@@ -1062,11 +1067,11 @@ void TestConversion()
 
     const MidiEvents midi = ReadMidi(sum.midi_path);
     const auto tempos = midi.Find(0xFF);
-    const auto cc = midi.Find(0xB0);
+    const auto controllers = midi.Find(0xB0);
     const auto bends = midi.Find(0xE0);
 
     int start_cc10 = -1, cc10 = -1, cc11 = -1;
-    for (const auto& [tick, bytes] : cc)
+    for (const auto& [tick, bytes] : controllers)
     {
         start_cc10 = bytes[1] == cc::kPan && tick == 0 ? bytes[2] : start_cc10;
         cc10 = bytes[1] == cc::kPan && tick > 0 ? bytes[2] : cc10;
@@ -1150,6 +1155,29 @@ void TestMusic()
     SEQLIB_CHECK(!bare_forced && forced_error == "no Quintet sound driver found, so it has no length table");
 }
 
+// A PCM sound that plays 14 bytes and then loops over 6 gets its loop repeated 6 times: 36 points, the first length of
+// kMinLoop points or more.
+void TestShortLoop()
+{
+    test::CartImage image(0x20);
+    for (uint32_t i = 0; i < 20; i++)
+    {
+        image.Put8(kRomBase + i, uint8_t(i * 9));
+    }
+    const Rom rom = image.ToRom();
+    SoundfontBuilder sf(rom);
+    PcmSound sound;
+    sound.start = kRomBase;
+    sound.first = 14;
+    sound.loop = 14;
+    sound.loop_length = 6;
+    sound.looped = true;
+    sound.rate = 16384;
+    const int index = sf.PcmSample(sound);
+    SEQLIB_REQUIRE(index >= 0);
+    SEQLIB_CHECK(test::LengthenedLoop(sf.File().samples[size_t(index)], 14, 6));
+}
+
 } // namespace
 
 void RunTests()
@@ -1176,6 +1204,7 @@ void RunTests()
     TestConversion();
     TestDump();
     TestMusic();
+    TestShortLoop();
 }
 
 } // namespace agbsf2::quintet

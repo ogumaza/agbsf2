@@ -4,14 +4,19 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <cstdio>
 #include <map>
 #include <set>
+#include <string>
 #include <tuple>
 
 #include "xsflib/bytes.h"
 
 #include "files.h"
+#include "mp2k/driver.h"
+#include "music.h"
+#include "rom.h"
 
 namespace agbsf2::mp2k
 {

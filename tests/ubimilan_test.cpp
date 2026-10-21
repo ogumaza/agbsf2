@@ -7,24 +7,30 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "seqlib/testing/check.h"
+
 #include "gba.h"
 #include "music.h"
 #include "rom.h"
+#include "sf2.h"
 #include "test_util.h"
 #include "ubimilan/convert.h"
 #include "ubimilan/driver.h"
 #include "ubimilan/sequencer.h"
+#include "ubimilan/soundfont.h"
 
 namespace agbsf2::ubimilan
 {
 namespace
 {
 
-using test::FullBendRange;
+using test::HasGlobalZoneModulators;
 using test::Le16;
 using test::Le32;
 using test::ReadMidi;
@@ -256,8 +262,8 @@ DriverInfo Detect(const Rom& rom)
 }
 
 // Detection finds the sequencer's step by its code, the sound bank through the archive's lookup that the game calls
-// with file 2, the pieces of music among the resources, channel 9's kit, the PSG's tables and Timer 0's reload from
-// the sound init's float. A cartridge without the code shows no sign of the driver.
+// with file 2, the pieces of music among the resources, channel 9's kit, the PSG's tables and Timer 0's reload from the
+// sound init's float. A cartridge without the code shows no sign of the driver.
 void TestDetection()
 {
     const Cart cart;
@@ -327,10 +333,10 @@ void TestTiming()
     SEQLIB_CHECK(notes[1].ended && notes[1].off == 30);
 }
 
-// A note takes the last free voice, so a second note while the first plays takes voice 2. A note-off stops the voice
-// of channel 9's last note, whatever its key, so key 42's note-off ends key 41's note, and key 42 plays on until the
-// mixer reaches the end of its 4000 points, in frame 14. The PSG's note at volume 7 plays until its note-off, the one
-// at volume 0 too, though it's silent, and a key outside the kit plays nothing, with one warning for both its notes.
+// A note takes the last free voice, so a second note while the first plays takes voice 2. A note-off stops the voice of
+// channel 9's last note, whatever its key, so key 42's note-off ends key 41's note, and key 42 plays on until the mixer
+// reaches the end of its 4000 points, in frame 14. The PSG's note at volume 7 plays until its note-off, the one at
+// volume 0 too, though it's silent, and a key outside the kit plays nothing, with one warning for both its notes.
 void TestVoices()
 {
     const Cart cart;
@@ -375,9 +381,10 @@ void TestLoopingPiece()
 }
 
 // The conversion writes channel 9 on MIDI channel 11, away from the drum channel. Channel 9 plays in bank 9. Its
-// program is the kit's offset. A velocity is 127 times the driver's volume over 64. The SoundFont's kit is in bank 9.
-// Each key's zone plays the key's sample unpitched at the mixer's rate. The looping sample's loop is rounded up to a
-// whole number of 8 points.
+// program is the kit's offset. At tick 0, the track selects the bank. It sets CC7 and CC11 to 127, CC10 to 64, and
+// CC91 and CC93 to 0. A velocity is 127 times the square root of the driver's volume over 64. The SoundFont's kit is
+// in bank 9. Each key's zone plays the key's sample unpitched at the mixer's rate. The looping sample's loop is
+// rounded up to a whole number of 8 points.
 void TestConversion()
 {
     const Cart cart;
@@ -395,15 +402,20 @@ void TestConversion()
     const auto ons = midi.Find(0x9A);
     SEQLIB_REQUIRE_EQ(ons.size(), 2);
     SEQLIB_CHECK(ons[0].bytes == std::vector<uint8_t>({0x9A, 40, 127}));
-    SEQLIB_CHECK(ons[1].bytes == std::vector<uint8_t>({0x9A, 41, 64}));
+    SEQLIB_CHECK(ons[1].bytes == std::vector<uint8_t>({0x9A, 41, 90}));
     SEQLIB_REQUIRE_EQ(midi.Find(0xCA).size(), 1);
-    const auto banks = midi.Find(0xBA);
-    SEQLIB_REQUIRE_EQ(banks.size(), 2);
-    SEQLIB_CHECK(banks[0].bytes == std::vector<uint8_t>({0xBA, 0, 9}));
+    std::map<int, int> controls;
+    for (const auto& [tick, bytes] : midi.Find(0xBA))
+    {
+        SEQLIB_CHECK_EQ(tick, 0);
+        controls[bytes[1]] = bytes[2];
+    }
+    const std::map<int, int> setup = {{0, 9}, {7, 127}, {10, 64}, {11, 127}, {32, 0}, {91, 0}, {93, 0}};
+    SEQLIB_CHECK(controls == setup);
     SEQLIB_CHECK(midi.Find(0x99).empty() && midi.Find(0xB9).empty() && midi.Find(0xC9).empty());
 
     const test::Sf2Records sf = ReadSf2(sum.sf2_path);
-    SEQLIB_CHECK(FullBendRange(sf));
+    SEQLIB_CHECK(HasGlobalZoneModulators(sf));
     SEQLIB_CHECK_EQ(sf.Count("phdr", 38), 2);
     if (sf.Count("phdr", 38) == 2)
     {
@@ -444,8 +456,9 @@ void TestLoopMarkers()
     SEQLIB_CHECK_EQ(markers, 2);
 }
 
-// The PSG's note at volume 7 plays on MIDI channel 1, with square 1's bank and its instrument's program, at 127 times
-// 7 over 15. The note at volume 0 is left out, and so is the key outside the kit, whose warning the summary has.
+// The PSG's note at volume 7 plays on MIDI channel 1. The channel has square 1's bank and the program of the note's
+// instrument. The velocity is 127 times the square root of 7 over 15. The note at volume 0 is left out, and so is the
+// key outside the kit, whose warning the summary has.
 void TestPsgConversion()
 {
     const Cart cart;
@@ -461,7 +474,7 @@ void TestPsgConversion()
     const test::MidiEvents midi = ReadMidi(sum.midi_path);
     const auto ons = midi.Find(0x90);
     SEQLIB_REQUIRE_EQ(ons.size(), 1);
-    SEQLIB_CHECK(ons[0].bytes == std::vector<uint8_t>({0x90, 60, 59}));
+    SEQLIB_CHECK(ons[0].bytes == std::vector<uint8_t>({0x90, 60, 87}));
     SEQLIB_REQUIRE_EQ(midi.Find(0xC0).size(), 1);
     SEQLIB_REQUIRE_EQ(midi.Find(0x9A).size(), 2);
     SEQLIB_CHECK(!sum.warnings.empty() &&
@@ -486,6 +499,27 @@ void TestMusic()
     }
 }
 
+// The mixer plays a loop in whole runs of 8 points. A sample that loops from point 20 to point 30 therefore loops over
+// 16 points. The last 6 of them come from after the loop's end. That loop is repeated twice: 32 points, kMinLoop.
+void TestShortLoop()
+{
+    Cart cart;
+    constexpr uint32_t kSampleAt = kRomBase + 0xF000;
+    cart.PutBytes(kSampleAt, {kSample, 1, 0x40, 0xFF, 40, 0, 0, 0, 20, 0, 0, 0, 30, 0, 0, 0});
+    for (uint32_t i = 0; i < 40; i++)
+    {
+        cart.Put8(kSampleAt + 16 + i, uint8_t(i * 9));
+    }
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+    InstrumentSet set;
+    set.AddKitKey(0, 40, kSampleAt);
+    Sf2File sf;
+    set.Build(rom, info, sf);
+    SEQLIB_REQUIRE_EQ(sf.samples.size(), 1);
+    SEQLIB_CHECK(test::LengthenedLoop(sf.samples[0], 20, 16));
+}
+
 } // namespace
 
 void RunTests()
@@ -498,6 +532,7 @@ void RunTests()
     TestLoopMarkers();
     TestPsgConversion();
     TestMusic();
+    TestShortLoop();
 }
 
 } // namespace agbsf2::ubimilan

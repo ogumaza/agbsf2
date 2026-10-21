@@ -14,7 +14,8 @@ half, and the rounding of a tick. It then runs the driver under driver_emu.py fo
 MIDI file. Each sample that the driver starts on a voice must be a note on MIDI channel 11:
 
   - starting on the frame on which the driver starts the sample;
-  - at the velocity that the voice's volume gives: 127 times the volume over 64, a sample's full scale;
+  - at the velocity that the voice's volume gives: 127 times the square root of the volume over 64, a sample's full
+    scale;
   - with a zone for its key in the preset of its program in bank 9. The zone's sample holds the driver's points at the
     rate the mixer plays them and loops where the driver's sample loops;
   - ending on the frame on which the driver stops the voice, or on the frame after the one in which the voice reaches
@@ -219,7 +220,7 @@ def check_song(rom, song, framed, frames_limit):
         if abs(m['on'] - d['on']) > 0.5:
             problems.append('%s: the MIDI note starts on frame %.2f' % (where, m['on']))
             continue
-        velocity = min(127, max(1, round(d['volume'] * 127 / 64)))
+        velocity = conversion.square_root_value(d['volume'], 64, 1)
         if m['velocity'] != velocity:
             problems.append('%s: velocity %d, where the volume %d gives %d' % (where, m['velocity'], d['volume'],
                                                                                 velocity))

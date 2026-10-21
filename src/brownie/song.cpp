@@ -10,7 +10,9 @@
 #include <string>
 #include <vector>
 
+#include "brownie/driver.h"
 #include "files.h"
+#include "rom.h"
 
 namespace agbsf2::brownie
 {
@@ -28,8 +30,8 @@ std::string Format(const char* format, int a, int b = 0)
     return text;
 }
 
-// Returns the listing of channel `ch`: a heading, and then each command as the driver plays it, up to the channel's
-// end or its loop.
+// Returns the listing of channel `ch`: a heading, and then each command as the driver plays it, up to the channel's end
+// or its loop.
 std::string ListChannel(const Rom& rom, const DriverInfo& info, const SongChannel& ch)
 {
     const int c = ch.channel;

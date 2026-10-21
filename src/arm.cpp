@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <span>
 
+#include "rom.h"
+
 namespace agbsf2
 {
 

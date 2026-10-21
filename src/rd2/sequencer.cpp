@@ -3,10 +3,14 @@
 #include "rd2/sequencer.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "rd2/driver.h"
+#include "rom.h"
 #include "warnings.h"
 
 namespace agbsf2::rd2
@@ -994,10 +998,10 @@ int Sequencer::AllocateVoice(uint8_t voice_class, uint8_t priority)
     return v;
 }
 
-// Takes sample voices out of use until `count` are left, as the driver's request 0x0304 does. The driver allocates
-// each one as a note of the highest priority would. That takes the first free voice, or else the first voice that
-// plays. The driver then takes the voice off the list of voices that play and keeps it on a separate list. Neither the
-// notes nor the mixer use that list.
+// Takes sample voices out of use until `count` are left, as the driver's request 0x0304 does. The driver allocates each
+// one as a note of the highest priority would. That takes the first free voice, or else the first voice that plays. The
+// driver then takes the voice off the list of voices that play and keeps it on a separate list. Neither the notes nor
+// the mixer use that list.
 void Sequencer::SetSampleVoices(int count)
 {
     for (int left = kSampleVoices; left > count; left--)

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
-// agbsf2's names for seqlib's MIDI file builder, the drum channel, the pitch bend ranges and values that the drivers
-// share, and the writer of a channel's track that some drivers share.
+// agbsf2's names for seqlib's MIDI file builder, the drum channel, the pitch bend ranges and values and the levels that
+// the drivers share, and the writer of a channel's track that some drivers share.
 
 #pragma once
 
@@ -37,8 +37,8 @@ constexpr int kMaxBendRange = 96;
 // The widest bend that a track can leave out, in semitones: half a cent.
 constexpr double kSmallBend = 0.005;
 
-// Returns the pitch bend range that covers a track's bends of up to `widest` semitones either way: at least 2
-// semitones and at most kMaxBendRange. It's 0 when no bend is wider than `smallest`. The track then writes no bends.
+// Returns the pitch bend range that covers a track's bends of up to `widest` semitones either way: at least 2 semitones
+// and at most kMaxBendRange. It's 0 when no bend is wider than `smallest`. The track then writes no bends.
 inline int BendRangeFor(double widest, double smallest)
 {
     return widest > smallest ? std::clamp(int(std::ceil(widest - 1e-9)), 2, kMaxBendRange) : 0;
@@ -48,6 +48,14 @@ inline int BendRangeFor(double widest, double smallest)
 inline int BendValue(double bend, int range)
 {
     return std::clamp(8192 + int(std::lround(bend / range * 8192)), 0, 16383);
+}
+
+// Returns the MIDI value that plays a level of `level` / `full` in a straight line: 127 × √(level / full), rounded,
+// from `lowest` to 127. SoundFont players square velocity and controller 7 by default. A note-on's velocity takes a
+// `lowest` of 1.
+inline int SquareRootValue(double level, double full, int lowest)
+{
+    return std::clamp(int(std::lround(127 * std::sqrt(std::max(0.0, level) / full))), lowest, 127);
 }
 
 // Returns the pitch bend value for a pitch offset of `offset` steps, `semitone` of which make a semitone, with a bend
@@ -75,9 +83,9 @@ constexpr BankProgram NumberedPreset(int number)
 class ChannelWriter
 {
 public:
-    // Starts `track` on MIDI channel `channel` with program `program`. `preset` is the bank and program number that
-    // the program plays. `range` is the bend range in semitones, or 0 for a track without bends. `loop_start` is the
-    // tick of the loop's start, or 0 if the song doesn't loop or loops from its start.
+    // Starts `track` on MIDI channel `channel` with program `program`. `preset` is the bank and program number that the
+    // program plays. `range` is the bend range in semitones, or 0 for a track without bends. `loop_start` is the tick
+    // of the loop's start, or 0 if the song doesn't loop or loops from its start.
     ChannelWriter(MidiTrack& track, int channel, int program, BankProgram preset, int range, uint32_t loop_start);
 
     // Reaches tick `at`. On the first call at or after the loop's start, the writer clears its record of the settings.

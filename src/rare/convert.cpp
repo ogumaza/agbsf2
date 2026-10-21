@@ -5,19 +5,26 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <map>
 #include <optional>
 #include <set>
+#include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #include "files.h"
 #include "midi.h"
 #include "music.h"
 #include "program.h"
+#include "rare/driver.h"
 #include "rare/sequencer.h"
 #include "rare/song.h"
+#include "rare/soundfont.h"
+#include "rom.h"
+#include "sf2.h"
 
 namespace agbsf2::rare
 {
@@ -39,7 +46,7 @@ SongPlan PlanTune(const Rom& rom, const DriverInfo& info, const TuneHeader& head
         layouts.push_back(ScanTrack(rom, address, info.format));
     }
 
-    return PlanSong(layouts, loops, false);
+    return PlanSong(layouts, loops, LoopStart::kFirstPass);
 }
 
 // A clock that converts frame start times to ticks, following the tempo.
@@ -125,8 +132,8 @@ struct Simulation
 };
 
 // Returns the tempo changes in `actions` as (tick, tempo), in the order the model runs them. The driver keeps the tempo
-// it set last. A change can run after one with a later tick when two tracks change the tempo within about a frame.
-// Such a change starts at that later tick, as in TickClock.
+// it set last. A change can run after one with a later tick when two tracks change the tempo within about a frame. Such
+// a change starts at that later tick, as in TickClock.
 std::vector<std::pair<uint64_t, uint32_t>> TempoChanges(const std::vector<Action>& actions)
 {
     std::vector<std::pair<uint64_t, uint32_t>> tempos;
@@ -520,8 +527,8 @@ void NoteCollector::NoteOn(const Action& a)
         return;
     }
 
-    // A key played twice on the same frame is one MIDI note, as loud as the two voices together. The driver starts
-    // both on the frame.
+    // A key played twice on the same frame is one MIDI note, as loud as the two voices together. The driver starts both
+    // on the frame.
     int& held = owner_[a.channel][a.a & 0x7F];
     slot_level_[size_t(a.slot)] = a.b + 1;
     if (held >= 0 && notes_[size_t(held)].frame == a.frame)
@@ -535,9 +542,9 @@ void NoteCollector::NoteOn(const Action& a)
         return;
     }
 
-    // A player takes a tick's events track by track. So where the older note is in a later track, it ends a tick
-    // before the newer one starts. Otherwise its note off would end the newer note too. If the older note started a
-    // tick before, the newer one starts a tick late instead.
+    // A player takes a tick's events track by track. So where the older note is in a later track, it ends a tick before
+    // the newer one starts. Otherwise its note off would end the newer note too. If the older note started a tick
+    // before, the newer one starts a tick late instead.
     uint64_t on = a.tick;
     if (held >= 0 && notes_[size_t(held)].track > a.track)
     {
@@ -549,9 +556,9 @@ void NoteCollector::NoteOn(const Action& a)
         Close(held, on);
     }
 
-    // A note lasts at least a tick, even one that the driver releases in the frame it starts in. Frame timing puts
-    // such a release on the note's start tick. So where the key's last note ends after this one's start, this one
-    // starts as that one ends. It starts a tick later if that note is in a later track, for the reason above.
+    // A note lasts at least a tick, even one that the driver releases in the frame it starts in. Frame timing puts such
+    // a release on the note's start tick. So where the key's last note ends after this one's start, this one starts as
+    // that one ends. It starts a tick later if that note is in a later track, for the reason above.
     int& previous = latest_[a.channel][a.a & 0x7F];
     if (previous >= 0 && notes_[size_t(previous)].off > on)
     {
@@ -663,8 +670,8 @@ std::vector<MuteChange> KeyPressures(const Simulation& sim, const SongPlan& plan
     for (const Note& n : notes)
     {
         plays[size_t(n.channel)] = true;
-        const auto [found, added] = first_on.emplace(std::make_tuple(n.channel, n.key, n.frame), n.on);
-        found->second = std::min(found->second, n.on);
+        uint64_t& on = first_on.try_emplace(std::make_tuple(n.channel, n.key, n.frame), n.on).first->second;
+        on = std::min(on, n.on);
     }
 
     // A note that a track plays a frame late starts before its frame does. A pressure from the frame in which a note of
@@ -827,6 +834,15 @@ void Summarize(const Simulation& sim, const SongPlan& plan, uint32_t per_quarter
             break;
         }
     }
+}
+
+// Returns the General MIDI 2 Controller Destination Setting message (MMA CA-022) for MIDI channel `ch`: a universal
+// real time message (7F) to every device (7F), of the Controller Destination Setting (09) for polyphonic key pressure
+// (02), on the channel, that sets amplitude control (02) to a range of 0. A key's notes then play at their full level
+// at pressure 0 and fall silent at 127.
+std::vector<uint8_t> KeyPressureMuteMessage(int ch)
+{
+    return {0xF0, 0x7F, 0x7F, 0x09, 0x02, uint8_t(ch), 0x02, 0x00, 0xF7};
 }
 
 // Writes a channel's settings at the start: the driver's volume (unless the tune sets one at the start), no pan,
@@ -1111,7 +1127,7 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
         case Action::kVolume:
             if (mt)
             {
-                mt->Control(uint32_t(a.tick), a.channel, cc::kVolume, a.a);
+                mt->Control(uint32_t(a.tick), a.channel, cc::kVolume, SquareRootValue(a.a, 127, 0));
                 volume_at_start[a.channel] = volume_at_start[a.channel] || a.tick == 0;
             }
             break;
@@ -1134,6 +1150,21 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
     WritePrograms(programs, track, bank);
     WriteBends(sim, plan, home, range);
 
+    // A player that ignores the SoundFont's mute modulator can follow the General MIDI 2 Controller Destination Setting
+    // message instead. Each channel that mutes a key gets the message at the start, before the channel's key pressures.
+    std::array<bool, kChannels> mutes = {};
+    for (const MuteChange& m : pressures)
+    {
+        mutes[size_t(m.channel)] = mutes[size_t(m.channel)] || m.muted;
+    }
+    for (int ch = 0; ch < kChannels; ch++)
+    {
+        if (mutes[size_t(ch)])
+        {
+            home[size_t(ch)]->SysEx(0, KeyPressureMuteMessage(ch));
+        }
+    }
+
     // The key pressures go in the channel's track, before the note ons at their ticks.
     for (const MuteChange& m : pressures)
     {
@@ -1143,7 +1174,7 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
     for (const Note& n : ordered)
     {
         MidiTrack& mt = *track[size_t(n.track)];
-        mt.NoteOn(uint32_t(n.on), n.channel, n.key, n.velocity, n.before_programs);
+        mt.NoteOn(uint32_t(n.on), n.channel, n.key, SquareRootValue(n.velocity, 127, 1), n.before_programs);
         mt.NoteOff(uint32_t(n.off), n.channel, n.key);
     }
 
@@ -1238,8 +1269,7 @@ void WriteTune(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
     report.ok = true;
 }
 
-// Converts a tune, writing its files if `write` is set.
-// With `shared`, the tune's presets go in bank `bank` there.
+// Converts a tune, writing its files if `write` is set. With `shared`, the tune's presets go in bank `bank` there.
 SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings,
                SoundfontBuilder* shared, int bank, bool write)
 {

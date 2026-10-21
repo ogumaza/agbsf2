@@ -8,11 +8,15 @@
 #include <cstdio>
 #include <numeric>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "konami/driver.h"
 #include "konami/pitch.h"
 #include "konami/seqformat.h"
 #include "psg.h"
+#include "rom.h"
+#include "sf2.h"
 
 namespace agbsf2::konami
 {
@@ -136,6 +140,7 @@ int SoundfontBuilder::DsSample(int index)
     {
         out.loop_start = uint32_t(s.loop_start);
         out.loop_end = uint32_t(s.length);
+        LengthenLoop(out);
         AddLoopGuard(out);
     }
 

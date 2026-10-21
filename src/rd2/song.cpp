@@ -2,13 +2,16 @@
 
 #include "rd2/song.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "files.h"
+#include "rd2/driver.h"
 #include "rd2/sequencer.h"
+#include "rom.h"
 
 namespace agbsf2::rd2
 {

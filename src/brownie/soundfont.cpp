@@ -8,7 +8,9 @@
 #include <utility>
 #include <vector>
 
-#include "brownie/driver.h"
+#include "psg.h"
+#include "rom.h"
+#include "sf2.h"
 
 namespace agbsf2::brownie
 {
@@ -73,6 +75,7 @@ int SoundfontBuilder::GameSampleIndex(const GameSample& sample)
     {
         out.loop_start = sample.loop - sample.start;
         out.loop_end = length;
+        LengthenLoop(out);
         AddLoopGuard(out);
     }
     else

@@ -3,12 +3,15 @@
 #include "thumb.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string_view>
 #include <vector>
 
 #include "xsflib/bytes.h"
+
+#include "rom.h"
 
 namespace agbsf2
 {

@@ -2,6 +2,10 @@
 
 #include "midi.h"
 
+#include <cstdint>
+
+#include "song_banks.h"
+
 namespace agbsf2
 {
 

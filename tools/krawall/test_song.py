@@ -92,7 +92,7 @@ def pattern(rows, events):
     return struct.pack('<16H', *index) + bytes((rows,)) + bytes(data)
 
 
-def module(channels, orders, patterns, speed, tempo, instruments=False, linear=False, fast=False, restart=0,
+def module(channels, orders, speed, tempo, instruments=False, linear=False, fast=False, restart=0,
            global_volume=64, pans=None):
     """Returns a module's header, without the patterns' addresses at its end."""
     header = bytearray(0x16C)
@@ -290,10 +290,10 @@ def main():
     pans = [-40, 40, -10, 10, 0, 0]
     s3m = [place(p) for p in s3m_patterns(fwd, bidi, one)]
     for fast in (False, True):
-        header = module(6, [0, 254, 1], s3m, 4, 0x80, fast=fast, global_volume=60, pans=pans)
+        header = module(6, [0, 254, 1], 4, 0x80, fast=fast, global_volume=60, pans=pans)
         place(header + struct.pack('<%dI' % len(s3m), *s3m))
     xm = [place(p) for p in xm_patterns()]
-    header = module(4, [0], xm, 3, 0x96, instruments=True, linear=True, pans=[0, 0, 0, 0])
+    header = module(4, [0], 3, 0x96, instruments=True, linear=True, pans=[0, 0, 0, 0])
     place(header + struct.pack('<%dI' % len(xm), *xm))
 
     rom += out

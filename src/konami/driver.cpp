@@ -3,15 +3,22 @@
 #include "konami/driver.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
+#include <initializer_list>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <set>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "xsflib/bytes.h"
 
+#include "gba.h"
 #include "konami/seqformat.h"
+#include "rom.h"
 
 namespace agbsf2::konami
 {

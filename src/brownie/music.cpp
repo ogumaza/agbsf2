@@ -4,6 +4,8 @@
 
 #include "music.h"
 
+#include <array>
+#include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -16,6 +18,7 @@
 #include "brownie/song.h"
 #include "brownie/soundfont.h"
 #include "gba.h"
+#include "rom.h"
 #include "sf2.h"
 
 namespace agbsf2::brownie

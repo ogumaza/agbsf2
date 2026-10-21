@@ -9,6 +9,8 @@
 #include <vector>
 
 #include "files.h"
+#include "quintet/driver.h"
+#include "rom.h"
 
 namespace agbsf2::quintet
 {

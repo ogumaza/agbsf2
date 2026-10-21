@@ -5,6 +5,7 @@
 #include "music.h"
 
 #include <array>
+#include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <string>
@@ -15,6 +16,8 @@
 #include "krawall/driver.h"
 #include "krawall/player.h"
 #include "krawall/song.h"
+#include "krawall/soundfont.h"
+#include "rom.h"
 #include "sf2.h"
 
 namespace agbsf2::krawall

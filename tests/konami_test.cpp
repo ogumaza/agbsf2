@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <initializer_list>
 #include <map>
 #include <memory>
 #include <set>
@@ -16,6 +17,9 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+
+#include "seqlib/midi/reader.h"
+#include "seqlib/testing/check.h"
 
 #include "files.h"
 #include "gba.h"
@@ -37,7 +41,7 @@ namespace agbsf2::konami
 namespace
 {
 
-using test::FullBendRange;
+using test::HasGlobalZoneModulators;
 using test::ReadAll;
 using test::ReadSf2;
 using test::TempPath;
@@ -51,8 +55,8 @@ class Image : public test::CartImage
 public:
     using CartImage::CartImage;
 
-    // Writes entry `song` of the song table at `table` in revision `revision`: its base address and the offset of
-    // every track. Each offset is `rest` unless `offsets` gives another. Entries of the WCT 2004 revision have the same
+    // Writes entry `song` of the song table at `table` in revision `revision`: its base address and the offset of every
+    // track. Each offset is `rest` unless `offsets` gives another. Entries of the WCT 2004 revision have the same
     // layout as those of the Ultimate Masters revision.
     void Song(uint32_t table, int song, uint32_t base, uint16_t rest, const std::vector<std::pair<int, int>>& offsets,
               Revision revision = Revision::kUltimateMasters)
@@ -385,8 +389,8 @@ void TestLoopStartLast()
     // the song loops at frame 14 and every 6 frames after it.
     Image m = SyntheticImage();
     m.PutBytes(kSongBase + 0x07, {0xFE});
-    m.PutBytes(kSongBase + 0x80, {0x05, 0xF3, 0xAA, 0xBB, 0x03, 0xF3, 0xAA, 0xBB, 0x02, 0xB7, 0x05, 0x0C, 0x03, 0xE0, 0x01,
-                               0xFF, 0x01, 0x00});
+    m.PutBytes(kSongBase + 0x80, {0x05, 0xF3, 0xAA, 0xBB, 0x03, 0xF3, 0xAA, 0xBB, 0x02, 0xB7, 0x05, 0x0C, 0x03, 0xE0,
+                                  0x01, 0xFF, 0x01, 0x00});
     const Rom rom = m.ToRom();
     UltimateMastersSequencer seq(rom, SongsAt(kSongTable), 0);
 
@@ -743,7 +747,7 @@ void TestEchoRouting()
     constexpr uint32_t kBase = kRomBase + 0x600;
     m.Song(kSongTable, 2, kBase, 0x40, {{4, 0}});
     m.PutBytes(kBase, {0x00, 0xF7, 0x7F, 0x00, 0xF9, 0x01, 0x00, 0xA8, 0x10, 0x05, 0x05,
-                    0xF9, 0x02, 0x05, 0xF9, 0x00, 0x05, 0xF9, 0x01, 0x05, 0xFD});
+                       0xF9, 0x02, 0x05, 0xF9, 0x00, 0x05, 0xF9, 0x01, 0x05, 0xFD});
     m.PutBytes(kBase + 0x40, {0x00, 0xFD});
     const Rom rom = m.ToRom();
 
@@ -783,7 +787,7 @@ void TestLoopSettingsAgain()
     constexpr uint32_t kBase = kRomBase + 0x600;
     m.Song(kSongTable, 2, kBase, 0x40, {{4, 0}});
     m.PutBytes(kBase, {0x00, 0xA8, 0x10, 0x05, 0x0A, 0xF3, 0x00, 0x00, 0x00, 0xA8,
-                    0x10, 0x05, 0x0A, 0xA8, 0x08, 0x05, 0x0A, 0xFF, 0x01, 0x00});
+                       0x10, 0x05, 0x0A, 0xA8, 0x08, 0x05, 0x0A, 0xFF, 0x01, 0x00});
     m.PutBytes(kBase + 0x40, {0x00, 0xFD});
     const Rom rom = m.ToRom();
 
@@ -832,7 +836,7 @@ void TestLoopStartsAtSecondPass()
     constexpr uint32_t kBase = kRomBase + 0x600;
     m.Song(kSongTable, 2, kBase, 0x40, {{4, 0}});
     m.PutBytes(kBase, {0x00, 0xF0, 0x00, 0x00, 0xF3, 0x00, 0x00, 0x00, 0xA8, 0x10, 0x05, 0x0A, 0xF0, 0x7F, 0x0A, 0xFF,
-                    0x01, 0x00});
+                       0x01, 0x00});
     m.PutBytes(kBase + 0x40, {0x00, 0xFD});
     const Rom rom = m.ToRom();
 
@@ -848,8 +852,8 @@ void TestLoopStartsAtSecondPass()
 
     const SongReport sum = ConvertSong(rom, info, 2, opt, nullptr);
 
-    // The first pass runs from frame 0 to 20, so the loop runs from 20 to 40, and the song ends after its second
-    // pass through it.
+    // The first pass runs from frame 0 to 20, so the loop runs from 20 to 40, and the song ends after its second pass
+    // through it.
     SEQLIB_CHECK(sum.ok);
     SEQLIB_CHECK(sum.loop_start == FrameSeconds(20));
     SEQLIB_CHECK(sum.loop_end == FrameSeconds(40));
@@ -999,7 +1003,7 @@ void TestSampleKeys()
     constexpr uint32_t kBase = kRomBase + 0x600;
     m.Song(kSongTable, 2, kBase, 0x40, {{4, 0x00}, {5, 0x20}, {6, 0x30}});
     m.PutBytes(kBase, {0x00, 0xB7, 0x05, 0x00, 0x02, 0xB7, 0x05, 0x02, 0x02, 0xB7,
-                    0x06, 0x0A, 0x02, 0xB7, 0x06, 0x0C, 0x02, 0xE0, 0x00, 0xFD});
+                       0x06, 0x0A, 0x02, 0xB7, 0x06, 0x0C, 0x02, 0xE0, 0x00, 0xFD});
     m.PutBytes(kBase + 0x20, {0x00, 0xB7, 0x05, 0x32, 0x02, 0xE0, 0x00, 0xFD});
     m.PutBytes(kBase + 0x30, {0x00, 0xB7, 0x05, 0x80, 0x02, 0xE0, 0x00, 0xFD});
     m.PutBytes(kBase + 0x40, {0x00, 0xFD});
@@ -1023,7 +1027,7 @@ void TestSampleKeys()
     const std::vector<std::array<int, 3>> kExpected = {{48, 66, 60}, {67, 84, 60}, {50, 50, 0}, {0, 0, 127}};
     SEQLIB_CHECK(sum.ok);
     SEQLIB_CHECK(ReadZoneKeys(sum.sf2_path) == kExpected);
-    SEQLIB_CHECK(FullBendRange(ReadSf2(sum.sf2_path)));
+    SEQLIB_CHECK(HasGlobalZoneModulators(ReadSf2(sum.sf2_path)));
     fs::remove_all(dir, ec);
 }
 
@@ -1815,7 +1819,7 @@ void TestEternalDuelistSequencer()
     constexpr uint32_t kBase = kRomBase + 0x200;
     m.Song(kTable, 0, kBase, 0x60, {{0, 0x00}, {5, 0x20}, {6, 0x30}, {7, 0x50}}, Revision::kEternalDuelist);
     m.PutBytes(kBase + 0x00,
-            {0x00, 0xF0, 0x10, 0x00, 0xF3, 0x00, 0xD8, 0x30, 0x04, 0xD8, 0x24, 0x04, 0xDA, 0x24, 0x04, 0xFD});
+               {0x00, 0xF0, 0x10, 0x00, 0xF3, 0x00, 0xD8, 0x30, 0x04, 0xD8, 0x24, 0x04, 0xDA, 0x24, 0x04, 0xFD});
     m.PutBytes(kBase + 0x20, {0x00, 0xAC, 0x07, 0x04, 0xF0, 0x5A, 0x04, 0xFD});
     m.PutBytes(kBase + 0x30, {0x00, 0xA8, 0x07, 0x04, 0xF1, 0x20, 0x04, 0xA9, 0x0B, 0x04, 0xFD});
     m.PutBytes(kBase + 0x50, {0x00, 0xE0, 0x20, 0xFE});
@@ -2054,10 +2058,11 @@ void TestDungeonDiceSequencer()
     constexpr uint32_t kMap = kRomBase + 0x600;
     constexpr uint32_t kPeriods = kRomBase + 0x800;
     m.Song(kTable, 0, kBase, 0x60, {{0, 0x00}, {1, 0x40}, {3, 0x20}, {4, 0x28}}, Revision::kDungeonDiceMonsters);
-    m.PutBytes(kBase + 0x00, {0x00, 0xF0, 0x53, 0x00, 0xE8, 0x20, 0x04, 0x82, 0x00, 0xE8, 0x21, 0x0C, 0xF8, 0x06, 0xFD});
+    m.PutBytes(kBase + 0x00,
+               {0x00, 0xF0, 0x53, 0x00, 0xE8, 0x20, 0x04, 0x82, 0x00, 0xE8, 0x21, 0x0C, 0xF8, 0x06, 0xFD});
     m.PutBytes(kBase + 0x20, {0x00, 0xE4, 0x48, 0x01, 0xFD});
     m.PutBytes(kBase + 0x28, {0x00, 0xBC, 0x01, 0x00, 0xA6, 0x02, 0x04, 0xF9, 0x08, 0xF2, 0x30, 0x04, 0x99, 0x1C, 0x00,
-                           0xF2, 0x22, 0x04, 0xFD});
+                              0xF2, 0x22, 0x04, 0xFD});
     m.PutBytes(kBase + 0x40, {0x02, 0xFA, 0x00, 0x7F, 0x02, 0xE7, 0x10, 0x12, 0xFE});
     m.PutBytes(kBase + 0x60, {0x00, 0xFD});
     m.PutBytes(kMap, {0x00, 0x05, 0x07});
@@ -2206,7 +2211,7 @@ Image DungeonDiceImage()
     m.PutBytes(kDdmBase + 0x10, {0x00, 0x70, 0x00, 0xE9, 0x20, 0x08, 0x71, 0x08, 0xFC, 0x00, 0xFD});
     m.PutBytes(kDdmBase + 0x20, {0x00, 0xE8, 0x4A, 0x04, 0xFC, 0x00, 0xFD});
     m.PutBytes(kDdmBase + 0x30,
-            {0x00, 0xB8, 0x05, 0x08, 0x03, 0x00, 0x9A, 0x1C, 0x08, 0xF2, 0x30, 0x08, 0xFC, 0x00, 0xFD});
+               {0x00, 0xB8, 0x05, 0x08, 0x03, 0x00, 0x9A, 0x1C, 0x08, 0xF2, 0x30, 0x08, 0xFC, 0x00, 0xFD});
     m.PutBytes(kDdmBase + 0x60, {0x00, 0xFD});
 
     // Sample 3: 64 points of a sawtooth at a period of 1677, with map entry 5 naming it. Pitch 24 * 16 + 1 has the
@@ -2505,8 +2510,8 @@ void TestDetectionFromCode()
     // the data scan would find, laid out like ScanRom's, isn't taken instead.
     m.PutBytes(kRomBase + 0x16C, {0x00, 0xF4, 0x00, 0xFD});
     m.Song(kRomBase + 0xA00, 0, kRomBase + 0xA48, 17, {{4, 0}, {0, 8}});
-    m.PutBytes(kRomBase + 0xA48, {0x00, 0xA8, 0x10, 0x00, 0x0A, 0xE0, 0x05, 0xFE, 0x00, 0x81, 0x00, 0xD3, 0x18, 0x04, 0xE0,
-                               0x00, 0xFE, 0x00, 0xFD});
+    m.PutBytes(kRomBase + 0xA48, {0x00, 0xA8, 0x10, 0x00, 0x0A, 0xE0, 0x05, 0xFE, 0x00, 0x81, 0x00, 0xD3, 0x18, 0x04,
+                                  0xE0, 0x00, 0xFE, 0x00, 0xFD});
     m.Song(kRomBase + 0xA00, 1, kRomBase + 0xA5B, 8, {{5, 0}});
     m.PutBytes(kRomBase + 0xA5B, {0x00, 0xA3, 0x01, 0x08, 0xE0, 0x00, 0xFF, 0x00, 0x00, 0xFD});
 
@@ -2640,6 +2645,29 @@ void TestMusic()
     SEQLIB_CHECK(found && !found->Trace(1 << 30, 1, stdout, trace_warnings));
 }
 
+// Sample 6 has 20 points and loops from point 14. Its loop of 6 points is repeated 6 times: 36 points, the first length
+// of kMinLoop points or more.
+void TestShortLoop()
+{
+    Image m = SyntheticImage();
+    constexpr uint32_t kShortLoop = kRomBase + 0x600;
+    m.Put32(kSampleTable + 4 * 6, kShortLoop);
+    m.Put32(kShortLoop, 0x1000);
+    m.Put32(kShortLoop + 4, 20);
+    m.Put32(kShortLoop + 8, 14);
+    for (uint32_t i = 0; i < 20; i++)
+    {
+        m.Put8(kShortLoop + 12 + i, uint8_t(i * 9));
+    }
+    const Rom rom = m.ToRom();
+    DriverInfo info;
+    SEQLIB_REQUIRE(DetectGiven(rom, kSongTable, 2, info));
+    SoundfontBuilder sf(rom, info);
+    const int index = sf.DsSample(6);
+    SEQLIB_REQUIRE(index >= 0);
+    SEQLIB_CHECK(test::LengthenedLoop(sf.File().samples[size_t(index)], 14, 6));
+}
+
 } // namespace
 
 void RunTests()
@@ -2690,6 +2718,7 @@ void RunTests()
     TestSampleTableChoice();
     TestOverrides();
     TestMusic();
+    TestShortLoop();
 }
 
 } // namespace agbsf2::konami

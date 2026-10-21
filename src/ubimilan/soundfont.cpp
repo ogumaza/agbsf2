@@ -5,6 +5,7 @@
 #include "ubimilan/soundfont.h"
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <map>
 #include <set>
@@ -12,6 +13,9 @@
 #include <vector>
 
 #include "psg.h"
+#include "rom.h"
+#include "sf2.h"
+#include "ubimilan/driver.h"
 
 namespace agbsf2::ubimilan
 {
@@ -71,6 +75,7 @@ public:
 
         if (Looped(s))
         {
+            LengthenLoop(s);
             AddLoopGuard(s);
         }
 
@@ -165,17 +170,9 @@ private:
     std::map<bool, int> noises_;
 };
 
-// Returns an instrument whose global zone makes velocity scale the level in a straight line, as the driver does.
-sf2::Instrument LinearInstrument(const std::string& name)
-{
-    sf2::Instrument si = MakeInstrument(name);
-    si.zones.front().modulators.push_back(kLinearVelocity);
-
-    return si;
-}
-
-// Returns a zone for keys `lo` to `hi` that plays sample `sample` with its root at key `root`, and `cents` sharper.
-sf2::Zone SampleZone(int lo, int hi, int sample, int root, int cents, bool loop)
+// Returns a zone for keys `lo` to `hi` that plays sample `sample` with its root at key `root`, and `cents` sharper. Its
+// release is instant.
+sf2::Zone InstantReleaseZone(int lo, int hi, int sample, int root, int cents, bool loop)
 {
     sf2::Zone z;
     z.generators.push_back(sf2::Generator::Range(sf2::kKeyRange, lo, hi));
@@ -256,14 +253,15 @@ std::vector<std::string> InstrumentSet::Build(const Rom& rom, const DriverInfo& 
     {
         char name[24];
         std::snprintf(name, sizeof name, "%s %d", ChannelName(kKitChannel), program);
-        sf2::Instrument si = LinearInstrument(name);
+        sf2::Instrument si = MakeInstrument(name);
 
         const auto noise = noise_keys_.find(program);
         if (noise != noise_keys_.end())
         {
             for (const auto& [key, control] : noise->second)
             {
-                si.zones.push_back(SampleZone(key, key, samples.Noise(control & 8), key, NoiseCents(control), true));
+                si.zones.push_back(
+                    InstantReleaseZone(key, key, samples.Noise(control & 8), key, NoiseCents(control), true));
             }
         }
 
@@ -278,7 +276,7 @@ std::vector<std::string> InstrumentSet::Build(const Rom& rom, const DriverInfo& 
                     continue;
                 }
 
-                si.zones.push_back(SampleZone(key, key, sample, key, 0, Looped(file.samples[size_t(sample)])));
+                si.zones.push_back(InstantReleaseZone(key, key, sample, key, 0, Looped(file.samples[size_t(sample)])));
             }
         }
 
@@ -305,8 +303,8 @@ std::vector<std::string> InstrumentSet::Build(const Rom& rom, const DriverInfo& 
             return;
         }
 
-        sf2::Instrument si = LinearInstrument(name);
-        si.zones.push_back(SampleZone(0, 127, sample, 60, 0, true));
+        sf2::Instrument si = MakeInstrument(name);
+        si.zones.push_back(InstantReleaseZone(0, 127, sample, 60, 0, true));
         file.instruments.push_back(si);
         file.presets.push_back(
             MakePreset(name, uint16_t(PresetBank(channel)), uint16_t(program), int(file.instruments.size()) - 1));

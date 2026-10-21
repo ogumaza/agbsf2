@@ -6,22 +6,27 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "seqlib/testing/check.h"
 #include "xsflib/text.h"
 
 #include "files.h"
+#include "gba.h"
 #include "midi.h"
 #include "music.h"
 #include "rd2/convert.h"
 #include "rd2/driver.h"
 #include "rd2/sequencer.h"
 #include "rd2/song.h"
+#include "rd2/soundfont.h"
 #include "rom.h"
+#include "sf2.h"
 #include "test_util.h"
 
 namespace agbsf2::rd2
@@ -29,7 +34,7 @@ namespace agbsf2::rd2
 namespace
 {
 
-using test::FullBendRange;
+using test::HasGlobalZoneModulators;
 using test::Le16;
 using test::Le32;
 using test::MidiEvents;
@@ -73,7 +78,7 @@ constexpr uint32_t kSetVolume2 = kRomBase + 0x7C8;
 constexpr uint8_t kLooped = 0;      // a looped sample, with an envelope that rises and falls
 constexpr uint8_t kPlain = 1;       // a sample without a loop, held at full level
 constexpr uint8_t kSquare = 2;      // square 2 at a duty of 25%
-constexpr uint8_t kDrums = 3;       // a drum kit from note 36: the plain sample panned left, and square 2
+constexpr uint8_t kDrums = 3;       // a drum kit from note 36: the plain sample at pan 0x20, square 2 at 0x40 and 0x50
 constexpr uint8_t kKeyed = 4;       // a sample for each key
 constexpr uint8_t kSplit = 5;       // the plain sample up to note 59, the looped one above
 constexpr uint8_t kNoise = 6;       // noise
@@ -364,8 +369,10 @@ private:
         const uint16_t square = add(region(2, 0, 1, held, 0x40, 0x30));
         Put16(kBank + 2 * kSquare, square);
         const uint16_t plain = add(region(0, 0, 1, held, 0x00, 0x30));
-        const uint16_t kit =
-            add({uint8_t(plain), uint8_t(plain >> 8), 0x20, 0, uint8_t(square), uint8_t(square >> 8), 0x40, 0});
+        // Square 2 a semitone higher. Two PSG drums with the same tuning share a key and its zone.
+        const uint16_t higher = add(region(2, 0, 1, held, 0x40, 0x2F));
+        const uint16_t kit = add({uint8_t(plain), uint8_t(plain >> 8), 0x20, 0, uint8_t(square), uint8_t(square >> 8),
+                                  0x40, 0, uint8_t(higher), uint8_t(higher >> 8), 0x50, 0});
         Put16(kBank + 2 * kDrums, add({0x10, 0, uint8_t(kit), uint8_t(kit >> 8), 36, 0, 0, 0}));
         std::vector<uint8_t> keys;
         for (int k = 0; k < 128; k++)
@@ -851,7 +858,7 @@ void TestConversion()
     SEQLIB_CHECK(std::any_of(metas.begin(), metas.end(), is_marker));
 
     const Sf2Records sf = ReadSf2(sum.sf2_path);
-    SEQLIB_CHECK(FullBendRange(sf));
+    SEQLIB_CHECK(HasGlobalZoneModulators(sf));
     SEQLIB_CHECK_EQ(sf.Count("phdr", 38), 3);
     SEQLIB_CHECK_EQ(sf.Count("shdr", 46), 3);
     const auto zone = sf.ZoneGens(1); // the first instrument's zone after its global zone
@@ -899,6 +906,56 @@ void TestPsgTables()
     SEQLIB_CHECK(noises.size() == 1 && (noises[0] & 8) == 0);
 }
 
+void TestPsgSampleLevels()
+{
+    // On the GBA, a square at full volume, the noise and a wave from 0 to 15 all swing between the same two levels.
+    // Their samples therefore span the same range: 2 × PsgShare() × 32767. A full-scale sample spans 2 × 32767.
+    Cart cart;
+    cart.Sequences({{TrackData()
+                         .Bytes({0xC2, kSquare})
+                         .Note(0x30, 4, 127)
+                         .Wait(4)
+                         .Bytes({0xC2, kNoise})
+                         .Note(0x30, 4, 127)
+                         .Wait(4)
+                         .Bytes({0xC2, kWave})
+                         .Note(48, 4, 127)
+                         .Wait(4)
+                         .End()}});
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+    ConvertSettings opt = TempSettings("rd2_psg_levels");
+
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
+
+    SEQLIB_CHECK(sum.ok);
+    const Sf2Records sf = ReadSf2(sum.sf2_path);
+    const std::vector<uint8_t>& pcm = sf.chunks.at("smpl");
+    std::vector<std::pair<std::string, int>> spans;
+    for (size_t s = 0; s + 1 < sf.Count("shdr", 46); s++)
+    {
+        const uint8_t* header = sf.Record("shdr", 46, s);
+        const std::string name(reinterpret_cast<const char*>(header), 20);
+        int low = 0;
+        int high = 0;
+        for (uint32_t i = Le32(header + 20); i < Le32(header + 24); i++)
+        {
+            const int point = int16_t(Le16(&pcm[2 * i]));
+            low = std::min(low, point);
+            high = std::max(high, point);
+        }
+        spans.emplace_back(name.substr(0, name.find(' ')), high - low);
+    }
+
+    const double expected = 2 * PsgShare(Revision::kLinkToThePast) * 32767;
+    for (const char* kind : {"Square", "Noise", "Wave"})
+    {
+        const auto it = std::find_if(spans.begin(), spans.end(), [&](const auto& s) { return s.first == kind; });
+        SEQLIB_REQUIRE(it != spans.end());
+        SEQLIB_CHECK(std::fabs(it->second - expected) <= 1);
+    }
+}
+
 void TestDrumPanAndWave()
 {
     // A drum keeps its pan whatever its track's pan is. So the drum kit's zones replace the default modulator from CC10
@@ -909,6 +966,8 @@ void TestDrumPanAndWave()
                          .Bytes({0xC3, 0x60, 0xC2, kDrums})
                          .Note(36, 4, 100)
                          .Note(37, 4, 100)
+                         .Wait(4)
+                         .Note(38, 4, 100)
                          .Wait(4)
                          .Bytes({0xC2, kWave})
                          .Note(48, 8, 100)
@@ -925,7 +984,7 @@ void TestDrumPanAndWave()
 
     SEQLIB_CHECK(sum.ok);
     const Sf2Records sf = ReadSf2(sum.sf2_path);
-    SEQLIB_CHECK(FullBendRange(sf));
+    SEQLIB_CHECK(HasGlobalZoneModulators(sf));
 
     // The zones after the global zone of each instrument whose name ends in `suffix`.
     auto zones_of = [&](const std::string& suffix)
@@ -959,8 +1018,16 @@ void TestDrumPanAndWave()
     };
     const std::vector<size_t> drums = zones_of(" instrument 3"), plain = zones_of(" instrument 1");
     const std::vector<size_t> wave = zones_of(" instrument 9");
-    SEQLIB_REQUIRE_EQ(drums.size(), 2);
+    SEQLIB_REQUIRE_EQ(drums.size(), 3);
     SEQLIB_CHECK(std::all_of(drums.begin(), drums.end(), keeps_pan));
+
+    // The sample drum's pan of 0x20 gives it 95/63 of the left level at the centre and 32/64 of the right level. Pan
+    // -296 gives the sides that ratio under a sin/cos pan law. The square drum at the centre plays in the middle. The
+    // one at 0x50 plays on the right alone.
+    const auto sample_drum = sf.ZoneGens(drums[0]), right_drum = sf.ZoneGens(drums[2]);
+    SEQLIB_CHECK(sample_drum.count(sf2::kPan) && int16_t(sample_drum.at(sf2::kPan)) == -296);
+    SEQLIB_CHECK(!sf.ZoneGens(drums[1]).count(sf2::kPan));
+    SEQLIB_CHECK(right_drum.count(sf2::kPan) && int16_t(right_drum.at(sf2::kPan)) == 500);
     SEQLIB_CHECK(plain.size() == 1 && !keeps_pan(plain[0]));
     SEQLIB_REQUIRE_EQ(wave.size(), 1);
     const auto gens = sf.ZoneGens(wave[0]);
@@ -970,6 +1037,126 @@ void TestDrumPanAndWave()
         SEQLIB_CHECK(!gens.count(op));
     }
     SEQLIB_CHECK(gens.count(sf2::kReleaseVolEnv));
+}
+
+void TestPsgPan()
+{
+    // The PSG plays a note on both sides at the centre pan, 0x40. At any other pan, it plays the note at twice the
+    // level on one side alone. Track 0 plays the square at 0x20, 0x40 and 0x50. Its CC10 goes to 0, 64 and 127. The
+    // square of CC11 sets the level. A sin/cos player plays each side of a centred note at 1/√2 of the level. The
+    // square of CC11 at the sides is then √2 times the square at the centre. Track 1's sample and track 2's square drum
+    // keep the rule of the sample voices. Pan 0x20 gives them CC10 26.
+    Cart cart;
+    cart.Sequences({{TrackData()
+                         .Bytes({0xC3, 0x20, 0xC2, kSquare})
+                         .Note(0x30, 4, 127)
+                         .Wait(8)
+                         .Bytes({0xC3, 0x40})
+                         .Note(0x30, 4, 127)
+                         .Wait(8)
+                         .Bytes({0xC3, 0x50})
+                         .Note(0x30, 4, 127)
+                         .Wait(8)
+                         .End(),
+                     TrackData().Bytes({0xC3, 0x20, 0xC2, kPlain}).Note(60, 4, 127).Wait(24).End(),
+                     TrackData().Bytes({0xC3, 0x20, 0xC2, kDrums}).Note(37, 4, 127).Wait(24).End()}});
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+
+    const SongReport sum = ConvertSong(rom, info, 0, TempSettings("rd2_psg_pan"), nullptr);
+
+    SEQLIB_CHECK(sum.ok);
+    const MidiEvents midi = ReadMidi(sum.midi_path);
+    auto values = [&](uint8_t channel, uint8_t controller)
+    {
+        std::vector<int> found;
+        for (const auto& e : midi.Find(uint8_t(0xB0 | channel)))
+        {
+            if (e.bytes[1] == controller)
+            {
+                found.push_back(e.bytes[2]);
+            }
+        }
+
+        return found;
+    };
+    SEQLIB_CHECK((values(0, 10) == std::vector<int>{0, 64, 127}));
+    const std::vector<int> loudness = values(0, 11);
+    SEQLIB_REQUIRE_EQ(loudness.size(), 3);
+    SEQLIB_CHECK(loudness[0] == loudness[2]);
+    const double ratio = std::pow(double(loudness[0]) / loudness[1], 2);
+    SEQLIB_CHECK(std::fabs(ratio / std::sqrt(2.0) - 1) < 0.025);
+    SEQLIB_CHECK((values(1, 10) == std::vector<int>{26}));
+    SEQLIB_CHECK((values(2, 10) == std::vector<int>{26}));
+}
+
+void TestPsgPanPasses()
+{
+    // The sequence loops back to its start. The first pass plays the square at 0x20 and then at 0x10. The second pass
+    // keeps 0x10. The PSG plays both passes on the left alone at the same level. The passes then repeat each other. The
+    // MIDI file's loop therefore starts with the first pass. A sample voice would play the first note of each pass at
+    // another level.
+    Cart cart;
+    cart.Sequences({{TrackData()
+                         .Bytes({0xC3, 0x20, 0xC2, kSquare})
+                         .Note(0x30, 6, 127)
+                         .Wait(6)
+                         .Bytes({0xC3, 0x10})
+                         .Note(0x30, 6, 127)
+                         .Wait(6)
+                         .Bytes({0xF0, 8, 0})
+                         .End()}});
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+
+    const SongReport sum = ConvertSong(rom, info, 0, TempSettings("rd2_psg_pan_passes"), nullptr);
+
+    SEQLIB_CHECK(sum.ok);
+    std::vector<std::pair<uint32_t, std::string>> markers;
+    for (const auto& [tick, bytes] : ReadMidi(sum.midi_path).Find(0xFF))
+    {
+        if (bytes[1] == 0x06)
+        {
+            markers.emplace_back(uint32_t(tick), std::string(bytes.begin() + 3, bytes.end()));
+        }
+    }
+    const std::vector<std::pair<uint32_t, std::string>> kMarkers = {{0, "loopStart"}, {1800, "loopEnd"}};
+    SEQLIB_CHECK(markers == kMarkers);
+}
+
+void TestZoneAttenuation()
+{
+    // An envelope that rises at once to half the full level, 0x4000, and holds it plays 6 dB down: 60 cB. The zone
+    // holds 2.5 times that in initialAttenuation: 150 cB. Synthesizers that apply 0.4 of the generator then play 60 cB.
+    // A silent envelope gives the generator's limit of 1440 cB. Those synthesizers play it as 576 cB. A modulator
+    // without a source adds the other 864 cB.
+    test::CartImage image(0x20);
+    image.PutBytes(kRomBase, {1, 0, 0x00, 0x40});
+    image.PutBytes(kRomBase + 0x10, {1, 0, 0, 0});
+    const Rom rom = image.ToRom();
+    const auto attenuation = [](const sf2::Zone& zone)
+    {
+        int value = 0;
+        for (const sf2::Generator& g : zone.generators)
+        {
+            value = g.oper == sf2::kInitialAttenuation ? int(g.amount) : value;
+        }
+
+        return value;
+    };
+
+    sf2::Zone half;
+    AddEnvelope(half, EnvelopeFor(rom, kRomBase, kInstant));
+    SEQLIB_CHECK_EQ(attenuation(half), 150);
+    SEQLIB_CHECK(half.modulators.empty());
+
+    sf2::Zone silent;
+    AddEnvelope(silent, EnvelopeFor(rom, kRomBase + 0x10, kInstant));
+    SEQLIB_CHECK_EQ(attenuation(silent), 1440);
+    SEQLIB_REQUIRE_EQ(silent.modulators.size(), 1);
+    const sf2::Modulator& rest = silent.modulators[0];
+    SEQLIB_CHECK(rest.source == sf2::kNoController && rest.dest == sf2::kInitialAttenuation && rest.amount == 864 &&
+                 rest.amount_source == sf2::kNoController && rest.transform == sf2::kLinear);
 }
 
 void TestLevelOrder()
@@ -1162,7 +1349,11 @@ void RunTests()
     TestInstruments();
     TestConversion();
     TestPsgTables();
+    TestPsgSampleLevels();
     TestDrumPanAndWave();
+    TestPsgPan();
+    TestPsgPanPasses();
+    TestZoneAttenuation();
     TestLevelOrder();
     TestLoopLengths();
     TestLoopSettingsAgain();

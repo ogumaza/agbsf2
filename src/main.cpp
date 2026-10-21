@@ -218,8 +218,8 @@ bool NextValue(const std::vector<std::string>& args, size_t& i, const char* opti
     return true;
 }
 
-// Adds the tracks of a --tracks list to the options. The first list replaces the default of every track, and each
-// later one adds its tracks to those before it. Returns false, after a message, for a bad list.
+// Adds the tracks of a --tracks list to the options. The first list replaces the default of every track, and each later
+// one adds its tracks to those before it. Returns false, after a message, for a bad list.
 bool AddTracks(const std::string& list, Options& o)
 {
     // Krawall's modules have up to 20 channels, and the other drivers 16 tracks at most.
@@ -243,8 +243,8 @@ bool AddTracks(const std::string& list, Options& o)
     return true;
 }
 
-// Checks the options that depend on each other, once every argument is read. The overrides of Konami's tables also
-// pick its driver. Returns false, after a message, if the options don't fit together.
+// Checks the options that depend on each other, once every argument is read. The overrides of Konami's tables also pick
+// its driver. Returns false, after a message, if the options don't fit together.
 bool CheckOptions(Options& o)
 {
     if (o.inputs.empty())
@@ -681,8 +681,8 @@ bool Listed(const std::vector<fs::path>& files, const fs::path& source)
     return std::any_of(files.begin(), files.end(), [&](const fs::path& f) { return fs::equivalent(source, f, ec); });
 }
 
-// Returns the folder for a game's files: the one that --output names, or a folder called `name` beside the game. A
-// file without an extension would share its path with that folder. The folder then gets a suffix.
+// Returns the folder for a game's files: the one that --output names, or a folder called `name` beside the game. A file
+// without an extension would share its path with that folder. The folder then gets a suffix.
 fs::path OutputFolder(const fs::path& source, const std::string& name, const Options& o)
 {
     if (!o.out_dir.empty())
@@ -699,8 +699,8 @@ fs::path OutputFolder(const fs::path& source, const std::string& name, const Opt
     return out_dir;
 }
 
-// Prints the line that names a game: its title, its code, and the number of its songs, or of its drivers if it has
-// more than one.
+// Prints the line that names a game: its title, its code, and the number of its songs, or of its drivers if it has more
+// than one.
 void PrintGame(const std::string& label, const Rom& rom, const std::vector<FoundMusic>& drivers)
 {
     std::printf("%s: %s (%s), ", label.c_str(), rom.Title().c_str(), rom.GameCode().c_str());

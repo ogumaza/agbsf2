@@ -4,13 +4,19 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
+#include <initializer_list>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "seqlib/sf2/units.h"
+
+#include "gba.h"
 #include "psg.h"
-#include "rd2/driver.h"
+#include "rom.h"
+#include "sf2.h"
 
 namespace agbsf2::rd2
 {
@@ -163,9 +169,14 @@ int PsgRelease(uint8_t release)
 void AddEnvelope(sf2::Zone& zone, const Sf2Envelope& envelope)
 {
     std::vector<sf2::Generator> gens;
-    if (envelope.attenuation)
+    const sf2::ZoneAttenuation attenuation = sf2::ToZoneAttenuation(envelope.attenuation);
+    if (attenuation.generator)
     {
-        gens.push_back(sf2::Generator::Value(sf2::kInitialAttenuation, envelope.attenuation));
+        gens.push_back(sf2::Generator::Value(sf2::kInitialAttenuation, attenuation.generator));
+    }
+    if (attenuation.modulator)
+    {
+        zone.modulators.push_back(*attenuation.modulator);
     }
     if (envelope.attack != kInstant)
     {
@@ -254,12 +265,12 @@ int SoundfontBuilder::SquareSample(int duty)
     }
 
     // The high steps come first. Without the DC offset, which the GBA's output removes, the levels sit either side of
-    // 0.
+    // 0. They lie as far apart as a wave's levels 0 and 15.
     const int high = kDutyHigh[duty];
     std::vector<int16_t> cycle;
     for (int step = 0; step < 8; step++)
     {
-        const double level = step < high ? 1.0 - high / 8.0 : -high / 8.0;
+        const double level = step < high ? 2.0 - high / 4.0 : -high / 4.0;
         for (int i = 0; i < kStepPoints; i++)
         {
             cycle.push_back(int16_t(std::lround(level * psg_share_ * 32767)));
@@ -330,7 +341,7 @@ int SoundfontBuilder::NoiseSample(uint8_t nr43)
     uint32_t clock = 0;
     for (uint32_t i = 0; i < kNoisePoints; i++)
     {
-        s.data.push_back(shift < 14 ? int16_t(std::lround(((lfsr & 1) ? -16384 : 16384) * psg_share_)) : 0);
+        s.data.push_back(shift < 14 ? int16_t(std::lround(((lfsr & 1) ? -32767 : 32767) * psg_share_)) : 0);
         if (shift >= 14)
         {
             continue;

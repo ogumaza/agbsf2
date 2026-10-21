@@ -10,6 +10,8 @@
 #include <vector>
 
 #include "files.h"
+#include "rom.h"
+#include "ubimilan/driver.h"
 
 namespace agbsf2::ubimilan
 {

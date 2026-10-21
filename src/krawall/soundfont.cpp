@@ -7,7 +7,9 @@
 #include <map>
 #include <utility>
 
+#include "krawall/driver.h"
 #include "krawall/player.h"
+#include "rom.h"
 #include "sf2.h"
 
 namespace agbsf2::krawall
@@ -60,6 +62,7 @@ Sf2File InstrumentSet::Build(const Rom& rom, const DriverInfo& info) const
                     }
                 }
                 s.loop_end = uint32_t(s.data.size());
+                LengthenLoop(s);
                 AddLoopGuard(s);
             }
 

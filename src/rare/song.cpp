@@ -2,7 +2,12 @@
 
 #include "rare/song.h"
 
+#include <cstdint>
 #include <cstdio>
+#include <string>
+
+#include "music.h"
+#include "rom.h"
 
 namespace agbsf2::rare
 {
@@ -233,6 +238,7 @@ bool ReadInstrument(const Rom& rom, uint32_t address, Instrument& inst)
     }
 
     inst = InstrumentAt(rom, address);
+
     return true;
 }
 

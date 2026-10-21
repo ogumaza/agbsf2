@@ -30,6 +30,10 @@
 #include "inflate.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <vector>
 
 namespace agbsf2
 {

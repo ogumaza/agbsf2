@@ -28,22 +28,16 @@ constexpr int kExclusiveRelease = -2000;
 // The bank in which General MIDI players look for the drum channel's programs.
 constexpr int kDrumBank = 128;
 
-// A modulator that makes velocity scale the level in a straight line. The default modulator's curve squares it. This
-// one takes its place.
-constexpr sf2::Modulator kLinearVelocity = {sf2::kNoteOnVelocity | sf2::kNegative | sf2::kConcave,
-                                            sf2::kInitialAttenuation, 480, 0, 0};
-
-// A modulator that makes controller 7 scale the level in a straight line. The default modulator's curve squares it.
-// This one takes its place.
-constexpr sf2::Modulator kLinearVolume = {uint16_t(sf2::kController | 7) | sf2::kNegative | sf2::kConcave,
-                                          sf2::kInitialAttenuation, 480, 0, 0};
-
 // Returns a time in timecents, the unit of SoundFont envelope times, from kInstant to 8000.
 int Timecents(double seconds);
 
 // Returns the attenuation of `level`, a fraction of the full level, in centibels from 0 to kSilent. A level of 0 or
 // below gives kSilent.
 int Centibels(double level);
+
+// Returns the SoundFont pan, from -500 (left) to 500 (right), that gives the sides levels in the ratio of `left` to
+// `right`. Both are 0 or more. Two levels of 0 give 0.
+int SidesPan(double left, double right);
 
 // Returns the factor that lengthens a SoundFont fade to match a fade to silence over `frames` frames that falls in a
 // straight line in level. Such a fade stays loud for most of its length. A SoundFont's level falls in a straight line
@@ -55,17 +49,19 @@ double FadeStretch(double frames);
 // straight line in level. FadeStretch() gives the factor that lengthens the SoundFont fade to match it.
 double FadeSeconds(double frames);
 
-// A SoundFont volume envelope: times in timecents and the sustain level in centibels of attenuation.
+// A SoundFont volume envelope: times in timecents and the sustain level in centibels of attenuation. The hold keeps the
+// full level between the attack and the decay.
 struct VolumeEnvelope
 {
     int attack = kInstant;
+    int hold = kInstant;
     int decay = kInstant;
     int sustain = 0;
     int release = kInstant;
 };
 
-// Adds the generators of `envelope` to `zone`: the attack, decay and release, then the sustain. A phase at its default
-// is left out.
+// Adds the generators of `envelope` to `zone`: the attack, hold, decay and release, then the sustain. A phase at its
+// default is left out.
 void AddVolumeEnvelope(sf2::Zone& zone, const VolumeEnvelope& envelope);
 
 // Adds the generators that tune `zone` by `cents` to it. The whole semitones go in the coarse tune, up to 120 either
@@ -127,11 +123,13 @@ sf2::Preset MakePreset(const std::string& name, uint16_t bank, uint16_t program,
 int PresetInstrument(const sf2::Preset& preset);
 
 // Returns an instrument named `name` that holds a global zone and then `zones`. Every instrument that agbsf2 writes
-// comes from here. The global zone holds seqlib's kNoVelocityFilterFullBend. Those modulators turn the default
-// velocity-to-filter modulators off and give the pitch wheel its full range. SoundFont 2.04's default modulator gives
-// the pitch wheel 127/128 of the range that RPN 0 sets. FluidSynth follows it. Without the set, a bend of 34 semitones
-// plays 27 cents flat. A zone's modulator takes the place of the default modulator with the same sources, destination
-// and transform. A local zone's modulator takes the place of the same one in the global zone.
+// comes from here. The global zone holds seqlib's kGlobalZoneModulators. Those modulators turn the default
+// velocity-to-filter modulators off, give the pitch wheel its full range and give CC10 the pan range that most
+// synthesizers give it. SoundFont 2.04's default modulator gives the pitch wheel 127/128 of the range that RPN 0 sets.
+// FluidSynth follows it. Without the set, a bend of 34 semitones plays 27 cents flat. The specification's default
+// modulator from CC10 to pan has an amount of 1000. FluidSynth and BASSMIDI play it at 500. With the set, a player that
+// follows the specification pans as they do. A zone's modulator takes the place of the default modulator with the same
+// sources, destination and transform. A local zone's modulator takes the place of the same one in the global zone.
 sf2::Instrument MakeInstrument(const std::string& name, std::vector<sf2::Zone> zones = {});
 
 // A SoundFont as agbsf2 writes it. Its INFO list holds the name, the program and then the comment. A sample without a

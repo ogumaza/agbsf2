@@ -121,8 +121,8 @@ public:
     // the rate the SoundFont gives it.
     void AddSampleKey(uint32_t set, int key, const GameSample& sample, int root, int cents = 0);
 
-    // Adds the instruments and their presets to `sf`, with the PSG's square and wave zones tuned by `cents`. Returns
-    // a warning for each key of a sample set whose sample isn't in the ROM.
+    // Adds the instruments and their presets to `sf`, with the PSG's square and wave zones tuned by `cents`. Returns a
+    // warning for each key of a sample set whose sample isn't in the ROM.
     std::vector<std::string> Build(SoundfontBuilder& sf, int cents) const;
 
 private:

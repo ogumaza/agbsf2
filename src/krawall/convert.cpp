@@ -16,11 +16,13 @@
 #include <vector>
 
 #include "files.h"
+#include "krawall/driver.h"
 #include "krawall/player.h"
 #include "krawall/soundfont.h"
 #include "midi.h"
 #include "music.h"
 #include "program.h"
+#include "rom.h"
 #include "sf2.h"
 
 namespace agbsf2::krawall
@@ -124,10 +126,10 @@ Voice VoiceOf(const Player& player, const DriverInfo& info, const Channel& ch, d
 }
 
 // Runs the model until a row revisits an earlier module position with the same speed, tempo and pattern-loop state, and
-// the module has played the loop between them `loops` times in all. With `second`, the loop starts at the module's
-// second pass through it, and the module plays the first pass before it. A song of a module that separates songs with
-// +++ plays in song mode. Song mode loops back to the song's start at the song's end.
-Simulation Simulate(const Rom& rom, const DriverInfo& info, const ModuleSong& song, int loops, bool second)
+// the module has played the loop between them `loops` times in all. From LoopStart::kSecondPass, the loop starts at the
+// module's second pass through it. The module then plays the first pass before it. A song of a module that separates
+// songs with +++ plays in song mode. Song mode loops back to the song's start at the song's end.
+Simulation Simulate(const Rom& rom, const DriverInfo& info, const ModuleSong& song, int loops, LoopStart start_pass)
 {
     Simulation sim;
     Player player(rom, info, song);
@@ -175,7 +177,7 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, const ModuleSong& so
             if (!added)
             {
                 const size_t length = sim.ticks.size() - it->second;
-                const size_t skip = second ? length : 0;
+                const size_t skip = start_pass == LoopStart::kSecondPass ? length : 0;
                 sim.plan.loops = true;
                 sim.plan.loop_start = it->second + skip;
                 sim.plan.loop_end = sim.ticks.size() + skip;
@@ -682,10 +684,10 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
     // to the loop with the pan or volume that its end left them.
     const ModuleSong& entry = info.songs[size_t(song)];
     const uint32_t module = entry.module;
-    Simulation sim = Simulate(rom, info, entry, settings.loops, false);
-    if (sim.plan.loops && !FirstPassRepeats(rom, info, Simulate(rom, info, entry, 2, false)))
+    Simulation sim = Simulate(rom, info, entry, settings.loops, LoopStart::kFirstPass);
+    if (sim.plan.loops && !FirstPassRepeats(rom, info, Simulate(rom, info, entry, 2, LoopStart::kFirstPass)))
     {
-        sim = Simulate(rom, info, entry, settings.loops, true);
+        sim = Simulate(rom, info, entry, settings.loops, LoopStart::kSecondPass);
     }
     report.warnings = sim.warnings;
     if (sim.ticks.empty())

@@ -403,7 +403,8 @@ mixes the channel. The level runs from 0 to 255:
 
 * In the frame a note starts, the level is 0, and the attack adds to it.
 * The attack adds its value each frame, up to 255. An attack of 0 never gets
-  louder than 0.
+  louder than 0. The frame in which the level reaches 255 plays at 255. The
+  decay starts on the next frame.
 * The decay multiplies the level by decay / 256 each frame, rounding down,
   until it falls to the sustain level, where it stays. At a sustain level of 0,
   the note ends there.
@@ -604,8 +605,8 @@ duty = (t / 256) × p + d × 2^24
 so it follows a triangle wave from *d*/256 of a cycle to (*d* + *p*/2)/256,
 which repeats every 256 / gcd(256, *s*) frames.
 
-A saw wave rises from −112 to 111 over a cycle, by three quarters of a step for
-each of the phase's 256 steps, with a jump of 32 halfway:
+A saw wave rises from −112 to 112 over a cycle. It rises 3 for every 4 of the
+phase's 256 steps and jumps 32 halfway:
 
 ```
 x = phase / 2^24 − 112 − (phase / 2^26 mod 32)

@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -28,8 +29,8 @@ constexpr uint8_t kDutyPatterns[4] = {0x01, 0x81, 0x87, 0x7E};
 // Returns the name of a square channel's sound at duty `duty` (0-3), such as "Square 12.5%".
 std::string SquareName(int duty);
 
-// Returns a cycle of a square channel's waveform at duty `duty` (0-3): 64 points, 8 for each step. A high step's
-// points are at `amplitude`. A low step's points are at -`amplitude`.
+// Returns a cycle of a square channel's waveform at duty `duty` (0-3): 64 points, 8 for each step. A high step's points
+// are at `amplitude`. A low step's points are at -`amplitude`.
 std::vector<int16_t> SquareCycle(int duty, int16_t amplitude);
 
 // Middle C, which the square and wave samples play on their root key.
@@ -221,8 +222,8 @@ struct NoiseSound
     // `restarted` is set or it's the note's first.
     void AddFrame(uint16_t nr41, uint16_t nr43, bool restarted);
 
-    // Drops the frames at the end that leave the registers as the frame before them did and don't restart the
-    // channel. After the last frame that's left, the channel plays on with no more writes.
+    // Drops the frames at the end that leave the registers as the frame before them did and don't restart the channel.
+    // After the last frame that's left, the channel plays on with no more writes.
     void Trim();
 
     std::vector<std::pair<uint16_t, uint16_t>> frames;

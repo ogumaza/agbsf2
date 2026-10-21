@@ -54,7 +54,11 @@ int SampleRelease(uint8_t release);
 // the channel at once.
 int PsgRelease(uint8_t release);
 
-// Adds an envelope's generators to a zone, before its last generator (the sample).
+// Adds an envelope's generators to a zone, before its last generator (the sample). The attenuation takes the form that
+// seqlib's ToZoneAttenuation gives it: 2.5 times the attenuation in the generator, up to 1440 cB. FluidSynth, BASSMIDI
+// and most other SoundFont synthesizers apply 0.4 of the generator. They then play the envelope's peak at its level. A
+// synthesizer that follows the specification plays the zone at 2.5 times the attenuation. An attenuation beyond 576 cB
+// also gives the zone a modulator.
 void AddEnvelope(sf2::Zone& zone, const Sf2Envelope& envelope);
 
 // A SoundFont being built, with a cache of the samples made for it. The converter adds the instruments and presets.
@@ -63,8 +67,9 @@ class SoundfontBuilder
 public:
     // Keeps a reference to `rom`. The ROM has to outlive the builder. The square, wave and noise samples play at
     // `psg_share` of full scale, the PSG's level against a full-scale sample that PsgShare() gives. The level is in the
-    // samples rather than the zones' attenuation. FluidSynth applies only 0.4 of a zone's attenuation. In a SoundFont
-    // that `songs` sequences share, SongBanks gives each sequence's presets their bank and programs.
+    // samples rather than the zones' attenuation. Synthesizers differ in the share of a zone's attenuation that they
+    // apply. They all play a sample's level. In a SoundFont that `songs` sequences share, SongBanks gives each
+    // sequence's presets their bank and programs.
     SoundfontBuilder(const Rom& rom, double psg_share, int songs = 1);
 
     Sf2File& File()

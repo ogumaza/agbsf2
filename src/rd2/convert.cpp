@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <optional>
@@ -21,7 +22,10 @@
 #include "music.h"
 #include "program.h"
 #include "psg.h"
+#include "rd2/driver.h"
 #include "rd2/sequencer.h"
+#include "rd2/soundfont.h"
+#include "rom.h"
 #include "sf2.h"
 #include "song_banks.h"
 #include "warnings.h"
@@ -185,9 +189,9 @@ void UpdateTrackPlans(const Event& e, TrackPlans& tracks)
 
 // Returns PlanSong()'s plan for the sequence, in units, once every track that counts has looped or ended. Returns
 // nothing before then. A track counts once it has started, unless F8 started it again. A track without a loop has read
-// its last command and released its notes by its end at the latest. With `second`, the loop starts at the sequence's
-// second pass through it.
-std::optional<SongPlan> PlanLoop(const TrackPlans& tracks, int loops, bool second)
+// its last command and released its notes by its end at the latest. From LoopStart::kSecondPass, the loop starts at the
+// sequence's second pass through it.
+std::optional<SongPlan> PlanLoop(const TrackPlans& tracks, int loops, LoopStart start_pass)
 {
     std::vector<TrackLayout> layouts;
     for (const TrackPlan& t : tracks)
@@ -210,7 +214,7 @@ std::optional<SongPlan> PlanLoop(const TrackPlans& tracks, int loops, bool secon
         layouts.push_back(layout);
     }
 
-    return PlanSong(layouts, loops, second);
+    return PlanSong(layouts, loops, start_pass);
 }
 
 // Returns the stretch of the sequence that the conversion covers, from PlanLoop()'s plan if it made one. A looping plan
@@ -267,9 +271,10 @@ std::vector<std::string> SimulationWarnings(const Sequencer& seq, const std::vec
 
 // Runs the model until every track has looped or ended and the sequence has played its loop `loops` times. A track's
 // units are the MIDI file's ticks: each frame lasts the tempo's units, and each command comes at its track's time, or
-// with `frame_timing`, at the start of the frame the driver plays it in. With `second`, the loop starts at the
-// sequence's second pass through it, and the sequence plays the first pass before it.
-Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops, bool frame_timing, bool second)
+// with `frame_timing`, at the start of the frame the driver plays it in. From LoopStart::kSecondPass, the loop starts
+// at the sequence's second pass through it. The sequence then plays the first pass before it.
+Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops, bool frame_timing,
+                    LoopStart start_pass)
 {
     Simulation sim;
     sim.frame_timing = frame_timing;
@@ -304,7 +309,7 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops,
 
         if (!loop)
         {
-            loop = PlanLoop(tracks, loops, second);
+            loop = PlanLoop(tracks, loops, start_pass);
         }
         if ((loop && (!loop->loops || sim.frame_ticks[f] >= loop->end)) || seq.Ended())
         {
@@ -331,6 +336,7 @@ std::vector<std::pair<uint64_t, int>> TempoMap(const Simulation& sim)
             tempos.emplace_back(sim.frame_ticks[f], tempo);
         }
     }
+
     if (tempos.empty())
     {
         tempos.emplace_back(0, kStartTempo);
@@ -362,6 +368,21 @@ struct ZoneSound
     int pan = 0;          // the SoundFont's pan, from -500 to 500
     bool own_pan = false; // a drum's: the track's pan doesn't move it
 };
+
+// Returns the pan of a zone that plays a drum at pan `pan` on a voice of type `type`. The driver holds a sample voice's
+// pan to 0 to 127 and gives the voice levels of 127 - pan on the left and pan on the right. CC10 plays a track's notes
+// at the centre (0x40) in the middle. The zone gives the ratio of the drum's levels to the centre's. A PSG voice plays
+// on both sides at the centre. At any other pan, it plays on one side alone.
+int DrumZonePan(int pan, uint8_t type)
+{
+    if (type != kSampleType)
+    {
+        return pan == kCentre ? 0 : (pan < kCentre ? -500 : 500);
+    }
+
+    pan = std::clamp(pan, 0, 127);
+    return SidesPan((127 - pan) / double(127 - kCentre), pan / double(kCentre));
+}
 
 // A note as the MIDI file plays it.
 struct Note
@@ -431,7 +452,7 @@ public:
 
                 Note n;
                 n.track = e.track;
-                n.velocity = std::clamp(int(std::lround(127 * std::sqrt(e.velocity / 127.0))), 1, 127);
+                n.velocity = SquareRootValue(e.velocity, 127, 1);
                 n.on = EventTick(sim_, e.units, te.frame);
                 n.length = e.length;
                 n.frame = te.frame;
@@ -560,9 +581,9 @@ private:
         z.envelope = lk.envelope;
         z.release = RegionRelease(rom_, region);
         z.own_pan = lk.drum;
-        if (lk.drum && lk.drum_pan != kCentre)
+        if (lk.drum)
         {
-            z.pan = std::clamp(int(std::lround((lk.drum_pan - kCentre) / 63.0 * 500)), -500, 500);
+            z.pan = DrumZonePan(lk.drum_pan, e.type);
         }
 
         switch (e.type)
@@ -627,6 +648,7 @@ private:
         z.release = RegionRelease(rom_, lk.region);
         z.root = std::clamp(int(tuning), 0, 127);
         z.coarse = z.root - tuning;
+
         return z;
     }
 
@@ -738,7 +760,8 @@ std::vector<std::string> AddPresets(const Rom& rom, SoundfontBuilder& sf, const 
                 zone.generators.push_back(sf2::Generator::Value(sf2::kPan, z.pan));
             }
 
-            // A drum keeps its pan whatever its track's pan is. This modulator replaces the default one from CC10.
+            // A drum keeps its pan whatever its track's pan is. This modulator replaces the CC10 modulator of the
+            // global zone.
             if (z.own_pan)
             {
                 zone.modulators.push_back({uint16_t(sf2::kController | cc::kPan) | sf2::kBipolar, sf2::kPan, 0, 0, 0});
@@ -767,11 +790,11 @@ std::vector<std::string> AddPresets(const Rom& rom, SoundfontBuilder& sf, const 
 
 // Returns a track's levels on each side (full scale 128) for a voice at full velocity and envelope, from its pan and
 // volume and the player's volumes. The driver works out a sample voice's levels in the same way. The revision's
-// volume_scale and volume_shift turn the voice's level into its volume. With the player's second volume at its
-// default, 0x80, the volume reaches 190 at most in A Link to the Past's revision and 126 at most in the others. The
-// Super Mario Advance 2 revision leaves out the player's second volume. That revision's mixer splits the volume
-// between the sides in 128ths and divides each voice's points by 256. The other mixers split it in 256ths and divide
-// the mix by 128. Both ways give the same levels.
+// volume_scale and volume_shift turn the voice's level into its volume. With the player's second volume at its default,
+// 0x80, the volume reaches 190 at most in A Link to the Past's revision and 126 at most in the others. The Super Mario
+// Advance 2 revision leaves out the player's second volume. That revision's mixer splits the volume between the sides
+// in 128ths and divides each voice's points by 256. The other mixers split it in 256ths and divide the mix by 128. Both
+// ways give the same levels.
 std::pair<double, double> TrackLevels(Revision revision, int pan, int volume, int player_volume, int player_volume2)
 {
     const RevisionTraits& traits = TraitsOf(revision);
@@ -800,6 +823,42 @@ Levels StartLevels(const Simulation& sim)
     start.player_volume2 = sim.volume2;
 
     return start;
+}
+
+// Returns, for each of the player's tracks, whether every note that it plays is a PSG note that takes the track's pan.
+// Those are the notes of the squares, the wave and the noise, other than drums.
+std::array<bool, kPlayerTracks> PsgTracks(const std::vector<Note>& notes, const std::vector<Program>& programs)
+{
+    std::array<bool, kPlayerTracks> psg;
+    psg.fill(true);
+    for (const Note& n : notes)
+    {
+        const ZoneSound& z = programs[size_t(n.program)].keys.at(n.key);
+        if (z.type == kSampleType || z.own_pan)
+        {
+            psg[size_t(n.track)] = false;
+        }
+    }
+
+    return psg;
+}
+
+// Sets CC10 and CC11 for a track's levels. A sample voice plays at the levels of TrackLevels(). A PSG voice plays on
+// both sides at the centre pan, 0x40. At any other pan, it plays at twice the level on one side alone
+// (Sequencer::WritePan() and PsgLevel()). `psg` is set when every note that the track plays is a PSG note other than a
+// drum (see PsgTracks()). The controllers then follow the PSG's rule. TrackLevels() gives the two sides the same sum at
+// every pan: twice the level of each side at the centre.
+void TrackControllers(Revision revision, const Levels& l, bool psg, int& cc10, int& cc11)
+{
+    const auto [left, right] = TrackLevels(revision, l.pan, l.volume, l.player_volume, l.player_volume2);
+    if (!psg || l.pan == kCentre)
+    {
+        LevelsToControllers(left, right, cc10, cc11);
+        return;
+    }
+
+    const double side = left + right;
+    LevelsToControllers(l.pan < kCentre ? side : 0, l.pan < kCentre ? 0 : side, cc10, cc11);
 }
 
 // A change of a track's levels: its tick, the levels from there on, and whether it sets the track's pan.
@@ -871,10 +930,10 @@ std::array<std::vector<LevelChange>, kPlayerTracks> TrackChanges(const Simulatio
 // Writes a track's CC10 for pan and CC11 for loudness at the start and whenever they change. A player that jumps back
 // to `loop`, the loop's start, retains the levels from the loop's end, as the game does until the loop sets them. So
 // CC11 is written again at the first level-change record at or after `loop`, and CC10, which follows the pan alone, at
-// the first record that sets the pan, even if their values haven't changed. `start` gives the levels before the
-// track's first change.
-void WriteLevels(MidiTrack& mt, int c, Revision revision, const Levels& start, const std::vector<LevelChange>& changes,
-                 std::optional<uint64_t> loop)
+// the first record that sets the pan, even if their values haven't changed. `start` gives the levels before the track's
+// first change. With `psg`, the controllers follow the PSG's rule (see TrackControllers()).
+void WriteLevels(MidiTrack& mt, int c, Revision revision, bool psg, const Levels& start,
+                 const std::vector<LevelChange>& changes, std::optional<uint64_t> loop)
 {
     int cc10 = -1, cc11 = -1;
     bool again10 = loop.has_value(), again11 = loop.has_value();
@@ -886,10 +945,8 @@ void WriteLevels(MidiTrack& mt, int c, Revision revision, const Levels& start, c
         again10 = again10 && !write10;
         again11 = again11 && !write11;
 
-        const Levels& l = change.levels;
-        const auto [left, right] = TrackLevels(revision, l.pan, l.volume, l.player_volume, l.player_volume2);
         int n10 = cc10 < 0 ? 64 : cc10, n11 = cc11 < 0 ? 0 : cc11;
-        LevelsToControllers(left, right, n10, n11);
+        TrackControllers(revision, change.levels, psg, n10, n11);
         if (n10 != cc10 || write10)
         {
             mt.Control(uint32_t(change.tick), c, cc::kPan, cc10 = n10);
@@ -1014,10 +1071,12 @@ void WriteNotes(MidiTrack& mt, int c, const std::vector<const Note*>& notes, con
 bool FirstPassRepeats(const Rom& rom, const DriverInfo& info, const Simulation& sim)
 {
     NoteMaker maker(rom, info, sim, 0xFFFF);
+    const std::vector<Note> notes = maker.Make();
+    const std::array<bool, kPlayerTracks> psg = PsgTracks(notes, maker.Programs());
     const std::array<std::vector<LevelChange>, kPlayerTracks> changes = TrackChanges(sim);
     const SongPlan& plan = sim.plan;
     PassComparison passes(plan.loop_start, plan.loop_end - plan.loop_start);
-    for (const Note& n : maker.Make())
+    for (const Note& n : notes)
     {
         // The track's levels from its last change up to the note's start, as CC10 and CC11 give them.
         const std::vector<LevelChange>& list = changes[size_t(n.track)];
@@ -1027,10 +1086,8 @@ bool FirstPassRepeats(const Rom& rom, const DriverInfo& info, const Simulation& 
         };
         const auto after = std::upper_bound(list.begin(), list.end(), n.on, by_tick);
         const Levels levels = after == list.begin() ? StartLevels(sim) : std::prev(after)->levels;
-        const auto [left, right] =
-            TrackLevels(info.revision, levels.pan, levels.volume, levels.player_volume, levels.player_volume2);
         int cc10 = 64, cc11 = 0;
-        LevelsToControllers(left, right, cc10, cc11);
+        TrackControllers(info.revision, levels, psg[size_t(n.track)], cc10, cc11);
 
         // A note's bend is its track's newest voice's in the frame it starts, which a voice that the note didn't take
         // can leave unknown.
@@ -1044,10 +1101,10 @@ bool FirstPassRepeats(const Rom& rom, const DriverInfo& info, const Simulation& 
 }
 
 // Writes the MIDI file: a conductor track, then a track for each of the player's tracks that plays notes, with the
-// levels of the driver's revision.
+// levels of the driver's revision. `psg` gives the tracks whose notes are all PSG notes (see PsgTracks()).
 bool WriteMidi(const std::string& path, const std::string& title, const std::string& about, Revision revision,
-               const Simulation& sim, const std::vector<Note>& notes, const std::vector<BankProgram>& slots,
-               std::string& error)
+               const Simulation& sim, const std::vector<Note>& notes, const std::array<bool, kPlayerTracks>& psg,
+               const std::vector<BankProgram>& slots, std::string& error)
 {
     constexpr uint16_t kDivision = kTicksPerQuarter;
     const SongPlan& plan = sim.plan;
@@ -1118,7 +1175,7 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
             WriteBends(mt, c, sim, n, list, range, loop);
         }
 
-        WriteLevels(mt, c, revision, StartLevels(sim), changes[size_t(n)], loop);
+        WriteLevels(mt, c, revision, psg[size_t(n)], StartLevels(sim), changes[size_t(n)], loop);
         WriteNotes(mt, c, list, slots, program, loop);
     }
 
@@ -1139,10 +1196,10 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
     // The marked loop starts at the sequence's second pass if its first plays unlike it, as when the tracks come back
     // to their loops with the pan or volume that the loop's end left them. The passes are compared on the beat, as the
     // default MIDI file plays them, so frame timing moves the same loops.
-    Simulation sim = Simulate(rom, info, song, settings.loops, settings.frame_timing, false);
-    if (sim.plan.loops && !FirstPassRepeats(rom, info, Simulate(rom, info, song, 2, false, false)))
+    Simulation sim = Simulate(rom, info, song, settings.loops, settings.frame_timing, LoopStart::kFirstPass);
+    if (sim.plan.loops && !FirstPassRepeats(rom, info, Simulate(rom, info, song, 2, false, LoopStart::kFirstPass)))
     {
-        sim = Simulate(rom, info, song, settings.loops, settings.frame_timing, true);
+        sim = Simulate(rom, info, song, settings.loops, settings.frame_timing, LoopStart::kSecondPass);
     }
     report.warnings = sim.warnings;
 
@@ -1176,8 +1233,7 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
     }
 
     // The SoundFont's presets, in the sequence's file or the shared one, in the banks and programs that it gives the
-    // sequence.
-    // In a SoundFont for this sequence alone, the presets go in sequence 0's banks and programs.
+    // sequence. In a SoundFont for this sequence alone, the presets go in sequence 0's banks and programs.
     SoundfontBuilder own(rom, PsgShare(info.revision));
     SoundfontBuilder& sf = shared ? *shared : own;
     const int count = int(maker.Programs().size());
@@ -1203,7 +1259,8 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
 
     std::string error;
     report.midi_path = stem + ".mid";
-    if (!WriteMidi(report.midi_path, title, about, info.revision, sim, notes, slots, error))
+    if (!WriteMidi(report.midi_path, title, about, info.revision, sim, notes, PsgTracks(notes, maker.Programs()), slots,
+                   error))
     {
         report.warnings.push_back(error);
         return report;

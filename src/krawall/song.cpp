@@ -3,12 +3,15 @@
 #include "krawall/song.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <iterator>
 #include <string>
 #include <vector>
 
 #include "files.h"
+#include "krawall/driver.h"
+#include "rom.h"
 
 namespace agbsf2::krawall
 {
@@ -100,8 +103,8 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
         return false;
     }
 
-    // A song of a module that holds several lists the whole module. The first line names the module by its place in
-    // the list.
+    // A song of a module that holds several lists the whole module. The first line names the module by its place in the
+    // list.
     std::string out;
     char line[256];
     const int place = int(std::find(info.modules.begin(), info.modules.end(), module.address) - info.modules.begin());

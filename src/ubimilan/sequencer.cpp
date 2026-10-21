@@ -6,11 +6,16 @@
 
 #include "ubimilan/sequencer.h"
 
+#include <array>
+#include <cstdint>
 #include <cstdio>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
 #include "gba.h"
+#include "rom.h"
+#include "ubimilan/driver.h"
 #include "ubimilan/song.h"
 #include "warnings.h"
 
@@ -37,8 +42,8 @@ constexpr uint16_t kModulation = 1;
 constexpr uint16_t kPitchMode = 2;
 constexpr uint16_t kLegato = 4;
 
-// Returns the place of a key in the PSG's frequency table: 36 keys down on the squares and 12 on the wave channel, as
-// a byte.
+// Returns the place of a key in the PSG's frequency table: 36 keys down on the squares and 12 on the wave channel, as a
+// byte.
 int KeyIndex(int channel, int key)
 {
     if (channel == kWaveChannel)
@@ -160,8 +165,8 @@ void Sequencer::SequencerStep()
         return;
     }
 
-    // Commands until the countdown isn't 0. An end command makes the track take the next sequence, if there's one,
-    // and the game's callback gives the track the sequence after it, as a resource that the sound update corrects.
+    // Commands until the countdown isn't 0. An end command makes the track take the next sequence, if there's one, and
+    // the game's callback gives the track the sequence after it, as a resource that the sound update corrects.
     while (active_ && !wait_)
     {
         if (ending_)
