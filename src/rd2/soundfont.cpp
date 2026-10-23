@@ -47,6 +47,16 @@ constexpr uint32_t kNoisePoints = kNoiseRate;
 
 } // namespace
 
+bool SampleReadable(const Rom& rom, uint32_t address)
+{
+    const uint32_t length = rom.U32(address);
+    const uint32_t loop_start = rom.U32(address + 8);
+    const uint32_t loop_end = rom.U32(address + 12);
+    const uint32_t points = loop_end ? loop_end : length;
+    return points != 0 && points <= kMaxSamplePoints && rom.U32(address + 4) != 0 &&
+           rom.Contains(address + 16, points) && (!loop_end || loop_start < loop_end);
+}
+
 Sf2Envelope EnvelopeFor(const Rom& rom, uint32_t address, int release)
 {
     Sf2Envelope env;
@@ -146,24 +156,10 @@ Sf2Envelope EnvelopeFor(const Rom& rom, uint32_t address, int release)
     return env;
 }
 
-Sf2Envelope WaveEnvelope(int release)
-{
-    Sf2Envelope env;
-    env.release = release;
-
-    return env;
-}
-
 int SampleRelease(uint8_t release)
 {
     const double per_frame = -20.0 * std::log10((release + 0xE6) / 512.0);
     return Timecents(100.0 / per_frame / kFrameRate);
-}
-
-int PsgRelease(uint8_t release)
-{
-    const int steps = release >> 5;
-    return steps ? Timecents(FadeSeconds(15.0 * steps / 64.0 * kFrameRate)) : kInstant;
 }
 
 void AddEnvelope(sf2::Zone& zone, const Sf2Envelope& envelope)
@@ -222,8 +218,7 @@ int SoundfontBuilder::GameSample(uint32_t address)
     const uint32_t loop_start = rom_.U32(address + 8);
     const uint32_t loop_end = rom_.U32(address + 12);
     const uint32_t points = loop_end ? loop_end : length;
-    if (points == 0 || points > kMaxSamplePoints || rate == 0 || !rom_.Contains(address + 16, points) ||
-        (loop_end && loop_start >= loop_end))
+    if (!SampleReadable(rom_, address))
     {
         game_samples_[address] = -1;
         return -1;

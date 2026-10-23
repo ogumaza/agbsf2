@@ -41,18 +41,9 @@ struct Sf2Envelope
 // envelope gets no release.
 Sf2Envelope EnvelopeFor(const Rom& rom, uint32_t address, int release);
 
-// Returns the SoundFont envelope of a wave voice, with `release` in timecents. The wave voice leaves its region's
-// envelope out, and its level holds until the release.
-Sf2Envelope WaveEnvelope(int release);
-
-// Returns the SoundFont release of a sample or wave voice for a region's release value. The release takes a share of
-// the voice's level off each frame.
+// Returns the SoundFont release of a sample voice for a region's release value. The release takes a share of the
+// voice's level off each frame.
 int SampleRelease(uint8_t release);
-
-// Returns the SoundFont release of a square or noise voice for a region's release value. The release is the PSG's
-// envelope. It steps the volume down from 15 at most every 1/64 s for each step of the value's top 3 bits, or silences
-// the channel at once.
-int PsgRelease(uint8_t release);
 
 // Adds an envelope's generators to a zone, before its last generator (the sample). The attenuation takes the form that
 // seqlib's ToZoneAttenuation gives it: 2.5 times the attenuation in the generator, up to 1440 cB. FluidSynth, BASSMIDI
@@ -60,6 +51,10 @@ int PsgRelease(uint8_t release);
 // synthesizer that follows the specification plays the zone at 2.5 times the attenuation. An attenuation beyond 576 cB
 // also gives the zone a modulator.
 void AddEnvelope(sf2::Zone& zone, const Sf2Envelope& envelope);
+
+// Returns true if SoundfontBuilder::GameSample() can make a sample from the header at `address`. The sample requires
+// points, a rate and a loop that starts before it ends. Its points have to be inside the ROM.
+bool SampleReadable(const Rom& rom, uint32_t address);
 
 // A SoundFont being built, with a cache of the samples made for it. The converter adds the instruments and presets.
 class SoundfontBuilder

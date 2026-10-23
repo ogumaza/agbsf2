@@ -105,6 +105,7 @@ struct ChannelLoop
     int loop_point = -1;
     std::vector<int> passes;
     int end = -1;
+    bool idle = false; // a sound effect leaves the channel to the music
 };
 
 // The model's output for the stretch of a song that the plan covers, and its timing in the MIDI file.
@@ -227,7 +228,7 @@ bool TryPlan(Simulation& sim, uint32_t& run_on)
     for (size_t c = 0; c < kChannels; c++)
     {
         const ChannelLoop& loop = sim.channel_loops[c];
-        planned = planned && (!loop.passes.empty() || loop.end >= 0);
+        planned = planned && (loop.idle || !loop.passes.empty() || loop.end >= 0);
         const uint64_t length =
             loop.Loops() ? sim.events[size_t(loop.passes[0])].tick - sim.events[size_t(loop.loop_point)].tick : 0;
         if (length > 0)
@@ -266,6 +267,10 @@ Simulation RunModel(const Rom& rom, const DriverInfo& info, int song, int loops)
 {
     Simulation sim;
     Sequencer seq(rom, info, song);
+    for (int c = 0; c < kChannels; c++)
+    {
+        sim.channel_loops[size_t(c)].idle = !seq.GetChannel(c).position;
+    }
     sim.frame_ticks.push_back(0);
     bool planned = false;
     bool finished = false; // the song played what the plan requires
@@ -1081,7 +1086,7 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
                SoundfontBuilder* shared, bool write)
 {
     SongReport report;
-    if (song < 0 || song >= int(info.song_addresses.size()))
+    if (!SongAddress(info, song))
     {
         report.warnings.push_back("its header can't be read");
         return report;
@@ -1158,8 +1163,18 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
 
     const std::string title = rom.Title() + " #" + SongNumber(song, 0);
     char about[160];
-    std::snprintf(about, sizeof about, "%s (%s) song %d, header at 0x%08X, converted by %s", rom.Title().c_str(),
-                  rom.GameCode().c_str(), song, unsigned(info.song_addresses[size_t(song)]), kProgramName);
+    const int effect = EffectIndex(info, song);
+    if (effect >= 0)
+    {
+        std::snprintf(about, sizeof about, "%s (%s) sound effect %d, header at 0x%08X, converted by %s",
+                      rom.Title().c_str(), rom.GameCode().c_str(), effect, unsigned(SongAddress(info, song)),
+                      kProgramName);
+    }
+    else
+    {
+        std::snprintf(about, sizeof about, "%s (%s) song %d, header at 0x%08X, converted by %s", rom.Title().c_str(),
+                      rom.GameCode().c_str(), song, unsigned(SongAddress(info, song)), kProgramName);
+    }
     const std::string stem = SongStem(settings, SongNumber(song, 0));
 
     std::string error;

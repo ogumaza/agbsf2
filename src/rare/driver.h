@@ -27,6 +27,17 @@ struct DriverOverrides
     int tune_count = 0;
 };
 
+// A tune that the game plays as two arrangements, each on a group of channels. The game holds the channels of the
+// arrangement that isn't playing at a level of 0. The mixer then leaves their notes out. Donkey Kong Country 3 plays
+// Enchanted Riverbank this way: one arrangement above water and the other under water. The game's code fades from one
+// to the other as the Kong dives in and climbs out.
+struct WaterTune
+{
+    int tune = -1;      // the tune, or -1 if the game has none
+    uint16_t above = 0; // a mask of the channels of the arrangement above water
+    uint16_t under = 0; // a mask of the channels of the arrangement under water
+};
+
 // The driver's tables and settings in a ROM.
 struct DriverInfo
 {
@@ -42,6 +53,7 @@ struct DriverInfo
     bool envelope_controllers = false;        // controllers 20-23 set a channel's envelope, as in BDQE's revision
     bool frees_loop_once = false;             // moving a note past its end frees it in loop mode 1, as in BDQE's
     bool skips_silent_notes = false;          // the mixer leaves out a note at a level of 0, as BDQE's does
+    WaterTune water;                          // the tune whose arrangement the game picks by the water. BDQE has one.
     uint32_t pitch_table = 0;                 // 2^(n/12) for n = -64..63 in 9.23 fixed point, at n = 0
     uint32_t sine_table = 0;                  // 257 words: the vibrato's sine
     std::array<uint8_t, 100> fade_table = {}; // the length of each decay and release, from the driver's table
@@ -55,6 +67,10 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
 
 // Returns the address of tune `tune`'s header, or 0 if it's past the table.
 uint32_t TuneAddress(const Rom& rom, const DriverInfo& info, int tune);
+
+// Returns a mask of the channels that the game holds at a level of 0 while it plays tune `tune` under water. Without
+// `under_water`, the mask is for above water.
+uint16_t SilencedChannels(const DriverInfo& info, int tune, bool under_water);
 
 // Returns the number of frames that a decay or release with index `index` (0-99) takes, or 0 for an instant one.
 int FadeFrames(const DriverInfo& info, uint32_t index);

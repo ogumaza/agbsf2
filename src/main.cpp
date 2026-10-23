@@ -519,18 +519,26 @@ void PrintInfo(const Rom& rom, const std::vector<FoundMusic>& drivers, const std
                 continue;
             }
 
-            const SongReport r = music.InspectSong(s, o.convert);
-            std::string loop = "-";
-            if (r.loop_end >= 0)
+            // Each version of the song gets a line. A version after the first has its name after the loop.
+            const std::vector<SongVersion> versions = music.Versions(s);
+            for (size_t v = 0; v < versions.size(); v++)
             {
-                loop = TimeString(r.loop_start) + " - " + TimeString(r.loop_end);
-            }
+                ConvertSettings settings = o.convert;
+                settings.version = int(v);
+                const SongReport r = music.InspectSong(s, settings);
+                std::string loop = "-";
+                if (r.loop_end >= 0)
+                {
+                    loop = TimeString(r.loop_start) + " - " + TimeString(r.loop_end);
+                }
 
-            std::printf("  %3d  0x%08X  %6d  %-9s  %s\n", s, unsigned(r.address), r.tracks,
-                        TimeString(r.seconds).c_str(), loop.c_str());
-            for (const std::string& w : r.warnings)
-            {
-                std::printf("       warning: %s\n", w.c_str());
+                const std::string named = versions[v].name.empty() ? "" : "  (" + versions[v].name + ")";
+                std::printf("  %3d  0x%08X  %6d  %-9s  %s%s\n", s, unsigned(r.address), r.tracks,
+                            TimeString(r.seconds).c_str(), loop.c_str(), named.c_str());
+                for (const std::string& w : r.warnings)
+                {
+                    std::printf("       warning: %s\n", w.c_str());
+                }
             }
         }
     }
@@ -560,12 +568,14 @@ int Trace(const Music& music, const Options& o)
 }
 
 // Reports the conversion result, including songs skipped because they play no notes. `song_label` comes before the
-// song's number. `tracks_chosen` is true when --tracks chose the tracks.
-void ReportSong(const std::string& song_label, int song, const SongReport& r, bool tracks_chosen)
+// song's number. `version` comes after it: a space and the name of the song's version, or nothing. `tracks_chosen` is
+// true when --tracks chose the tracks.
+void ReportSong(const std::string& song_label, int song, const std::string& version, const SongReport& r,
+                bool tracks_chosen)
 {
     if (r.silent)
     {
-        std::printf("%s %2d: %s, skipped\n", song_label.c_str(), song,
+        std::printf("%s %2d%s: %s, skipped\n", song_label.c_str(), song, version.c_str(),
                     tracks_chosen ? "no notes on the chosen tracks" : "plays no notes");
         return;
     }
@@ -578,8 +588,9 @@ void ReportSong(const std::string& song_label, int song, const SongReport& r, bo
 
     const std::string midi = Utf8(PathFromUtf8(r.midi_path).filename());
     const std::string sf2 = r.sf2_path.empty() ? "" : ", " + Utf8(PathFromUtf8(r.sf2_path).filename());
-    std::printf("%s %2d: %s%s, %d track%s, %.1f BPM -> %s%s\n", song_label.c_str(), song, TimeString(r.seconds).c_str(),
-                loop.c_str(), r.tracks, r.tracks == 1 ? "" : "s", r.bpm, midi.c_str(), sf2.c_str());
+    std::printf("%s %2d%s: %s%s, %d track%s, %.1f BPM -> %s%s\n", song_label.c_str(), song, version.c_str(),
+                TimeString(r.seconds).c_str(), loop.c_str(), r.tracks, r.tracks == 1 ? "" : "s", r.bpm, midi.c_str(),
+                sf2.c_str());
 }
 
 // The songs that the conversion of a file has dealt with so far.
@@ -630,23 +641,32 @@ void ConvertSongs(Music& music, const ConvertSettings& settings, const std::stri
             continue;
         }
 
-        const SongReport r = music.ConvertSong(s, settings);
-        if (!r.ok)
+        // Each version of the song goes in separate files. Messages give a version's name after the song's number.
+        const std::vector<SongVersion> versions = music.Versions(s);
+        for (size_t v = 0; v < versions.size(); v++)
         {
-            tally.failures++;
-        }
-        else
-        {
-            (r.silent ? tally.silent : tally.converted)++;
-            if (!o.quiet)
+            ConvertSettings version_settings = settings;
+            version_settings.version = int(v);
+            const SongReport r = music.ConvertSong(s, version_settings);
+            const std::string version = versions[v].name.empty() ? "" : " " + versions[v].name;
+            if (!r.ok)
             {
-                ReportSong(song_label, s, r, o.tracks_given);
+                tally.failures++;
             }
-        }
+            else
+            {
+                (r.silent ? tally.silent : tally.converted)++;
+                if (!o.quiet)
+                {
+                    ReportSong(song_label, s, version, r, o.tracks_given);
+                }
+            }
 
-        for (const std::string& w : r.warnings)
-        {
-            std::fprintf(stderr, "%s%s %d: %s\n", prefix.c_str(), song_label.c_str(), s, w.c_str());
+            for (const std::string& w : r.warnings)
+            {
+                std::fprintf(stderr, "%s%s %d%s: %s\n", prefix.c_str(), song_label.c_str(), s, version.c_str(),
+                             w.c_str());
+            }
         }
 
         if (o.dump)

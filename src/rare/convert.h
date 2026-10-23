@@ -5,6 +5,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "music.h"
 #include "rare/driver.h"
@@ -13,6 +14,15 @@
 
 namespace agbsf2::rare
 {
+
+// ConvertSettings::version picks a version of the tune in DriverInfo::water: the arrangement above water or the one
+// under water.
+constexpr int kAboveWater = 0;
+constexpr int kUnderWater = 1;
+
+// Returns the versions of tune `song` that ConvertSong() writes: one, or for the tune in DriverInfo::water, the one
+// above water and the one under water.
+std::vector<SongVersion> TuneVersions(const DriverInfo& info, int song);
 
 // Works out a tune's length, loop and tracks the way ConvertSong() does, without writing anything.
 SongReport InspectSong(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings);

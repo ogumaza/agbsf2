@@ -338,7 +338,7 @@ def driver_frames(rom, song, frames):
     fifos = [dict(next=0, start=None, rate=0) for _ in range(2)]
     psgs = [Psg(c) for c in range(4)]
     out = []
-    writes = emu.play(song)
+    writes = emu.init_writes + emu.play(song)
     for f in range(frames):
         restarted = [False] * 4
         for address, size, value in (writes if f == 0 else []) + emu.frame():

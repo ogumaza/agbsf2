@@ -198,6 +198,34 @@ public:
         }
     }
 
+    // Places the parts of Donkey Kong Country 3's fading routine that detection reads: the check of tune `tune`, and
+    // the moves that pick the channels to fade out and in. Above water, the routine fades out the channels from
+    // `under_first` to `under_last` and fades in those from `above_first` to `above_last`. Under water, it does the
+    // reverse. Returns the routine's address.
+    uint32_t AddWaterRoutine(int tune, int above_first, int above_last, int under_first, int under_last)
+    {
+        // ldr r0, [r0]; cmp r0, #tune; bne; movs r0, #1; mov r8, r0. Then mov r1, r8; cmp r1, #0; beq to the moves for
+        // the state under water.
+        std::vector<uint16_t> code = {0x6800, uint16_t(0x2800 | tune), 0xD1FE, 0x2001, 0x4680, 0x4641, 0x2900, 0xD005};
+
+        // Above water: movs r2, #first out; movs r5, #last out; movs r0, #first in; mov ip, r0; movs r3, #last in; b.
+        code.insert(code.end(), {uint16_t(0x2200 | under_first), uint16_t(0x2500 | under_last),
+                                 uint16_t(0x2000 | above_first), 0x4684, uint16_t(0x2300 | above_last), 0xE004});
+
+        // Under water: the same moves, with r1 in place of r0.
+        code.insert(code.end(), {uint16_t(0x2200 | above_first), uint16_t(0x2500 | above_last),
+                                 uint16_t(0x2100 | under_first), 0x468C, uint16_t(0x2300 | under_last)});
+
+        std::vector<uint8_t> bytes;
+        for (uint16_t h : code)
+        {
+            bytes.push_back(uint8_t(h));
+            bytes.push_back(uint8_t(h >> 8));
+        }
+
+        return Place(bytes, 2);
+    }
+
 private:
     uint32_t Instrument(const std::vector<uint32_t>& words)
     {
@@ -553,6 +581,53 @@ void TestDetection()
     {
         SEQLIB_CHECK(FadeFrames(none, i) >= FadeFrames(none, i + 1));
     }
+}
+
+// Donkey Kong Country 3's code picks the arrangement of a tune by the water. In the driver's revision with channel
+// levels, detection reads the tune and the channels of each arrangement from the routine that does it.
+void TestWaterTune()
+{
+    const Format kFormat = Format::kChannelByte;
+    Cart cart(kFormat);
+    const auto bank = cart.Bank({{0, cart.Sample(Saw())}});
+    cart.Tune({Track(kFormat).End()}, bank);
+    cart.Tune({Track(kFormat).End()}, bank);
+    const uint32_t routine = cart.AddWaterRoutine(1, 0, 3, 4, 8);
+    const Rom older = cart.ToRom();
+    cart.AddEnvelopeControllers();
+    cart.AddLevelTest();
+
+    const DriverInfo info = Detect(cart.ToRom());
+
+    SEQLIB_CHECK_EQ(info.water.tune, 1);
+    SEQLIB_CHECK_EQ(info.water.above, 0x000F);
+    SEQLIB_CHECK_EQ(info.water.under, 0x01F0);
+    SEQLIB_CHECK(std::find(info.log.begin(), info.log.end(),
+                           "the game's code plays tune 1 on channels 0-3 above water and 4-8 under water") !=
+                 info.log.end());
+    SEQLIB_CHECK_EQ(SilencedChannels(info, 1, false), 0x01F0);
+    SEQLIB_CHECK_EQ(SilencedChannels(info, 1, true), 0x000F);
+    SEQLIB_CHECK_EQ(SilencedChannels(info, 0, true), 0);
+    const std::vector<SongVersion> versions = TuneVersions(info, 1);
+    SEQLIB_REQUIRE_EQ(versions.size(), 2);
+    SEQLIB_CHECK(versions[0].name.empty() && versions[0].suffix.empty());
+    SEQLIB_CHECK(versions[1].name == "under water" && versions[1].suffix == "_underwater");
+    SEQLIB_CHECK_EQ(TuneVersions(info, 0).size(), 1);
+
+    // The older revisions have no channel levels.
+    SEQLIB_CHECK_EQ(Detect(older).water.tune, -1);
+
+    // A routine whose states don't swap the same channels isn't the game's: here the state under water fades in
+    // channels 4-7, and the state above water fades out 4-8.
+    cart.Put16(routine + 36, 0x2307);
+
+    SEQLIB_CHECK_EQ(Detect(cart.ToRom()).water.tune, -1);
+
+    // Nor is one that checks a tune past the table.
+    cart.Put16(routine + 36, 0x2308);
+    cart.Put16(routine + 2, 0x2802);
+
+    SEQLIB_CHECK_EQ(Detect(cart.ToRom()).water.tune, -1);
 }
 
 void TestTiming()
@@ -2081,6 +2156,87 @@ void TestTrackChoice()
     SEQLIB_CHECK(ConvertSong(rom, info, 0, opt, nullptr).silent);
 }
 
+// The tune that the game plays by the water has a version above water and one under water. Each leaves the other's
+// channels out of the mix, out of the voice limit and out of the MIDI file.
+void TestWaterVersions()
+{
+    // Above water, channels 0 and 1 play five notes. Under water, channels 2 and 3 play five: ten voices, two more than
+    // the limit.
+    const Format kFormat = Format::kChannelByte;
+    Cart cart(kFormat);
+    const auto bank = cart.Bank({{0, cart.Sample(Saw(), 32)}, {1, cart.Sample(Saw(), 32)}});
+    Track above(kFormat);
+    Track under(kFormat);
+    above.Tempo(500000).Program(0, 0).Program(1, 0).On(0, 60, 100).On(0, 61, 100).On(0, 62, 100);
+    above.On(1, 70, 100).On(1, 71, 100);
+    under.Program(2, 1).Program(3, 1).Control(2, kCtrlVolume, 100).On(2, 80, 100).On(2, 81, 100).On(2, 82, 100);
+    under.On(3, 90, 100).On(3, 91, 100);
+    cart.Tune({above.Wait(240).End(), under.Wait(240).End()}, bank);
+    cart.AddEnvelopeControllers();
+    cart.AddLevelTest();
+    cart.AddWaterRoutine(0, 0, 1, 2, 3);
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+
+    // What the mixer does in the first frame with the first voice of each channel. At full level, channel 3's voices
+    // are past the limit. In either version, the other version's voices play at a level of 0. They're left out and
+    // don't count.
+    auto results = [&](uint16_t silenced)
+    {
+        Sequencer seq(rom, info, 0, silenced);
+        seq.Step();
+        std::vector<MixResult> out;
+        for (int channel = 0; channel < 4; channel++)
+        {
+            out.push_back(seq.GetSlot(channel * info.slots_per_channel).mix);
+        }
+
+        return out;
+    };
+
+    using M = MixResult;
+    SEQLIB_CHECK(results(0) == std::vector<MixResult>({M::kMixed, M::kMixed, M::kMixed, M::kSkipped}));
+    SEQLIB_CHECK(results(SilencedChannels(info, 0, false)) ==
+                 std::vector<MixResult>({M::kMixed, M::kMixed, M::kSilent, M::kSilent}));
+    SEQLIB_CHECK(results(SilencedChannels(info, 0, true)) ==
+                 std::vector<MixResult>({M::kSilent, M::kSilent, M::kMixed, M::kMixed}));
+
+    // Each version's files: above water as usual, and under water with the version's suffix.
+    ConvertSettings opt = TempSettings("water");
+    const SongReport r = ConvertSong(rom, info, 0, opt, nullptr);
+    opt.version = kUnderWater;
+    const SongReport u = ConvertSong(rom, info, 0, opt, nullptr);
+
+    SEQLIB_CHECK(r.ok && u.ok && r.tracks == 1 && u.tracks == 1);
+    SEQLIB_CHECK(PathFromUtf8(r.midi_path).filename() == "water_00.mid");
+    SEQLIB_CHECK(PathFromUtf8(u.midi_path).filename() == "water_00_underwater.mid");
+    SEQLIB_CHECK(PathFromUtf8(u.sf2_path).filename() == "water_00_underwater.sf2");
+
+    // Each file plays its version's notes, without key pressures, and has no events of the other version's channels.
+    const MidiEvents a = ReadMidi(r.midi_path);
+    const MidiEvents b = ReadMidi(u.midi_path);
+    SEQLIB_CHECK(a.Find(0x90).size() == 3 && a.Find(0x91).size() == 2 && a.Find(0xA0).empty() && a.Find(0xA1).empty());
+    SEQLIB_CHECK(a.Find(0x92).empty() && a.Find(0x93).empty() && a.Find(0xB2).empty() && a.Find(0xC3).empty());
+    SEQLIB_CHECK(b.Find(0x92).size() == 3 && b.Find(0x93).size() == 2 && b.Find(0xA2).empty() && b.Find(0xA3).empty());
+    SEQLIB_CHECK(b.Find(0x90).empty() && b.Find(0x91).empty() && b.Find(0xB0).empty() && b.Find(0xC1).empty());
+
+    // The version under water has its name in the title.
+    std::string title;
+    for (const auto& e : b.tracks[0].events)
+    {
+        if (e.bytes.size() > 3 && e.bytes[0] == 0xFF && e.bytes[1] == 0x03)
+        {
+            title.assign(e.bytes.begin() + 3, e.bytes.end());
+        }
+    }
+    SEQLIB_CHECK(title.ends_with("#00 under water"));
+
+    // The driver's Music gives both versions.
+    std::string error;
+    const std::unique_ptr<Music> music = agbsf2::OpenMusic(rom, Overrides(), error);
+    SEQLIB_CHECK(music && music->Versions(0).size() == 2 && music->Versions(0)[1].name == "under water");
+}
+
 // The driver ignores a loop's end before the loop's start. The listing goes on past such an end, and stops at the
 // loop's end.
 void TestDump()
@@ -2161,6 +2317,7 @@ void RunTests()
 {
     TestDecoding();
     TestDetection();
+    TestWaterTune();
     TestTiming();
     TestSlots();
     TestDroppedWarning();
@@ -2191,6 +2348,7 @@ void RunTests()
     TestStartPressures();
     TestSharedDrumBank();
     TestTrackChoice();
+    TestWaterVersions();
     TestDump();
     TestMusic();
 }

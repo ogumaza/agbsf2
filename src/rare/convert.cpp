@@ -301,14 +301,27 @@ void PutOnFrames(Simulation& sim, const SongPlan& plan, uint32_t per_quarter, ui
     }
 }
 
-// Runs the model until the plan's end or until the driver has stopped the tune, for an hour at most. With
-// `frame_timing`, each action but a tempo change, and each pitch and mute change, goes at the start of the frame the
-// driver plays it in. Frame timing also leaves out the note ons at or after the end.
-Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, const TuneHeader& header, const SongPlan& plan,
-                    bool frame_timing)
+// Leaves out everything that the channels in `silenced` do, but the tempo changes. The game holds those channels at a
+// level of 0. The mixer then leaves out their notes. The MIDI file has none of their events.
+void LeaveOutChannels(Simulation& sim, uint16_t silenced)
+{
+    auto silent = [silenced](int channel)
+    {
+        return (silenced >> channel & 1) != 0;
+    };
+    std::erase_if(sim.actions, [&](const Action& a) { return a.kind != Action::kTempo && silent(a.channel); });
+    std::erase_if(sim.pitches, [&](const PitchChange& p) { return silent(p.channel); });
+    std::erase_if(sim.mutes, [&](const MuteChange& m) { return silent(m.channel); });
+}
+
+// Runs the model until the plan's end or until the driver has stopped the tune, for an hour at most. The channels in
+// `silenced` play at a level of 0. With `frame_timing`, each action but a tempo change, and each pitch and mute change,
+// goes at the start of the frame the driver plays it in. Frame timing also leaves out the note ons at or after the end.
+Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, uint16_t silenced, const TuneHeader& header,
+                    const SongPlan& plan, bool frame_timing)
 {
     Simulation sim;
-    Sequencer seq(rom, info, song);
+    Sequencer seq(rom, info, song, silenced);
     TickClock clock(header.ticks_per_quarter);
     std::array<int64_t, kChannels> last = {};
     MuteTracker mute_tracker;
@@ -378,6 +391,7 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, const Tune
         sim.end_envelopes[size_t(ch)] = seq.Channel(ch).envelope;
     }
 
+    LeaveOutChannels(sim, silenced);
     if (frame_timing)
     {
         PutOnFrames(sim, plan, header.ticks_per_quarter, frames, seq.SlotCount());
@@ -1193,6 +1207,13 @@ int DroppedNotes(const Simulation& sim, const SongPlan& plan, uint32_t track_mas
     return dropped;
 }
 
+// Returns the version of tune `song` that `settings` picks, or the first where the tune has no such version.
+SongVersion PickedVersion(const DriverInfo& info, int song, const ConvertSettings& settings)
+{
+    const std::vector<SongVersion> versions = TuneVersions(info, song);
+    return versions[size_t(std::clamp(settings.version, 0, int(versions.size()) - 1))];
+}
+
 // Writes the files of tune `song` after Run() has converted it: the MIDI file, and the SoundFont unless the tune uses
 // `shared`. With `shared`, the tune's presets go in bank `bank` there. Adds the warnings to `report`. Sets `report.ok`
 // once the files are written.
@@ -1237,13 +1258,16 @@ void WriteTune(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
                                   " is another set of instruments' in the drum bank, which some players use there");
     }
 
-    // The tune's number has two digits, or more from 100 on, as Music::FileNumber() gives it.
+    // The tune's number has two digits, or more from 100 on, as Music::FileNumber() gives it. A version after the first
+    // has its name in the titles and its suffix in the files' names.
     const std::string number = SongNumber(song, 0);
-    const std::string title = rom.Title() + " #" + number;
-    char about[160];
-    std::snprintf(about, sizeof about, "%s (%s) tune %d, header at 0x%08X, converted by %s", rom.Title().c_str(),
-                  rom.GameCode().c_str(), song, unsigned(header.address), kProgramName);
-    const std::string stem = SongStem(settings, number);
+    const SongVersion version = PickedVersion(info, song, settings);
+    const std::string named = version.name.empty() ? "" : " " + version.name;
+    const std::string title = rom.Title() + " #" + number + named;
+    char about[192];
+    std::snprintf(about, sizeof about, "%s (%s) tune %d%s, header at 0x%08X, converted by %s", rom.Title().c_str(),
+                  rom.GameCode().c_str(), song, named.c_str(), unsigned(header.address), kProgramName);
+    const std::string stem = SongStem(settings, number) + version.suffix;
 
     std::string error;
     report.midi_path = stem + ".mid";
@@ -1281,8 +1305,10 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
         return report;
     }
 
+    // Each version of the tune that the game plays by the water holds the other version's channels at a level of 0.
     SongPlan plan = PlanTune(rom, info, header, settings.loops);
-    const Simulation sim = Simulate(rom, info, song, header, plan, settings.frame_timing);
+    const uint16_t silenced = SilencedChannels(info, song, settings.version == kUnderWater);
+    const Simulation sim = Simulate(rom, info, song, silenced, header, plan, settings.frame_timing);
 
     // A tune that the model gave up on ends where it stopped.
     if (sim.cut_off)
@@ -1334,6 +1360,16 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
 }
 
 } // namespace
+
+std::vector<SongVersion> TuneVersions(const DriverInfo& info, int song)
+{
+    if (song != info.water.tune)
+    {
+        return {SongVersion()};
+    }
+
+    return {SongVersion(), {"under water", "_underwater"}};
+}
 
 SongReport InspectSong(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings)
 {

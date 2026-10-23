@@ -65,6 +65,55 @@ at `0x080AF61C`. Its RAM holds:
 | `0x03001294` | samples a frame |
 | `0x03003D30` | the output buffer flag |
 
+### Donkey Kong Country 3's channel levels
+
+The game changes the channels' levels in one tune only. Tune 12, Enchanted
+Riverbank, has two arrangements. Channels 0-3 play the arrangement above
+water. Channels 4-8 play the one under water. A routine at `0x08085CE0` runs
+as a level starts and then in every frame. While tune 12 plays, the routine
+works out whether the player is swimming. It then lowers the levels of the
+channels of the arrangement that the player has left by 16 a frame, down to 0.
+Next it raises the levels of the other arrangement's channels in the same way,
+up to 128. A full change therefore takes 16 frames, about 0.27 s. The driver
+gives every channel a level of 128 as it starts a tune. The tune's first frame
+therefore plays both arrangements.
+
+`agbsf2` writes a pair of files for each arrangement. The channels of the other
+arrangement have a level of 0 from the start (see [Voices](#voices)). The files
+don't have the fades. Detection finds the routine's choice of channels by its
+Thumb code:
+
+```
+mov  r1, r8                ; 4641: 0 under water, 1 above
+cmp  r1, #0                ; 2900
+beq  under                 ; D0xx
+movs r2, #first out        ; 22xx: the channels to fade out, from r2 to r5
+movs r5, #last out         ; 25xx
+movs r0, #first in         ; 20xx: the channels to fade in, from ip to r3
+mov  ip, r0                ; 4684
+movs r3, #last in          ; 23xx
+b    ...                   ; E0xx
+under:
+movs r2, #first out        ; 22xx
+movs r5, #last out         ; 25xx
+movs r1, #first in         ; 21xx
+mov  ip, r1                ; 468C
+movs r3, #last in          ; 23xx
+```
+
+Detection requires each state to fade in the channels that the other fades
+out. Up to 0x100 bytes before those moves, the routine checks the tune:
+
+```
+ldr  r0, [r0]              ; 6800
+cmp  r0, #tune             ; 28xx
+bne  ...                   ; D1xx
+movs r0, #1                ; 2001
+mov  r8, r0                ; 4680
+```
+
+`agbsf2 --info` gives the tune and the channels of each arrangement.
+
 ## Architecture
 
 The driver has two parts. The routines that the game calls are Thumb code in
@@ -473,6 +522,8 @@ channels before those on lower ones. In *Donkey Kong Country 3*'s revision, a
 note whose level is 0 before its velocity and envelope count isn't mixed and
 doesn't count towards the limit. At a music volume of 69, that's every note of
 a channel at volume 0.
+So is every note of a channel that the game holds at a level of 0 (see
+[Donkey Kong Country 3's channel levels](#donkey-kong-country-3s-channel-levels)).
 
 `agbsf2`'s model makes the same choices, frame by frame. Where the mixer
 leaves out every note of a key on a channel, the MIDI file mutes the key with

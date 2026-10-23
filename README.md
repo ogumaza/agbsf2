@@ -58,6 +58,8 @@ The tool reports unrecognised revisions of Konami's driver.
 * *Super Robot Taisen R*
 * *Super Robot Taisen J*, which has a later revision of the driver
 
+The sound effects of these games are converted with their music.
+
 ### Nintendo R&D2's driver
 
 * *The Legend of Zelda: A Link to the Past*, in *A Link to the Past & Four
@@ -65,6 +67,8 @@ The tool reports unrecognised revisions of Konami's driver.
 * *Super Mario Advance 2: Super Mario World*, which has an older revision of
   the driver
 * *Super Mario Advance 3: Yoshi's Island*
+
+The sound effects of these games are converted with their music.
 
 ### MP2K
 
@@ -153,7 +157,10 @@ agbsf2 game.gba
 This writes one `.mid` and one `.sf2` per song to a folder beside the input
 file, with the same name: for example `game/game_00.mid` and
 `game/game_00.sf2`. A game with more than one sound driver gets every driver's
-songs (see [Options](#options)). Pass several files to convert them together.
+songs (see [Options](#options)). Enchanted Riverbank in *Donkey Kong Country 3*
+gets a second pair for the arrangement that the game plays under water (see
+[MIDI from Rare's driver](#midi-from-rares-driver)). Pass several files to
+convert them together.
 Characters that Windows forbids in filenames are replaced with underscores.
 Trailing dots and spaces are removed, and reserved device names such as `CON`
 get an underscore prefix.
@@ -194,7 +201,7 @@ Each file's results go in a folder next to it, as above.
 | `--psg-exclusive` | MP2K only: an exclusive class for each PSG channel in the SoundFont. A track's next note on a PSG channel then ends the slow release of the note before it. The game cuts that note off there too. A note that another track cuts off still fades out (see [SoundFont from MP2K](#soundfont-from-mp2k)) |
 | `--frame-timing` | put each event on the frame the game plays it in, rather than on the song's beat (see [Output](#output)) |
 | `--dump` | also write a text listing of every command of each song (`NAME_NN.txt`) |
-| `--info` | print each driver found, with its tables and a list of its songs, then exit. The track count, length and loop reflect the current conversion options |
+| `--info` | print each driver found, with its tables and a list of its songs, then exit. The track count, length and loop reflect the current conversion options. A song that the game plays in two versions gets a line for each |
 | `--driver NAME` | use only `konami`, `rare`, `quintet`, `rd2`, `brownie`, `ubimilan`, `krawall` or `mp2k`, instead of every driver detection finds |
 | `--song-table ADDR`, `--song-count N` | override detection: the song table's address (hex), or for Nintendo R&D2's driver the address of the game's settings for it, for Ubisoft Milan's driver the sound bank, and for Krawall a table of the game's modules, and the number of songs |
 | `--sample-table ADDR`, `--mix-rate HZ` | override detection in Konami's driver: the sample table's address (hex) and the mixer's rate |
@@ -408,6 +415,17 @@ tune's commands:
 * Notes that share a tick with a program change use the same program as in
   the driver.
 
+*Donkey Kong Country 3* plays Enchanted Riverbank (tune 12) as two
+arrangements: channels 0-3 above water and channels 4-8 under water. The
+game's code holds the channels of the other arrangement at a level of 0. The
+mixer then leaves out their notes. Those notes don't count towards the limit of
+8 voices either. The tune therefore gets two pairs of files: `game_12.mid` and
+`game_12.sf2` above water, and `game_12_underwater.mid` and
+`game_12_underwater.sf2` under water. Each pair leaves out the channels of the
+other arrangement. In the game, the music fades from one arrangement to the
+other over about a quarter of a second when the player dives in or climbs out.
+The files don't have those fades.
+
 ### SoundFont from Rare's driver
 
 Each tune's SoundFont has a preset for each program the tune plays, named
@@ -457,7 +475,15 @@ Each MIDI file has a conductor track with the tempo and loop markers, and a
 track for each of the song's channels that plays notes: `Square 1`,
 `Square 2`, `Wave`, `Noise`, `PCM A` and `PCM B`, on MIDI channels 1-6.
 
-The song's tempo comes from its first channel. The MIDI file has 3552 ticks
+The songs are numbered with the music file's songs first, then the sound
+effects. A sound effect has the songs' format. The game plays it on the
+driver's sound effect channels. A channel whose data starts with `FF` is left
+to the music. The MIDI file ends when the last of the sound effect's channels
+ends.
+
+The song's tempo comes from its first channel. A sound effect that leaves its
+first channel to the music keeps the driver's starting tempo: 90, or 120 in
+*Super Robot Taisen J*. The MIDI file has 3552 ticks
 per quarter note, or 37 per song tick. At tempo T, a driver frame lasts
 exactly T MIDI ticks. The driver plays each note at the start of the frame
 that its tick falls in, and the MIDI file keeps each note on its own tick,
@@ -664,6 +690,12 @@ Each of the sequence's tracks that plays notes gets a MIDI track, named
 track 9 is on channel 11, away from the drum channel. A separate first track
 holds the tempo and loop markers.
 
+The songs are numbered with the driver's sequences first, then its sound
+effects. A sound effect is a track of one of the sound effects' sequences. The
+game plays it on another player than the music's. Its MIDI file holds the
+track and each track that it starts with `F8`. The file ends when the last of
+them ends.
+
 The driver counts time in 150ths of a tick, with 24 ticks to the quarter note,
 and each frame takes the tempo off the count. The MIDI file has 3600 ticks per
 quarter note, one for each 150th, so a frame at the driver's tempo T is exactly
@@ -671,7 +703,7 @@ T ticks long, and each note stays on its own tick.
 
 | Game | MIDI |
 |---|---|
-| note | note on/off; a velocity of v is written as 127 × √(v/127), since a SoundFont player's level goes with the square of the velocity |
+| note | note on/off. A velocity of v is written as 127 × √(v/127). A SoundFont player's level goes with the square of the velocity. A PSG voice's note plays at 127 (see below) |
 | `C2` instrument, `C7` bank | program change, numbering the sequence's instruments in the order it first plays them |
 | `C3` pan, `E0` volume, `EA` the player's volume | CC10 for pan and CC11 for loudness, as with Konami's driver |
 | slides, `E1` bend, the LFO | pitch bend, a frame at a time, with the bend range set per channel by RPN 0 |
@@ -681,13 +713,32 @@ The MIDI file follows what the driver plays:
 * The driver has 7 voices for samples and one for each PSG channel, and a note
   only takes a voice that its priority allows. The MIDI file leaves out the
   notes the driver can't play, and ends a note where another takes its voice.
-* A note ends when the driver releases it. Its length in frames depends on the
-  tempo when it starts. The driver also releases it when its track starts or
-  ends legato, ends, or restarts.
+* A sample voice's note ends when the driver releases it. Its length in
+  frames depends on the tempo when it starts. The driver also releases it when
+  its track starts or ends legato, ends, or restarts.
 * A track's pitch bend follows its newest note.
+* The driver plays velocities up to 255. A MIDI velocity stops at 127. On a
+  track whose sample notes play above 127, each velocity v is written as
+  127 × √(v/s). Here s is the track's loudest velocity. The track's CC11 raises
+  its levels by s/127 to make up for it. Where that would take CC11 above 127,
+  s is lower. The loudest notes then play quieter than in the game.
+* A PSG voice's note plays at full velocity. Its CC11 follows the channel's
+  volume, frame by frame. For each segment of a square's or the noise's
+  envelope, the driver works out a whole volume from 0 to 15 for the
+  segment's start and one for its end. The volume comes from the velocity, the
+  volumes of the track and the player, and the envelope's level. The PSG's
+  envelope then steps the volume from one to the other. The wave channel has
+  five levels: none, 25%, 50%, 75% and 100%. At the start of each segment, the
+  driver picks one of them from the velocity and the volumes. The note lasts
+  until the channel falls silent or another note takes the channel. The
+  driver's release fades the volume out. The note lasts through the fade.
+* A sequence without a loop ends with its last track. A PSG channel can still
+  sound then. The driver goes on with a release's fade. The MIDI file then
+  ends where the last channel falls silent.
 * The PSG plays a note in the middle at the centre pan, 0x40. At any other
-  pan, it plays the note at twice the level on one side alone. On a track whose
-  notes are all PSG notes other than drums, CC10 and CC11 follow that rule.
+  pan, it plays the note on one side alone. The driver doubles the note's
+  level there, up to the channel's highest volume. On a track whose notes are
+  all PSG notes other than drums, CC10 follows that rule.
 
 ### SoundFont from Nintendo R&D2's driver
 
@@ -719,8 +770,9 @@ named after its bank and number.
   of it. That player plays the zone too quietly: 6 dB down becomes 15 dB.
   A sample's release reduces its level by a fraction each frame, which is a
   straight line in decibels, as in a SoundFont.
-  The driver leaves out the wave voice's envelope. The voice holds its level
-  until its release, and the release fades the voice like a sample.
+  The PSG voices' zones play at a constant level, without an envelope. Their
+  notes' CC11 follows the channel's volume (see
+  [MIDI from Nintendo R&D2's driver](#midi-from-nintendo-rd2s-driver)).
 
 With `--single-sf2`, each sequence's instruments are in the bank numbered after
 the sequence.
@@ -967,9 +1019,11 @@ SoundFonts.
 * **Mixer character.** The driver mixes in mono at 13379 Hz with linear
   interpolation, and writes 8-bit output. A SoundFont player plays the same
   samples more cleanly, and the MIDI files leave every channel in the centre.
-* **The game's settings.** In *Donkey Kong Country 3*, the game can fade
-  channels out and start a tune at a marker partway through. The conversion
-  plays each tune from its start, with every channel at its own volume.
+* **The game's settings.** In *Donkey Kong Country 3*, the game can start a
+  tune at a marker partway through. The conversion plays each tune from its
+  start. The game also fades Enchanted Riverbank from one arrangement to the
+  other when the player dives in or climbs out. Each of the tune's files holds
+  one arrangement from start to end (see "MIDI from Rare's driver").
 * **Sound effects** aren't converted. The driver plays them from a separate
   table, which only the game's code uses.
 
@@ -994,8 +1048,9 @@ SoundFonts.
   the wave channel's patterns have no DC offset. The square waves have one at
   duty cycles other than 50%. On the hardware, the output capacitor removes the
   DC offset.
-* **Sound effects** aren't converted. The driver plays them on channels of its
-  own, which only the game's code starts.
+* **Sound effects** play on their own in their conversions. In the game, a
+  sound effect takes each sound channel that it plays on from the music while
+  it plays.
 
 ### Nintendo R&D2's driver
 
@@ -1006,17 +1061,20 @@ SoundFonts.
 * **Pitch bends.** The driver bends each voice on its own, and its LFO starts
   again with each note. A MIDI channel has one bend, which follows the track's
   newest note, so notes that play together on a track share it.
-* **Envelopes.** The SoundFont's envelopes approximate the driver's straight
-  lines between points.
-* **Legato.** The driver plays a track's notes in legato on one voice, which
-  keeps its envelope. A SoundFont player starts each note's envelope again.
+* **Envelopes.** A sample's SoundFont envelope approximates the driver's
+  straight lines between points.
+* **Legato.** The driver plays a track's notes in legato on one voice. The
+  voice keeps its envelope. A SoundFont player starts each sample note's
+  envelope again. A PSG voice's CC11 continues through legato.
 * **Echo.** The driver can add an echo to the voices of tracks with an echo
   send, but only the game's code turns it on, so the conversion leaves it out.
-* **PSG.** The PSG's envelope steps the level through 16 values, where the
-  SoundFont's envelope is smooth. The PSG's notes keep equal-tempered keys.
-  The driver caps a note's doubled level at the PSG's highest level. The MIDI
-  file doubles every such note. A loud one can then play up to 6 dB louder than
-  in the game.
+* **PSG.** The MIDI file changes a square's or the noise's CC11 at the start
+  of a frame. The PSG's envelope steps the volume at 64 Hz. The hardware's step
+  can then come up to a frame before the step in the MIDI file. The PSG's notes
+  keep equal-tempered keys. Below 100%, the wave channel scales each 4-bit
+  step of the wave and drops the fraction. The SoundFont plays the wave
+  unrounded at the level's share. At 25% and 50%, the game's wave then plays a
+  little quieter and coarser.
 * **Mixer character.** The driver mixes in stereo at 10512 Hz without
   interpolation, and writes 8-bit output. A SoundFont player plays the same
   samples more cleanly.
@@ -1031,7 +1089,9 @@ SoundFonts.
   `agbsf2` reads the settings that *Super Mario Advance 3*'s play-music
   routine makes. For another game, the MIDI file plays every sequence with all
   7 sample voices, at the driver's default volume.
-* **Sound effects** aren't converted. Only the game's code starts them.
+* **Sound effects** play on their own in their conversions. Each has all 7 of
+  the driver's sample voices. In the game, a sound effect and the music take
+  voices from each other by their priorities.
 
 ### MP2K
 

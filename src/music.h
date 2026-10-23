@@ -49,8 +49,16 @@ struct ConvertSettings
     bool voice_channels = false;      // a MIDI channel for each of the driver's sound channels, where it can
     bool psg_exclusive = false;       // an exclusive class for each PSG channel on the slow releases (MP2K)
     bool frame_timing = false;        // each event on the frame the driver plays it in, rather than on the beat
+    int version = 0;                  // the version of the song to convert: an index into Music::Versions()
     std::string out_dir = ".";
     std::string base_name = "song";
+};
+
+// A version of a song: one of the ways in which the game plays it.
+struct SongVersion
+{
+    std::string name;   // what messages give after the song's number, such as "under water", or nothing
+    std::string suffix; // what the files' names have after the song's number, such as "_underwater", or nothing
 };
 
 // A song's length, loop points, track count and conversion result. Only InspectSong() gives the song's address.
@@ -86,6 +94,11 @@ public:
 
     // Returns false if entry `song` of the song table is empty, so there's no song to convert.
     virtual bool HasSong(int song) const = 0;
+
+    // Returns the versions of a song that ConvertSong() writes, each to separate files. The first is the song as the
+    // game starts it. It has no name or suffix. Only Rare's driver gives more: Donkey Kong Country 3 plays Enchanted
+    // Riverbank above water and under water.
+    virtual std::vector<SongVersion> Versions(int song) const;
 
     // Works out a song's length, loop and tracks the way ConvertSong() does, without writing anything.
     virtual SongReport InspectSong(int song, const ConvertSettings& settings) const = 0;

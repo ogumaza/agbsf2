@@ -190,6 +190,16 @@ The driver's init sets the music volume to 128. In *Donkey Kong Country 3*
 the same volume for most tunes. At that volume the mixer leaves out the notes
 of a channel at volume 0. The model does the same.
 
+*Donkey Kong Country 3* plays tune 12 on channels 0-3 above water and on
+channels 4-8 under water. The game holds the channels of the other arrangement
+at a level of 0. `agbsf2` writes `rom_12` above water and `rom_12_underwater`
+under water. `compare_notes.py` checks each file with the levels of its
+arrangement. Before each frame, `driver_emu.py` sets the other arrangement's
+channels to a level of 0. The script leaves out their notes.
+`driver_emu.py render` plays tune 12 above water, or under water with
+`--under-water`. `compare_trace.py` and `driver_emu.py trace` keep every
+channel at a level of 128. So does `agbsf2 --trace`.
+
 ### Working out Rare's driver
 
 The driver's init is easy to find in a ROM, because it copies the driver's ARM
@@ -229,6 +239,10 @@ the patterns in `docs/rare.md`, and add them to `GAMES`:
 * In a revision with a music volume, `music_volume` is the word that holds it.
   After each request, the script sets it to the volume at which `agbsf2` plays
   the game's tunes.
+* In a revision with channel levels, `channel_levels` is the 16 bytes that hold
+  them. `water` gives a tune that the game plays above and under water, with
+  the channels of each arrangement. `docs/rare.md` describes the game's routine
+  that sets the levels.
 * `slots_per_channel` and `fx_count` give the note slots each channel has and
   the number of sound effect records, if they aren't 6 and 5. The table at the
   start of `docs/rare.md` gives them for each checked game.
@@ -245,7 +259,7 @@ check it.
 
 | Script | Description |
 |---|---|
-| `driver_emu.py` | runs the game's sound driver under the Unicorn ARM emulator: its writes to the sound, DMA and timer registers, each music channel's position and countdown, and a render of its output |
+| `driver_emu.py` | runs the game's sound driver under the Unicorn ARM emulator: its writes to the sound, DMA and timer registers, each channel's position and countdown, and a render of its output |
 | `compare_trace.py` | diffs `agbsf2 --trace` against the emulated driver's register writes, frame by frame, for every song |
 | `compare_notes.py` | checks a conversion's MIDI files and SoundFonts against what the emulated driver plays, frame by frame |
 
@@ -283,10 +297,16 @@ driver's frame, each frame is compared with the same stretch of the note. A
 note on a MIDI channel that the driver doesn't have, or one that starts after
 all of the driver's channels have ended, counts as a difference.
 
+`agbsf2` numbers the sound effects after the music file's songs. The scripts
+check them in the same way. `driver_emu.py` plays a sound effect through the
+game's routine for sound effects, with no music playing, and follows the sound
+effect channels. `compare_notes.py` starts from the registers that the game's
+sound init leaves. A sound effect plays on from them.
+
 `driver_emu.py render` writes the driver's stereo output at 32768 Hz: the PSG
 through `psg_model.py`, and each FIFO's sample at its timer's rate.
-`--channels` renders only the music channels it names, all four PSG channels,
-one of them, or none, with any of the FIFOs.
+`--channels` renders only the channels it names, all four PSG channels, one of
+them, or none, with any of the FIFOs.
 
 ### Working out Quintet's driver
 
@@ -310,8 +330,12 @@ built in. For another game, add an entry to `GAMES` with:
   driver's init and set up its files, play a song by number, and run the
   per-frame routine. The play-song routine is the one that calls the driver's
   play routine (see `docs/quintet.md`), and the other two are near it.
-* `channels`: the table of the 6 music channel records' addresses, which the
-  driver's play routine loads.
+* `play_effect`: the game's routine that plays a sound effect by number. It
+  calls the driver's routine for sound effects.
+* `channels` and `effect_channels`: the tables of the 6 music channel records'
+  addresses and the 6 sound effect channel records'. The driver's play routine
+  loads both.
+* `songs`: the number of songs in the music file. `agbsf2 --info` gives it.
 * `countdown`: the offset of the countdown in a channel's record, `0x18` in
   the A revision and `0x1A` in the J revision.
 
@@ -359,6 +383,20 @@ while it's the newest note of its track, the MIDI file's pitch bend has to
 follow its voice's pitch, frame by frame. A sequence named in `--songs` that has
 no MIDI file mustn't play any notes.
 
+A PSG voice's note plays at velocity 127. It ends where its PSG channel falls
+silent, or where another note takes the channel. In each frame until then, its
+CC11 has to give the channel's volume at the frame's start, on the sides that
+NR51 gives the channel. `psg_model.py` works out the volume from the driver's
+writes to the PSG's registers, with the hardware's envelopes. The wave
+channel's volume is 15 times the share of its full level that NR32 sets.
+
+`agbsf2` numbers the sound effects after the sequences. Both scripts check
+them in the same way. On a track whose sample notes play above velocity 127,
+the conversion divides each velocity by a scale. The track's CC11 raises its
+levels by the same scale (see `README.md`). `compare_notes.py` takes the scale
+from the track's loudest note. A track whose CC11 reaches 127 can have a
+smaller scale. Its notes' velocities then have to fit one scale.
+
 `driver_emu.py render` writes the mixer's stereo output at 10512 Hz: the 8-bit
 samples the driver sends to the FIFOs, without the PSG. `--tracks` mutes the
 player's other tracks with their mute flags. A track's output can then be
@@ -390,6 +428,11 @@ with:
   settings.
 * `request` and `commit`: the driver's routines that request a sequence for a
   player and hand the requests over (see `docs/rd2.md`).
+* `effect_request`, `effect_player` and `settings`: the driver's routine that
+  requests a sound effect, the first of the players that the game plays its
+  sound effects on, and the variable that holds the address of the game's
+  settings. The script numbers the sound effects after the sequences, from the
+  tables that the settings give.
 * `vblank`, `frame` and `requests`: the driver's VBlank routine, its per-frame
   routine, and the per-frame routine's first step, which carries out the
   requests.

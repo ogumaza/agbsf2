@@ -43,6 +43,10 @@ constexpr uint32_t kWaveRam = 0x04000090;
 // The NRx2 value that tells the PSG voices to leave a channel's envelope as it is.
 constexpr uint8_t kNoEnvelope = 8;
 
+// Each PSG channel's NRx4. A write that sets its bit 7 starts the channel again.
+constexpr uint32_t kRestartRegisters[kPsgVoices] = {0x04000065, 0x0400006D, 0x04000075, 0x0400007D};
+constexpr uint8_t kRestartBit = 0x80;
+
 // The time of a track that F8 has started and that hasn't run yet.
 constexpr uint64_t kFresh = ~uint64_t(0);
 
@@ -236,10 +240,10 @@ uint8_t NoiseTableEntry(const Rom& rom, const DriverInfo& info, uint32_t index)
     return rom.U8(info.noise_table + std::min<uint32_t>(index, kLastIndex));
 }
 
-Sequencer::Sequencer(const Rom& rom, const DriverInfo& info, int sequence)
-    : rom_(rom), info_(info), traits_(TraitsOf(info.revision)), sequence_(sequence)
+Sequencer::Sequencer(const Rom& rom, const DriverInfo& info, int song)
+    : rom_(rom), info_(info), traits_(TraitsOf(info.revision)), sequence_(song), effect_(SongEffect(info, song))
 {
-    valid_ = sequence >= 0 && sequence < int(info.sequence_addresses.size());
+    valid_ = effect_ ? effect_->address != 0 : song >= 0 && song < int(info.sequence_addresses.size());
 
     // The voices as the driver's init leaves them: the sample voices in the free list, and a PSG voice for each of the
     // PSG's channels.
@@ -283,9 +287,17 @@ void Sequencer::Write(uint32_t address, uint8_t size, uint32_t value)
     for (uint8_t i = 0; i < size; i++)
     {
         const uint32_t at = address + i - kRegisters;
+        const uint8_t byte = uint8_t(value >> (8 * i));
         if (at < registers_.size())
         {
-            registers_[at] = uint8_t(value >> (8 * i));
+            registers_[at] = byte;
+        }
+        for (int c = 0; c < kPsgVoices; c++)
+        {
+            if (address + i == kRestartRegisters[c] && (byte & kRestartBit))
+            {
+                restarted_ = uint8_t(restarted_ | (1 << c));
+            }
         }
     }
 }
@@ -308,6 +320,11 @@ void Sequencer::Start()
     started_ = true;
     if (!valid_)
     {
+        return;
+    }
+    if (effect_)
+    {
+        StartEffect();
         return;
     }
 
@@ -348,6 +365,25 @@ void Sequencer::Start()
     player_.active = true;
 }
 
+// Carries out the game's request for a sound effect: stops what the player was playing and starts the effect's track as
+// the player's track 0. The request leaves the sample voices as they are.
+void Sequencer::StartEffect()
+{
+    StopPlayer();
+    player_ = Player();
+    player_.sequence = info_.effect_sequence_addresses[size_t(effect_->sequence)];
+    player_.banks = info_.effect_bank_list_addresses[size_t(effect_->sequence)];
+    player_.effect = true;
+    const int slot = AllocateTrack();
+    player_.tracks[0] = slot;
+    if (slot >= 0)
+    {
+        StartTrack(slot, effect_->address, 0, 0);
+    }
+
+    player_.active = true;
+}
+
 int Sequencer::AllocateTrack() const
 {
     for (int slot = 0; slot < kTrackSlots; slot++)
@@ -362,7 +398,8 @@ int Sequencer::AllocateTrack() const
 }
 
 // Starts a track in `slot` at `position`, after stopping the track the slot had. It starts with the player's first
-// bank, centred, at full volume, with the notes' default length and velocity.
+// bank, centred, at full volume, with the notes' default length and velocity. A sound effect's track starts at a
+// priority of 12 with an echo send of 7F. Like a track after C8, its notes wait for their length.
 void Sequencer::StartTrack(int slot, uint32_t position, int number, uint64_t units)
 {
     if (tracks_[size_t(slot)].active)
@@ -376,6 +413,12 @@ void Sequencer::StartTrack(int slot, uint32_t position, int number, uint64_t uni
     t.active = true;
     t.number = number;
     t.units = units;
+    if (player_.effect)
+    {
+        t.priority = kEffectPriority;
+        t.echo = kEffectEcho;
+        t.timed_notes = 1;
+    }
     SetBank(t, 0);
 }
 
@@ -447,6 +490,7 @@ void Sequencer::Step()
 {
     events_.clear();
     writes_.clear();
+    restarted_ = 0;
     if (!started_)
     {
         Start();

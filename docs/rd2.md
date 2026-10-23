@@ -47,6 +47,7 @@ In `AZLE` the routines are:
 | `0x0812A6CC` | init: stores the settings, sets up the sound registers, copies the ARM routines from `0x0812CC58` to `0x03001400`, and sets up the voices, tracks and players |
 | `0x0812A044` | the game's play-music routine: `r0` is the game's music number, which the byte table at `0x08198C50` turns into a sequence |
 | `0x0812C718` | request a sequence: `r0` = player, `r1` = sequence |
+| `0x0812C73C` | request a sound effect: `r0` = player, `r1` = the sound effects' sequence, `r2` = the track |
 | `0x0812C704` | hand over the requests made since its last call, for the next frame to carry out |
 | `0x0812A798` | the VBlank routine: restarts timer 0 and the DMA of the next output buffers |
 | `0x0812A7A4` | the per-frame routine |
@@ -130,9 +131,8 @@ first voice that plays. The handler then keeps the voice on a separate list.
 Neither the notes nor the mixer use that list. To give voices back, the
 handler moves them from that list to the free voices.
 
-A sound effect is one track of one of the sound effects' sequences, which a
-player plays with a priority of 12 and an echo send of `7F`. `agbsf2`
-doesn't convert sound effects.
+A sound effect is a track of one of the sound effects' sequences (see
+[Sound effects](#sound-effects)).
 
 ## Sequences
 
@@ -142,6 +142,33 @@ offset of 0 means the track doesn't start with the sequence, although `F8` can
 start it later. A sequence's list of banks is a list of halfwords: entry `n`
 is the bank that `C7 n` picks, and a track starts with entry 0. The lists of
 different sequences may share entries.
+
+## Sound effects
+
+A sound effect is a track of one of the sound effects' sequences. Such a
+sequence has no count of tracks. It starts with the offsets of its tracks, a
+halfword each, from the sequence's start. The table doesn't give its length.
+`agbsf2` takes it to end where the first track starts. Each of the sound
+effects' sequences has a list of banks in the music's form (see
+[The game's settings](#the-games-settings)).
+
+The game's request for a sound effect names the sequence and an entry of its
+table. Like a request for a sequence, it stops what the player was playing and
+resets the player. It then sets the player's byte `0x43` to 1 and starts the
+track as the player's track 0. A track that starts on such a player starts at
+a priority of 12 with an echo send of `7F`. Like a track after `C8`, it makes
+each note wait for its length. A track that `F8` starts gets the same
+settings. `F8` then copies the priority and the echo send of the track that
+runs it. The request leaves the sample voices as they are. The games play
+their sound effects on other players than the music's: *A Link to the Past* on
+players 0x10 and up, and *Super Mario Advance 2* and *3* on players 0x11 and
+up.
+
+`agbsf2` converts each sound effect as a song. The sequences come first, then
+the sound effects: the tracks of the first sound effects' sequence in order,
+then those of the next. An entry whose offset is 0 gives no song. A sound
+effect plays with the 7 sample voices that init sets up. Its conversion lasts
+until the last of its tracks ends, the tracks that `F8` starts included.
 
 ## Players and tracks
 
@@ -501,6 +528,7 @@ In `AA2E` the routines are:
 | `0x0809B9A8` | init, which copies the ARM routines from `0x0809DCDC` to `0x03001518` |
 | `0x0809B348` | the game's play-music routine: the low byte of each halfword of the table at `0x08177064` turns the game's music number into a sequence |
 | `0x0809D840` | request a sequence: `r0` = player, `r1` = sequence |
+| `0x0809D864` | request a sound effect: `r0` = player, `r1` = the sound effects' sequence, `r2` = the track |
 | `0x0809D82C` | hand over the requests made since its last call |
 | `0x0809BA74` | the VBlank routine |
 | `0x0809BA80` | the per-frame routine |
@@ -619,6 +647,7 @@ In `A3AE` the routines are:
 | `0x0812CE84` | init, which copies the ARM routines from `0x0812F3FC` to `0x03001368` |
 | `0x0812C3B4` | the game's play-music routine: the low byte of each halfword of the table at `0x083077E4` turns the game's music number into a sequence |
 | `0x0812EEBC` | request a sequence: `r0` = player, `r1` = sequence |
+| `0x0812EEE0` | request a sound effect: `r0` = player, `r1` = the sound effects' sequence, `r2` = the track |
 | `0x0812EEA8` | hand over the requests made since its last call |
 | `0x0812CF50` | the VBlank routine |
 | `0x0812CF5C` | the per-frame routine |
@@ -698,6 +727,10 @@ In the Super Mario Advance 2 revision, the code of four of them differs:
 The sequence count is the smaller of the entry counts in the sequence table
 and the table of bank lists. `--song-table` overrides the detected settings
 address, and `--song-count` overrides the sequence count.
+
+The count of the sound effects' sequences is the smaller of the entry counts
+in their table and in the table of their bank lists. A sound effects'
+sequence's table of tracks ends where its first track starts.
 
 Detection also looks for the lookup in Super Mario Advance 3's play-music
 routine of the music's entry in the game's table:

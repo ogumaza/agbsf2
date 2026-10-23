@@ -91,8 +91,8 @@ struct Channel
     uint32_t macro_start = 0;                  // 0x8C: DB's macro, which each note starts
     uint8_t macro_hold = 0;                    // 0x90: frames to hold each setting, less 1
     uint8_t macro_count = 0;                   // 0x91
-    uint8_t sample_bank = 0;                   // the J revision's bank of PCM samples, 0 for music
-    uint8_t macro_bank = 0;                    // its bank of noise macros
+    uint8_t sample_bank = 0;                   // the bank of PCM samples: 0 for music, 1 for sound effects
+    uint8_t macro_bank = 0;                    // the bank of noise macros: 0 for music, 1 for sound effects
 };
 
 // The driver's record of a FIFO's sample.
@@ -174,12 +174,13 @@ uint32_t SampleCycles(uint32_t rate);
 // driver's update at the end of a frame stops or loops it. The driver does that when the next frame would reach `end`.
 uint32_t FifoFrames(uint32_t position, uint32_t rate, uint32_t end);
 
-// Plays a song one frame at a time, as the driver's per-frame routine does.
+// Plays a song one frame at a time. Each step does what the driver's per-frame routine does. A sound effect plays on
+// the driver's sound effect channels, with no music playing.
 class Sequencer
 {
 public:
-    // Sets up `song` as the driver's play routine does after the game's sound init. `rom` and `info` have to outlive
-    // the sequencer.
+    // Sets up `song` as the driver's play routine does after the game's sound init, or a sound effect as the driver's
+    // routine for sound effects does. `rom` and `info` have to outlive the sequencer.
     Sequencer(const Rom& rom, const DriverInfo& info, int song);
 
     // Returns true if the song's header was read.
@@ -209,7 +210,7 @@ public:
         return hardware_;
     }
 
-    // Returns true once every channel has ended.
+    // Returns true once every channel has ended. A sound effect's channels whose data starts with FF never play.
     bool Ended() const;
 
     const Channel& GetChannel(int c) const
@@ -248,7 +249,7 @@ private:
     void UpdateFifos();
     uint16_t PsgFrequency(const Channel& ch, int note) const;
     uint16_t PcmPitch(const Channel& ch, int note) const;
-    void LoadWave(int c, uint8_t wave);
+    void LoadWave(Channel& ch, uint8_t wave);
     void SelectMacro(Channel& ch, uint8_t macro);
     void SelectSample(int c, uint8_t sample);
     uint32_t SampleAddress(int bank, uint8_t sample);
@@ -288,7 +289,10 @@ private:
     const DriverInfo& info_;
     const RevisionTraits& traits_;
     bool valid_ = false;
+    bool effect_ = false; // the channels are the sound effect channels, and the image is theirs
     std::array<Channel, kChannels> channels_;
+    Channel music_wave_;                        // the music's idle wave channel under a sound effect
+    std::array<uint16_t, 12> music_image_ = {}; // the music's image under a sound effect: the PSG's reset values
     std::array<Fifo, 2> fifos_;
     std::array<uint16_t, 12> image_ = {};  // the registers the channels set, from SOUND1CNT_L to SOUNDCNT_H
     std::array<uint16_t, 12> shadow_ = {}; // the values last written to those registers

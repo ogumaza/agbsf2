@@ -329,8 +329,8 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
 bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::string& path, std::string& error)
 {
     SongHeader h;
-    if (song < 0 || song >= int(info.song_addresses.size()) ||
-        !ReadSongHeader(rom, info.song_addresses[size_t(song)], h))
+    const uint32_t address = SongAddress(info, song);
+    if (!address || !ReadSongHeader(rom, address, h))
     {
         error = "invalid song";
         return false;
@@ -338,10 +338,13 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
 
     std::string text;
     char line[320];
+    const int effect = EffectIndex(info, song);
+    const std::string name = effect >= 0 ? "song " + std::to_string(song) + ", sound effect " + std::to_string(effect)
+                                         : "song " + std::to_string(song);
     std::snprintf(line, sizeof line,
-                  "; %s (%s) song %d\n; header 0x%08X: %u bytes\n; columns: address, tick, bytes, command\n"
+                  "; %s (%s) %s\n; header 0x%08X: %u bytes\n; columns: address, tick, bytes, command\n"
                   "; each channel is listed as the driver plays it, repeats included, up to its end or its loop\n",
-                  rom.Title().c_str(), rom.GameCode().c_str(), song, unsigned(h.address), unsigned(h.length));
+                  rom.Title().c_str(), rom.GameCode().c_str(), name.c_str(), unsigned(h.address), unsigned(h.length));
     text += line;
 
     static constexpr const char* kChannelNames[kChannels] = {"square 1", "square 2", "wave", "noise", "PCM A", "PCM B"};

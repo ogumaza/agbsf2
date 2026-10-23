@@ -52,14 +52,14 @@ struct TrackStart
 
 // Lists the commands of the track at `address` in `sequence`, adding them to `text`. Follows the track as the driver
 // does: waits take up time, and so do notes after C8, and calls return. Adds each track that an F8 starts to `starts`.
-void ListTrack(const Rom& rom, const DriverInfo& info, uint32_t sequence, uint32_t address, std::string& text,
-               std::vector<TrackStart>& starts)
+// With `timed`, notes take up time from the start. A sound effect's track starts that way.
+void ListTrack(const Rom& rom, const DriverInfo& info, uint32_t sequence, uint32_t address, bool timed,
+               std::string& text, std::vector<TrackStart>& starts)
 {
     uint64_t tick = 0;
     uint16_t length = 0x7F;
     uint8_t velocity = 0x7F;
     uint16_t wait = 0;
-    bool timed = false;
     std::vector<uint32_t> stack;
     std::set<uint32_t> seen;
     for (int n = 0; n < kMaxListedCommands; n++)
@@ -316,37 +316,59 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
 
 bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::string& path, std::string& error)
 {
-    if (song < 0 || song >= int(info.sequence_addresses.size()))
+    const Effect* effect = SongEffect(info, song);
+    if (song < 0 || song >= SongCount(info) || (effect && !effect->address))
     {
         error = "invalid sequence";
         return false;
     }
 
-    const uint32_t sequence = info.sequence_addresses[size_t(song)];
-    const int count = rom.S8(sequence);
     std::string text;
     char line[320];
-    std::snprintf(line, sizeof line,
-                  "; %s (%s) sequence %d at 0x%08X: %d tracks\n; columns: address, tick, bytes, command\n"
-                  "; each track is listed as the driver plays it, calls included, up to its end or its loop\n"
-                  "; a track that F8 starts comes after the others, with ticks from its start\n",
-                  rom.Title().c_str(), rom.GameCode().c_str(), song, unsigned(sequence), count);
-    text += line;
-
     std::vector<TrackStart> starts;
     std::set<uint32_t> listed;
-    for (int t = 0; t < count && t < kPlayerTracks; t++)
+    uint32_t sequence = 0;
+    if (effect)
     {
-        const uint32_t offset = rom.U16(sequence + 2 + 2 * uint32_t(t));
-        if (offset == 0)
-        {
-            continue;
-        }
-
-        std::snprintf(line, sizeof line, "\n; ---- track %d at 0x%08X ----\n", t, unsigned(sequence + offset));
+        // A sound effect is one track of a sequence. The driver plays it as the player's track 0.
+        sequence = info.effect_sequence_addresses[size_t(effect->sequence)];
+        std::snprintf(line, sizeof line, "; %s (%s) sound effect %d: track %d of the effects' sequence %d at 0x%08X\n",
+                      rom.Title().c_str(), rom.GameCode().c_str(), song, effect->track, effect->sequence,
+                      unsigned(sequence));
         text += line;
-        listed.insert(sequence + offset);
-        ListTrack(rom, info, sequence, sequence + offset, text, starts);
+        text +=
+            "; columns: address, tick, bytes, command\n"
+            "; the track is listed as the driver plays it, calls included, up to its end or its loop\n"
+            "; its notes wait for their length until a C9\n"
+            "; a track that F8 starts comes after it, with ticks from its start\n";
+        std::snprintf(line, sizeof line, "\n; ---- track 0 at 0x%08X ----\n", unsigned(effect->address));
+        text += line;
+        listed.insert(effect->address);
+        ListTrack(rom, info, sequence, effect->address, true, text, starts);
+    }
+    else
+    {
+        sequence = info.sequence_addresses[size_t(song)];
+        const int count = rom.S8(sequence);
+        std::snprintf(line, sizeof line,
+                      "; %s (%s) sequence %d at 0x%08X: %d tracks\n; columns: address, tick, bytes, command\n"
+                      "; each track is listed as the driver plays it, calls included, up to its end or its loop\n"
+                      "; a track that F8 starts comes after the others, with ticks from its start\n",
+                      rom.Title().c_str(), rom.GameCode().c_str(), song, unsigned(sequence), count);
+        text += line;
+        for (int t = 0; t < count && t < kPlayerTracks; t++)
+        {
+            const uint32_t offset = rom.U16(sequence + 2 + 2 * uint32_t(t));
+            if (offset == 0)
+            {
+                continue;
+            }
+
+            std::snprintf(line, sizeof line, "\n; ---- track %d at 0x%08X ----\n", t, unsigned(sequence + offset));
+            text += line;
+            listed.insert(sequence + offset);
+            ListTrack(rom, info, sequence, sequence + offset, false, text, starts);
+        }
     }
 
     // Then each place that an F8 starts a track at. A place where a listed track starts already is left out. A track
@@ -362,7 +384,7 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
         std::snprintf(line, sizeof line, "\n; ---- track %d at 0x%08X, started by F8 at 0x%08X ----\n", start.number,
                       unsigned(start.address), unsigned(start.from));
         text += line;
-        ListTrack(rom, info, sequence, start.address, text, starts);
+        ListTrack(rom, info, sequence, start.address, effect != nullptr, text, starts);
     }
 
     return WriteTextFile(path, text, error);

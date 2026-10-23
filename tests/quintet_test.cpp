@@ -51,9 +51,11 @@ using test::TempSettings;
 // Addresses in a test cartridge: the driver's code that detection reads, the game's file lookup and the code that
 // passes the files to the driver, the driver's tables, and the game's files.
 constexpr uint32_t kPlay = kRomBase + 0x100;
+constexpr uint32_t kPlayEffect = kRomBase + 0x180;
 constexpr uint32_t kCode = kRomBase + 0x200;
 constexpr uint32_t kLookup = kRomBase + 0x600;
 constexpr uint32_t kGameCode = kRomBase + 0x700;
+constexpr uint32_t kEffectCode = kRomBase + 0x780;
 constexpr uint32_t kLengthTable = kRomBase + 0x900;
 constexpr uint32_t kFrequencyTable = kRomBase + 0x910;
 constexpr uint32_t kPcmPitchTable = kRomBase + 0x9C0;
@@ -67,6 +69,7 @@ constexpr int kSfxMacroFile = 3;
 constexpr int kSampleFile = 4;
 constexpr int kSfxSampleFile = 5;
 constexpr int kMusicFile = 6;
+constexpr int kEffectsFile = 7;
 constexpr uint32_t kWaveVariable = 0x03000790;
 constexpr uint32_t kMacroVariable = 0x03000794; // the A revision's music macros, or the J revision's two tables
 
@@ -175,6 +178,34 @@ public:
                 Put8(at + uint32_t(i), s[i]);
             }
             at += uint32_t(s.size());
+        }
+    }
+
+    // Writes the sound effects into the sound effects' file, the driver's routine that plays one, and the game's code
+    // that passes it the file. In the A revision, the game's sound init then gives the driver the sound effects' noise
+    // macros and samples too. Its routine for the noise macros stores them in the word after the music's.
+    void Effects(const std::vector<std::vector<uint8_t>>& effects)
+    {
+        uint32_t at = FileAddress(kEffectsFile);
+        for (const std::vector<uint8_t>& e : effects)
+        {
+            for (size_t i = 0; i < e.size(); i++)
+            {
+                Put8(at + uint32_t(i), e[i]);
+            }
+            at += uint32_t(e.size());
+        }
+
+        const bool j = revision_ == Revision::kJ;
+        Pattern(kPlayEffect, j ? "B570 4900 6008 2500 4800 6801 0068 1840 8840 1846 7830 28FF 4770"
+                               : "B570 4900 6008 2500 4E00 4800 6801 0068 1840 8840 1844 7820 28FF 4770");
+        at = PassFile(kEffectCode, kEffectsFile, kPlayEffect);
+        if (!j)
+        {
+            const uint32_t setter = at;
+            at = Setter(at, 0x6008, kMacroVariable + 4);
+            at = PassFile(at, kSfxMacroFile, setter);
+            PassFile(at, kSfxSampleFile, sample_setters_[1]);
         }
     }
 
@@ -335,7 +366,7 @@ private:
         at = Setter(at, 0x6008, kMacroVariable);
         const uint32_t sfx_macro_setter = at;
         at = Setter(at, 0x6048, kMacroVariable);
-        std::array<uint32_t, 2> sample_setters = {};
+        std::array<uint32_t, 2>& sample_setters = sample_setters_;
         for (uint32_t bank = 0; bank < 2; bank++)
         {
             sample_setters[bank] = at;
@@ -367,6 +398,7 @@ private:
     }
 
     Revision revision_;
+    std::array<uint32_t, 2> sample_setters_ = {}; // the routines that pass each bank's samples to the loader
 };
 
 // Returns the driver info of a cartridge, failing the test if detection fails.
@@ -1129,6 +1161,80 @@ void TestDump()
     SEQLIB_CHECK(s.find("   24576  FF ") != std::string::npos);
 }
 
+// The sound effects come after the songs. A sound effect starts on the sound effect channels whose data doesn't start
+// with FF, with no music playing. It reads the sound effects' samples and noise macros. When a PSG channel ends, the
+// driver writes its level of 0 straight to the envelope register. The output stage then writes the music's image of
+// 0s. The channels that a sound effect leaves to the music don't keep the conversion from finding its loop.
+void TestEffects()
+{
+    for (Revision revision : {Revision::kA, Revision::kJ})
+    {
+        const bool j = revision == Revision::kJ;
+        Cart cart(revision);
+        cart.Songs({Song({Channel().Rest(4).End()})});
+        cart.Effects({Song({Channel().Bytes({0x5E, 15}).Note(0, 3).End()}),
+                      Song({{0xFF}, {0xFF}, {0xFF}, {0xFF}, Channel().Bytes({0xDC, 0x01, 0x5E, 1}).Note(12, 3).End()}),
+                      Song({{0xFF}, {0xFF}, {0xFF}, Channel().Bytes({0x5E, 15, 0xDB, 0x01}).Note(12, 3).End()}),
+                      Song({{0xFF}, Channel().Bytes({0x5E, 15, 0xBF}).Note(0, 3).End()})});
+        cart.Samples(kSampleFile, {{Saw(1500), 10000}, {Saw(1500), 10000}});
+        const std::vector<uint32_t> effect_samples =
+            cart.Samples(kSfxSampleFile, {{Saw(1500), 10000}, {Saw(1500), 10000}});
+        cart.Macros(kMacroFile, {{0x27, 0x35, 0xFF}});
+        cart.Macros(kSfxMacroFile, {{0x45, 0x56, 0xFF}});
+        const Rom rom = cart.ToRom();
+        const DriverInfo info = Detect(rom);
+
+        SEQLIB_CHECK_EQ(info.play_effect, kPlayEffect);
+        SEQLIB_CHECK_EQ(info.effects_file, FileAddress(kEffectsFile));
+        SEQLIB_REQUIRE_EQ(info.effect_addresses.size(), 4);
+        SEQLIB_CHECK_EQ(SongCount(info), 5);
+        SEQLIB_CHECK_EQ(EffectIndex(info, 0), -1);
+        SEQLIB_CHECK_EQ(EffectIndex(info, 2), 1);
+        SEQLIB_CHECK_EQ(SongAddress(info, 1), FileAddress(kEffectsFile));
+        SEQLIB_CHECK_EQ(info.macros[1], FileAddress(kSfxMacroFile));
+        SEQLIB_CHECK_EQ(info.samples[1], FileAddress(kSfxSampleFile));
+
+        // Square 1 plays at level 15 from the first frame. In the frame that it ends, the driver writes NR12 with a
+        // level of 0, and the music's image clears NR10 to NR14.
+        Sequencer square(rom, info, 1);
+        SEQLIB_CHECK(square.StartWrites().empty());
+        SEQLIB_CHECK(square.GetChannel(0).position != 0 && square.GetChannel(1).position == 0);
+        SEQLIB_CHECK_EQ(LastWrite(square.Step(), 0x04000062) >> 12, 15);
+        std::vector<RegisterWrite> last;
+        for (int f = 0; f < 100 && !square.Ended(); f++)
+        {
+            last = square.Step();
+        }
+        std::vector<uint32_t> nr12;
+        for (const RegisterWrite& w : last)
+        {
+            if (w.address == 0x04000062)
+            {
+                nr12.push_back(w.value);
+            }
+        }
+
+        SEQLIB_CHECK(square.Ended());
+        SEQLIB_REQUIRE_EQ(nr12.size(), 2);
+        SEQLIB_CHECK_EQ(nr12[0], 0x00BF);
+        SEQLIB_CHECK_EQ(nr12[1], 0);
+        SEQLIB_CHECK_EQ(LastWrite(last, 0x04000064), 0);
+
+        // The PCM channel plays the sound effects' sample 1, and the noise channel their macro 1.
+        const auto pcm = Writes(rom, info, 2, 2);
+        const auto noise = Writes(rom, info, 3, 2);
+
+        SEQLIB_CHECK_EQ(LastWrite(pcm[1], 0x040000BC), effect_samples[1] + 32);
+        SEQLIB_CHECK_EQ(LastWrite(noise[1], 0x0400007C), 0x8045);
+
+        // Square 2 loops, and the plan doesn't wait for the channels that play nothing.
+        const SongReport report = InspectSong(rom, info, 4, TempSettings(j ? "effect_j" : "effect_a"));
+
+        SEQLIB_CHECK(report.ok && report.tracks == 1 && report.warnings.empty());
+        SEQLIB_CHECK(report.loop_end > 0 && report.seconds < 10);
+    }
+}
+
 // OpenMusic() finds Quintet's driver from its code. A game without the driver's code isn't read, even with the music
 // file given, and only --driver quintet makes that an error.
 void TestMusic()
@@ -1203,6 +1309,7 @@ void RunTests()
     TestNoiseMacros();
     TestConversion();
     TestDump();
+    TestEffects();
     TestMusic();
     TestShortLoop();
 }

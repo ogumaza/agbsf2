@@ -3,10 +3,13 @@
 #include "rare/driver.h"
 
 #include <array>
+#include <bit>
+#include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <span>
 #include <string>
+#include <vector>
 
 #include "arm.h"
 #include "rare/song.h"
@@ -86,6 +89,19 @@ constexpr uint32_t kSlotSize = 0x28;
 constexpr ArmPattern kAnyBranch = {0xEA000000, 0xFF000000};
 constexpr ArmPattern kAnyBranchIfEqual = {0x0A000000, 0xFF000000};
 
+// Donkey Kong Country 3's routine that fades Enchanted Riverbank between its arrangements, at 0x08085CE0. The game
+// calls it as a level starts and in every frame of the level. While tune 12 plays, the routine works out the state in
+// r8: 0 in the player's swimming states, and 1 back on land or without a Kong. It then picks the channels to fade out
+// and those to fade in: mov r1, r8; cmp r1, #0; beq; movs r2, #first out; movs r5, #last out; movs r0, #first in; mov
+// ip, r0; movs r3, #last in; b. The beq goes to the same moves for the state under water, with r1 in place of r0. The
+// routine checks the tune before that: ldr r0, [r0]; cmp r0, #tune; bne; movs r0, #1; mov r8, r0.
+constexpr const char* kWaterAbovePattern = "4641 2900 D0xx 22xx 25xx 20xx 4684 23xx E0xx";
+constexpr const char* kWaterUnderPattern = "22xx 25xx 21xx 468C 23xx";
+constexpr const char* kWaterTunePattern = "6800 28xx D1xx 2001 4680";
+
+// The furthest that the routine's check of the tune comes before its choice of channels, in bytes.
+constexpr uint32_t kWaterTuneReach = 0x100;
+
 // Returns true if the halfword is `ldr r<reg>, [pc, #imm]`.
 bool IsLdrLiteral(uint16_t h, int reg)
 {
@@ -96,6 +112,83 @@ bool IsLdrLiteral(uint16_t h, int reg)
 bool IsBl(const Rom& rom, uint32_t at)
 {
     return (rom.U16(at) & 0xF800) == 0xF000 && (rom.U16(at + 2) & 0xF800) == 0xF800;
+}
+
+// Returns true if the Thumb code at `at` matches `pattern`.
+bool MatchesThumb(const Rom& rom, uint32_t at, const std::vector<ThumbPattern>& pattern)
+{
+    for (size_t k = 0; k < pattern.size(); k++)
+    {
+        const uint32_t address = at + 2 * uint32_t(k);
+        if (!rom.Contains(address, 2) || (rom.U16(address) & pattern[k].mask) != pattern[k].value)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Returns the channels from `first` to `last` as a mask, or 0 if they aren't a range of channels.
+uint16_t ChannelRange(uint32_t first, uint32_t last)
+{
+    if (first > last || last >= 16)
+    {
+        return 0;
+    }
+
+    return uint16_t((2u << last) - (1u << first));
+}
+
+// Returns the channels of the Thumb moves at `first` and `last`: movs rX, #channel.
+uint16_t MovedRange(const Rom& rom, uint32_t first, uint32_t last)
+{
+    return ChannelRange(rom.U16(first) & 0xFFu, rom.U16(last) & 0xFFu);
+}
+
+// Finds the game's routine that fades a tune between two arrangements (see kWaterAbovePattern). Returns the tune and
+// the channels of each arrangement from the routine's code, or an empty WaterTune if the game has none.
+WaterTune FindWaterTune(const Rom& rom)
+{
+    const std::vector<ThumbPattern> under_moves = ParseThumbPattern(kWaterUnderPattern);
+    const std::vector<ThumbPattern> tune_check = ParseThumbPattern(kWaterTunePattern);
+    for (uint32_t at : FindThumb(rom, ParseThumbPattern(kWaterAbovePattern)))
+    {
+        // The beq at at + 4 goes to the moves for the state under water.
+        const uint32_t under = at + 8 + uint32_t(int32_t(int8_t(rom.U16(at + 4) & 0xFF)) * 2);
+        if (!MatchesThumb(rom, under, under_moves))
+        {
+            continue;
+        }
+
+        // Each state fades in the channels that the other fades out.
+        const uint16_t above_in = MovedRange(rom, at + 10, at + 14);
+        const uint16_t under_in = MovedRange(rom, under + 4, under + 8);
+        if (!above_in || !under_in || (above_in & under_in) || MovedRange(rom, at + 6, at + 8) != under_in ||
+            MovedRange(rom, under, under + 2) != above_in)
+        {
+            continue;
+        }
+
+        for (uint32_t back = 2; back <= kWaterTuneReach; back += 2)
+        {
+            if (MatchesThumb(rom, at - back, tune_check))
+            {
+                return {int(rom.U16(at - back + 2) & 0xFF), above_in, under_in};
+            }
+        }
+    }
+
+    return {};
+}
+
+// Returns a range of channels from FindWaterTune() as text: "0-3", or "4" for one channel. The range can't be empty.
+std::string ChannelsText(uint16_t channels)
+{
+    const int first = std::countr_zero(channels);
+    const int last = 15 - std::countl_zero(channels);
+
+    return first == last ? std::to_string(first) : std::to_string(first) + "-" + std::to_string(last);
 }
 
 // The driver's init, as found from its copy of the driver's code to IWRAM.
@@ -407,6 +500,17 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
         info.voice_limit = 8;
     }
 
+    // Donkey Kong Country 3's code picks the arrangement of a tune by the water, through the channels' levels. Only
+    // that revision of the driver has the levels.
+    if (info.skips_silent_notes)
+    {
+        info.water = FindWaterTune(rom);
+        if (info.water.tune >= info.tune_count)
+        {
+            info.water = WaterTune();
+        }
+    }
+
     // Report what was found.
     if (info.init)
     {
@@ -419,6 +523,12 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
         if (info.envelope_controllers)
         {
             info.log.push_back("controllers 20-23 set a channel's attack, decay, sustain and release");
+        }
+        if (info.water.tune >= 0)
+        {
+            info.log.push_back("the game's code plays tune " + std::to_string(info.water.tune) + " on channels " +
+                               ChannelsText(info.water.above) + " above water and " + ChannelsText(info.water.under) +
+                               " under water");
         }
     }
     info.log.push_back("tune table at " + Hex(info.tune_table) + ": " + std::to_string(info.tune_count) + " tune" +
@@ -435,6 +545,16 @@ uint32_t TuneAddress(const Rom& rom, const DriverInfo& info, int tune)
     }
 
     return rom.U32(info.tune_table + 4u * uint32_t(tune));
+}
+
+uint16_t SilencedChannels(const DriverInfo& info, int tune, bool under_water)
+{
+    if (tune != info.water.tune)
+    {
+        return 0;
+    }
+
+    return under_water ? info.water.above : info.water.under;
 }
 
 int FadeFrames(const DriverInfo& info, uint32_t index)

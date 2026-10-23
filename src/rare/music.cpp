@@ -46,6 +46,12 @@ public:
         return true;
     }
 
+    // The tune that the game plays by the water has a version above water and one under water.
+    std::vector<SongVersion> Versions(int song) const override
+    {
+        return TuneVersions(info_, song);
+    }
+
     // Calculates the tune's duration, loop points and note-playing tracks using the conversion settings.
     SongReport InspectSong(int song, const ConvertSettings& settings) const override
     {

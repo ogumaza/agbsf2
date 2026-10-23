@@ -33,9 +33,10 @@ public:
     {
     }
 
+    // The songs, then the sound effects.
     int SongCount() const override
     {
-        return int(info_.song_addresses.size());
+        return quintet::SongCount(info_);
     }
 
     bool HasSong(int) const override
@@ -47,7 +48,7 @@ public:
     SongReport InspectSong(int song, const ConvertSettings& settings) const override
     {
         SongReport r = quintet::InspectSong(rom_, info_, song, settings);
-        r.address = song >= 0 && song < SongCount() ? info_.song_addresses[size_t(song)] : 0;
+        r.address = SongAddress(info_, song);
 
         return r;
     }

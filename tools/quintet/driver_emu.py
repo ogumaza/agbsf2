@@ -8,12 +8,16 @@ and per-frame routines (no BIOS, no video, no interrupts), and captures what the
 
     trace       every write to the sound, DMA 1 and 2 and timer 0 and 1 registers, frame by frame, except the bytes a
                 note writes into a FIFO before its DMA starts
-    channels    each music channel's read position and countdown after each frame
+    channels    each channel's read position and countdown after each frame
     render      the sound: the PSG through psg_model.py, and each FIFO's sample at its timer's rate
 
     driver_emu.py ROM trace SONG FRAMES
     driver_emu.py ROM channels SONG FRAMES
     driver_emu.py ROM render SONG FRAMES OUT.wav [--channels 0,4]
+
+SONG is agbsf2's number for a song. agbsf2 numbers the songs of the music file first, then the sound effects of the
+sound effects' file. The script plays a sound effect through the game's routine for sound effects, with no music
+playing. The sound effect channels then take the place of the music channels in the channel list.
 
 The routine and RAM addresses are chosen by the ROM's game code. Those of Super Robot Taisen A (ASRJ), R (AJ9J), D
 (A6SJ) and J (B6JJ) are built in. Another game needs its own values; see GAMES and docs/quintet.md.
@@ -46,8 +50,11 @@ class Addresses:
     """ASRJ (Super Robot Taisen A)."""
     sound_init = 0x080034F0  # the game's sound init: the driver's init, then the tables it loads from the game's files
     play = 0x08003550        # the game's play-song routine: r0 = song
+    play_effect = 0x08003594  # the game's routine for sound effects: r0 = the sound effect
     frame = 0x08003544       # the game's per-frame sound routine
     channels = 0x087F0F60    # the table of pointers to the 6 music channel records
+    effect_channels = 0x087F0F78  # the table of pointers to the 6 sound effect channel records
+    songs = 38               # the number of songs in the music file. agbsf2 numbers the sound effects after them.
     countdown = 0x18         # the offset in a channel record of its frames left before its next note
 
 
@@ -55,24 +62,33 @@ class AddressesA6SJ(Addresses):
     """A6SJ (Super Robot Taisen D)."""
     sound_init = 0x08004A30
     play = 0x08004A94
+    play_effect = 0x08004AD8
     frame = 0x08004A84
     channels = 0x087FE2E4
+    effect_channels = 0x087FE2FC
+    songs = 47
 
 
 class AddressesAJ9J(Addresses):
     """AJ9J (Super Robot Taisen R)."""
     sound_init = 0x08004AB4
     play = 0x08004B18
+    play_effect = 0x08004B5C
     frame = 0x08004B08
     channels = 0x08771BB8
+    effect_channels = 0x08771BD0
+    songs = 43
 
 
 class AddressesB6JJ(Addresses):
     """B6JJ (Super Robot Taisen J), with a later revision of the driver."""
     sound_init = 0x080083D0
     play = 0x08008440
+    play_effect = 0x08008498
     frame = 0x08008430
     channels = 0x08FB19B0
+    effect_channels = 0x08FB19C8
+    songs = 52
     countdown = 0x1A
 
 
@@ -104,9 +120,15 @@ class DriverEmulator:
         uc.hook_add(UC_HOOK_MEM_UNMAPPED, self._unmapped)
         uc.hook_add(UC_HOOK_INTR, self._svc)
         self.uc = uc
+        self.rom = rom
         self.writes = []
-        self.channel_records = struct.unpack('<6I', rom[self.addr.channels - ROM_BASE:self.addr.channels - ROM_BASE + 24])
+        self.channel_records = self.records(self.addr.channels)
         self.call(self.addr.sound_init)
+        self.init_writes = self.writes  # the sound init's writes. A sound effect plays on from them.
+
+    def records(self, table):
+        """Returns the addresses of the 6 channel records that the table at `table` points to."""
+        return struct.unpack('<6I', self.rom[table - ROM_BASE:table - ROM_BASE + 24])
 
     def _svc(self, uc, intno, user):
         raise SystemExit('the driver made a BIOS call')
@@ -144,9 +166,14 @@ class DriverEmulator:
         return struct.unpack('<I', self.uc.mem_read(address, 4))[0]
 
     def play(self, song):
-        """Starts `song` at once. Returns the register writes that starting it made."""
+        """Starts `song` at once, or the sound effect that agbsf2 numbers `song`. Returns the register writes that
+        starting it made."""
         self.writes = []
-        self.call(self.addr.play, (song,))
+        if song >= self.addr.songs:
+            self.channel_records = self.records(self.addr.effect_channels)
+            self.call(self.addr.play_effect, (song - self.addr.songs,))
+        else:
+            self.call(self.addr.play, (song,))
         return self.writes
 
     def frame(self):
@@ -156,11 +183,11 @@ class DriverEmulator:
         return self.writes
 
     def positions(self):
-        """Returns each music channel's read position, or 0 once it has ended."""
+        """Returns each channel's read position, or 0 once it has ended."""
         return [self.u32(c + 4) for c in self.channel_records]
 
     def countdowns(self):
-        """Returns each music channel's frames left before it reads its next note."""
+        """Returns each channel's frames left before it reads its next note."""
         return [self.u16(c + self.addr.countdown) for c in self.channel_records]
 
     def playing(self):
@@ -232,7 +259,7 @@ class FifoModel:
 
 def render(rom, song, frames, channels_wanted=None):
     """Returns the driver's stereo output for the first `frames` frames of `song`, at psg_model.RATE. `channels_wanted`
-    lists the music channels to keep: 0-3 the PSG's, 4 and 5 the FIFOs."""
+    lists the channels to keep: 0-3 the PSG's, 4 and 5 the FIFOs."""
     emu = DriverEmulator(rom)
     keep = set(range(6)) if channels_wanted is None else set(channels_wanted)
     psg_keep = keep & {0, 1, 2, 3}
@@ -289,7 +316,7 @@ def main():
     p.add_argument('song', type=int)
     p.add_argument('frames', type=int)
     p.add_argument('out', nargs='?')
-    p.add_argument('--channels', help='render: only these music channels (0-5), such as 0,4')
+    p.add_argument('--channels', help='render: only these channels (0-5), such as 0,4')
     a = p.parse_args()
     rom = load_rom(a.rom)
     if a.command == 'trace':

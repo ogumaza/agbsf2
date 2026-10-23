@@ -19,8 +19,25 @@ voice has to be in the MIDI file, and the other way round:
   - and in each frame that its voice is the newest of its track's, with the pitch bend for the voice's pitch in that
     frame, which slides, the track's bend and the LFO change.
 
+A PSG voice's note plays at velocity 127 instead. It ends where its PSG channel falls silent, or where another note
+takes the channel. In each frame until then, its CC11 has to give the channel's volume at the frame's start. The wave
+channel's volume is 15 times the share of its full level that NR32 sets. psg_model.py plays the driver's writes to the
+PSG's registers with the hardware's envelopes, length counters and sweep. agbsf2 works out the CC11 from the volume
+and the sides that NR51 gives the channel (PsgExpression() in src/rd2/convert.cpp). The check works it out the same
+way.
+
 A sequence named in --songs that has no MIDI file mustn't play any notes. AGBSF2 is used for its --info report. The
 report names the driver's tables and gives each sequence's length.
+
+agbsf2 numbers the sound effects after the sequences. Each is checked in the same way. The conversion leaves out the
+notes that it can't make a sound for. They are a note at velocity 0, a note that its instrument has no region for and a
+note whose sample can't be read. The check leaves them out too (see converted()).
+
+The driver plays a velocity of up to 255. A track whose sample notes play above 127 gets a scale. Its notes play at
+their velocity divided by the scale. Its CC11 raises its levels by the scale (VelocityScales() in src/rd2/convert.cpp).
+The scale is the loudest sample note's velocity over 127. Where CC11 can't raise the track's levels that far, the scale
+is smaller. CC11 then reaches 127. The velocities of such a track have to fit one scale, from 1 up to the loudest
+note's velocity over 127.
 """
 import argparse
 import bisect
@@ -34,6 +51,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for conversion.py, gbarom.py and traces.py, in tools/
 import conversion
 import driver_emu
+import psg_model
 from gbarom import ROM_BASE, load_rom
 from traces import parse_range
 
@@ -41,6 +59,9 @@ FRAME_RATE = 16777216 / 280896
 UNITY_INDEX = 0x30   # the pitch index that plays a sample at its own rate
 TOP_INDEX = 0x78     # the highest pitch index the driver reads
 DRUM_CHANNEL = 9     # the MIDI channel the conversion leaves out
+PSG_VOICES = 7       # the driver's first PSG voice: square 1, then square 2, the wave and the noise
+VOLUME_TYPES = (1, 2, 3, 4)  # the voice types whose notes follow their PSG channel's volume: every PSG voice's
+WAVE_SHARES = (0.0, 1.0, 0.5, 0.25)  # the wave channel's share of its full level for each of NR32's volume codes
 TUNE_TOLERANCE_CENTS = 1
 BEND_TOLERANCE_CENTS = 2
 # The MIDI file's tempos are whole microseconds a quarter note. Timed by them, its events drift from the driver's frames
@@ -107,7 +128,7 @@ def signed(v):
 
 def read_midi(path):
     """Returns the notes as dicts of channel, key, velocity, on and off seconds, bank and program, each channel's pitch
-    bends as {channel: (times, values)}, the bend ranges and the length in seconds."""
+    bends and CC11 as {channel: (times, values)}, the bend ranges and the length in seconds."""
     data = Path(path).read_bytes()
     division = struct.unpack('>H', data[12:14])[0]
     events = []
@@ -179,7 +200,7 @@ def read_midi(path):
             at, tempo = t, value
         return (frames + (tick - at) / frame_ticks(tempo)) / FRAME_RATE
 
-    notes, open_notes, bends, ranges = [], {}, {}, {}
+    notes, open_notes, bends, expressions, ranges = [], {}, {}, {}, {}
     bank, program, rpn = {}, {}, {}
     for tick, _, _, kind, ch, a, b in events:
         t = seconds(tick)
@@ -200,6 +221,10 @@ def read_midi(path):
             times, values = bends.setdefault(ch, ([], []))
             times.append(t)
             values.append(a)
+        elif kind == 'cc' and a == 11:
+            times, values = expressions.setdefault(ch, ([], []))
+            times.append(t)
+            values.append(b)
         elif kind == 'cc' and a in (100, 101):
             rpn[(ch, a)] = b
         elif kind == 'cc' and a == 6 and rpn.get((ch, 101)) == 0 and rpn.get((ch, 100)) == 0:
@@ -208,7 +233,7 @@ def read_midi(path):
     for note in notes:
         if note['off'] is None:
             note['off'] = length
-    return notes, bends, ranges, length
+    return notes, bends, expressions, ranges, length
 
 
 def bend_at(bends, ch, t):
@@ -217,17 +242,65 @@ def bend_at(bends, ch, t):
     return values[i - 1] if i else 8192
 
 
+def expression_at(expressions, ch, t):
+    times, values = expressions.get(ch, ((), ()))
+    i = bisect.bisect_right(times, t + 1e-9)
+    return values[i - 1] if i else 127
+
+
+def psg_frames(writes, frames):
+    """Returns ([square 1, square 2, wave, noise], nr51) for each frame: the volume of each PSG channel at the frame's
+    start (0 to 15, and 0 while the channel is off) and NR51 after the frame's writes. The wave's volume is 15 times the
+    share of its full level that NR32 sets. Each of `writes` is one of the driver's writes to the PSG's registers:
+    (frame, address, size, value), with frame -1 before the first frame."""
+    apu = psg_model.APU(hardware=True)
+    by_frame = {}
+    for f, address, size, value in writes:
+        by_frame.setdefault(f, []).append((address, size, value))
+    for w in by_frame.get(-1, ()):
+        apu.write(*w)
+    out = []
+    for f in range(frames):
+        for w in by_frame.get(f, ()):
+            apu.write(*w)
+        volumes = [ch['env']['vol'] if ch['on'] else 0 for ch in (apu.square[0], apu.square[1])]
+        w = apu.wave
+        share = 0.75 if w['force75'] else WAVE_SHARES[w['volcode']]
+        volumes.append(15 * share if w['on'] and w['dac'] else 0)
+        out.append((volumes + [apu.noise['env']['vol'] if apu.noise['on'] else 0], apu.nr51))
+        apu.advance(psg_model.FRAME_CYCLES)
+    return out
+
+
+def psg_expression(volume, nr51, c, share):
+    """Returns the CC11 that agbsf2 gives a note at full velocity on PSG channel `c` at `volume`, on the sides that
+    `nr51` gives the channel. Volume 15 plays at `share` of full scale. seqlib's LevelsToControllers() turns the two
+    sides' levels into the CC11 that plays them under the SoundFont's default modulator."""
+    level = volume / share
+    left = level if (nr51 >> (c + 4)) & 1 else 0.0
+    right = level if (nr51 >> c) & 1 else 0.0
+    amp = math.hypot(left / 128, right / 128)
+    if amp <= 0:
+        return 0
+    loudest_centred = math.sqrt(2.0) * 127 / 128
+    return min(max(math.floor(127 * math.sqrt(amp / loudest_centred) + 0.5), 0), 127)
+
+
 def driver_info(tool, rom_path):
-    """Returns the pitch and frequency tables' addresses, the table of banks and the frames that each listed sequence
-    lasts. All come from agbsf2's --info report. The report gives each sequence's length in minutes and seconds."""
+    """Returns the pitch and frequency tables' addresses, the table of banks, the frames that each listed sequence
+    lasts and the PSG's share of full scale. All come from agbsf2's --info report. The report gives each sequence's
+    length in minutes and seconds, and the driver's revision. agbsf2 gives the PSG a share for each revision
+    (PsgShare() in src/rd2/soundfont.h)."""
     text = subprocess.run([tool, '--driver', 'rd2', '--info', rom_path], capture_output=True, encoding='utf-8',
                           check=True).stdout
+    revision = re.search(r'^\s+(.+) revision of the driver', text, re.M).group(1)
+    share = 15 / 47 if revision == 'A Link to the Past' else 15 / 31
     pitch = int(re.search(r'pitch table: 0x([0-9A-F]+)', text).group(1), 16)
     frequency = int(re.search(r'frequency table: 0x([0-9A-F]+)', text).group(1), 16)
     banks = re.search(r'banks: 0x([0-9A-F]+) \((\d+)\)', text)
     lengths = {int(m.group(1)): math.ceil((int(m.group(2)) * 60 + float(m.group(3))) * FRAME_RATE)
                for m in re.finditer(r'^\s+(\d+)\s+0x[0-9A-F]{8}\s+\d+\s+(\d+):(\d+\.\d+)', text, re.M)}
-    return (pitch, frequency), (int(banks.group(1), 16), int(banks.group(2))), lengths
+    return (pitch, frequency), (int(banks.group(1), 16), int(banks.group(2))), lengths, share
 
 
 class Rom:
@@ -243,6 +316,30 @@ class Rom:
 
     def u32(self, a):
         return self.u16(a) | self.u16(a + 2) << 16
+
+    def contains(self, a, size):
+        return 0 <= a - ROM_BASE and a - ROM_BASE + size <= len(self.data)
+
+
+def converted(rom, bank_starts, note):
+    """Returns true if the conversion keeps one of the driver's notes. A note at velocity 0 is left out. So is a note
+    whose region is in `bank_starts`. Its instrument has no region for it. The driver plays it from its bank's table of
+    offsets. A sample voice's note is left out if agbsf2 can't make a SoundFont sample from the sample's header
+    (SampleReadable() in src/rd2/soundfont.cpp)."""
+    if note['velocity'] == 0 or note['region'] in bank_starts:
+        return False
+    if note.get('type') != 0:
+        return True
+    sample = note['sample']
+    length, rate, loop_start, loop_end = (rom.u32(sample + 4 * i) for i in range(4))
+    points = loop_end or length
+    return (0 < points <= 1 << 24 and rate != 0 and rom.contains(sample + 16, points) and
+            (not loop_end or loop_start < loop_end))
+
+
+def midi_channel(track):
+    """Returns the MIDI channel of one of the player's tracks. The conversion leaves out the drum channel."""
+    return track if track < DRUM_CHANNEL else track + 1
 
 
 def expected(rom, tables, note):
@@ -283,15 +380,16 @@ def zone_cents(zone, key, rate):
     return 1200 * math.log2(played / rate)
 
 
-def check_song(rom, raw_rom, tables, bank_starts, song, midi_path, sf2_path, frames_limit):
-    """Returns the notes checked and the problems found. A note whose region is in `bank_starts` is one that its
-    instrument has no region for, which the driver plays from its bank's table of offsets and the conversion leaves
-    out."""
-    notes, bends, ranges, length = read_midi(midi_path)
+def check_song(rom, raw_rom, tables, bank_starts, share, song, midi_path, sf2_path, frames_limit):
+    """Returns the notes checked and the problems found. The notes that converted() leaves out aren't checked.
+    `share` is the PSG's share of full scale at volume 15."""
+    notes, bends, expressions, ranges, length = read_midi(midi_path)
 
     sf = SoundFont(sf2_path)
     frames = min(frames_limit, int(length * FRAME_RATE) + 2)
-    played = driver_emu.notes(raw_rom, song, frames)
+    writes = []
+    played = driver_emu.notes(raw_rom, song, frames, writes)
+    psg = psg_frames(writes, len(played))
     problems = []
     end_frame = length * FRAME_RATE
 
@@ -299,6 +397,17 @@ def check_song(rom, raw_rom, tables, bank_starts, song, midi_path, sf2_path, fra
     by_channel = {}
     for n in notes:
         by_channel.setdefault((n['channel'], n['key']), []).append(n)
+
+    # Each track's scale for its sample notes' velocities, and the tracks whose CC11 reaches 127 (see the docstring).
+    loudest = {}
+    for started, _, _ in played:
+        for note in started:
+            if note['frame'] < end_frame and note['type'] not in VOLUME_TYPES and converted(rom, bank_starts, note):
+                loudest[note['track']] = max(loudest.get(note['track'], 0), note['velocity'])
+    scales = {track: max(1.0, v / 127.0) for track, v in loudest.items()}
+    capped = {track for track, scale in scales.items()
+              if scale > 1 and 127 in expressions.get(midi_channel(track), ((), ()))[1]}
+    capped_velocities = {}  # track -> (frame, key, the driver's velocity, the MIDI note's) for each of its sample notes
 
     def note_end(f, i):
         """Returns the frame where the voice of note `i` of frame `f` stops playing it: a release, a stop, or another
@@ -315,37 +424,62 @@ def check_song(rom, raw_rom, tables, bank_starts, song, midi_path, sf2_path, fra
                 return g
         return len(played) if len(played) >= end_frame else None
 
+    def sound_end(f, i):
+        """Returns the frame where the PSG channel of note `i` of frame `f` falls silent, for a PSG voice's note: the one
+        after the last frame that starts with the channel sounding, before another note takes the channel. A note whose
+        voice another note takes in the same frame ends at once. A run that stops before the channel falls silent gives
+        None."""
+        started = played[f][0]
+        v = started[i]['voice']
+        if any(later['voice'] == v for later in started[i + 1:]):
+            return f
+        until = next((g for g in range(f + 1, len(played)) if any(n['voice'] == v for n in played[g][0])),
+                     len(played))
+        silent = f
+        for g in range(f, until):
+            if psg[g][0][v - PSG_VOICES] > 0:
+                silent = g + 1
+        return None if silent >= len(played) and len(played) < end_frame else silent
+
+    def midi_note_end(f, i):
+        """Returns the frame where the MIDI note of note `i` of frame `f` ends, or None if the run doesn't say."""
+        return sound_end(f, i) if played[f][0][i]['type'] in VOLUME_TYPES else note_end(f, i)
+
     # Each of the driver's notes, from the frame it starts to the frame its voice releases it, stops or plays another.
     checked = 0
     merged = {}  # (frame, track, key) -> the MIDI note of the first note that a track starts on the key in the frame
     for f, (started, voices, _) in enumerate(played):
         for i, note in enumerate(started):
-            if note['frame'] >= end_frame - MARGIN or note['velocity'] == 0 or note['region'] in bank_starts:
+            if note['frame'] >= end_frame - MARGIN or not converted(rom, bank_starts, note):
                 continue
             v = note['voice']
             key, note_pitch = expected(rom, tables, note)
-            channel = note['track'] if note['track'] < DRUM_CHANNEL else note['track'] + 1
-            velocity = conversion.square_root_value(note['velocity'], 127, 1)
+            channel = midi_channel(note['track'])
+            follows = note['type'] in VOLUME_TYPES
+            scale = scales.get(note['track'], 1.0)
+            velocity = 127 if follows else conversion.square_root_value(note['velocity'], 127 * scale, 1)
 
             # The MIDI note: on the track's channel, with the key, starting in the frame or the one before. Notes that a
             # track starts on the same key and tick are one MIDI note, the first's, which lasts as long as the longest
             # of them, so where the MIDI file has fewer notes than the driver starts on the key in the frame, the
             # first takes the ends of the others, and they need only their bends checked against it.
-            group = [j for j, n in enumerate(started) if n['track'] == note['track'] and n['velocity'] and
-                     n['region'] not in bank_starts and expected(rom, tables, n)[0] == key]
+            group = [j for j, n in enumerate(started) if n['track'] == note['track'] and
+                     converted(rom, bank_starts, n) and expected(rom, tables, n)[0] == key]
             candidates = [n for n in by_channel.get((channel, key), ())
                           if not n['matched'] and f - 1 - MARGIN < n['on'] * FRAME_RATE <= f + MARGIN]
             end = note_end(f, i)
-            midi_end = end  # where the MIDI note has to end, if this note decides it
+            midi_end = midi_note_end(f, i)  # where the MIDI note has to end, if this note decides it
             check_end = True
             if candidates:
                 m = candidates[0]
                 m['matched'] = True
                 if i == group[0] and len(candidates) < len(group):
-                    ends = [note_end(f, j) for j in group]
+                    ends = [midi_note_end(f, j) for j in group]
                     midi_end = None if None in ends else max(ends)
                     merged[(f, note['track'], key)] = m
-                if m['velocity'] != velocity:
+                if not follows and note['track'] in capped:
+                    capped_velocities.setdefault(note['track'], []).append((f, key, note['velocity'], m['velocity']))
+                elif m['velocity'] != velocity:
                     problems.append('frame %d: track %d key %d has velocity %d, not %d' %
                                     (f, note['track'], key, m['velocity'], velocity))
             elif (f, note['track'], key) in merged:
@@ -366,6 +500,25 @@ def check_song(rom, raw_rom, tables, bank_starts, song, midi_path, sf2_path, fra
             if check_end and midi_end is not None and not near and not (cut and off < midi_end + 1 + MARGIN):
                 problems.append('frame %d: track %d key %d ends at frame %.2f, where the driver ends it at %d' %
                                 (f, note['track'], key, off, midi_end))
+
+            # A PSG voice's CC11 in each frame until its channel falls silent. Each frame's value holds
+            # from the start of the frame on the note's time line until the start of the next frame or the note off.
+            # The next note on the channel can start within the frame.
+            if follows and check_end and midi_end is not None:
+                c = v - PSG_VOICES
+                stop = min(m['off'] * FRAME_RATE, end_frame)
+                for g in range(f, midi_end):
+                    step = m['on'] * FRAME_RATE + (g - f)
+                    if step >= stop - MARGIN:
+                        break
+                    at = min(step + 0.1, (step + stop) / 2)
+                    volume, nr51 = psg[g]
+                    want = psg_expression(volume[c], nr51, c, share)
+                    have = expression_at(expressions, channel, at / FRAME_RATE)
+                    if have != want:
+                        problems.append('frame %d: track %d key %d has CC11 %d, where volume %d gives %d' %
+                                        (g, note['track'], key, have, volume[c], want))
+                        break
 
             # Its zone in the SoundFont, and the zone's pitch.
             zones = [z for z in sf.presets.get((m['bank'], m['program']), ()) if z['low'] <= key <= z['high']]
@@ -404,6 +557,19 @@ def check_song(rom, raw_rom, tables, bank_starts, song, midi_path, sf2_path, fra
                                     (g, note['track'], key, have * 100, want * 100))
                     break
 
+    # The scales that give each note of a capped track its MIDI velocity: 127 √(v / 127 k) rounds to it. A velocity of 1
+    # can come from any smaller value. One of 127 can come from any larger.
+    for track, pairs in capped_velocities.items():
+        low, high = 1.0, scales[track]
+        for _, _, v, midi in pairs:
+            if midi > 1:
+                high = min(high, 127 * v / (midi - 0.5) ** 2)
+            if midi < 127:
+                low = max(low, 127 * v / (midi + 0.5) ** 2)
+        if low > high:
+            problems.append('track %d: no one scale from 1 to %.3f gives its sample notes their velocities' %
+                            (track, scales[track]))
+
     for n in notes:
         if not n['matched'] and n['on'] * FRAME_RATE < frames - 1:
             problems.append('%.2f s: channel %d key %d is a note the driver doesn\'t play' % (n['on'], n['channel'],
@@ -422,7 +588,7 @@ def main():
 
     raw_rom = load_rom(a.rom)
     rom = Rom(raw_rom)
-    tables, (bank_table, bank_count), lengths = driver_info(a.agbsf2, a.rom)
+    tables, (bank_table, bank_count), lengths, share = driver_info(a.agbsf2, a.rom)
     bank_starts = {bank_table + rom.u32(bank_table + 4 * i) for i in range(bank_count)}
     midis = dict(conversion.midi_files(a.folder, 'rd2'))
     if not midis:
@@ -438,7 +604,7 @@ def main():
                 continue
             count += 1
             played = sum(1 for started, _, _ in driver_emu.notes(raw_rom, song, min(a.frames, lengths[song] + 2))
-                         for note in started if note['velocity'] and note['region'] not in bank_starts)
+                         for note in started if converted(rom, bank_starts, note))
             if played:
                 failed += 1
                 print('sequence %d: no MIDI file, but the driver plays %d notes' % (song, played))
@@ -446,8 +612,8 @@ def main():
                 print('sequence %d: no MIDI file, and the driver plays no notes' % song)
             continue
         count += 1
-        checked, problems = check_song(rom, raw_rom, tables, bank_starts, song, midi, midi.with_suffix('.sf2'),
-                                       a.frames)
+        checked, problems = check_song(rom, raw_rom, tables, bank_starts, share, song, midi,
+                                       midi.with_suffix('.sf2'), a.frames)
         total += checked
         if problems:
             failed += 1

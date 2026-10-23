@@ -104,15 +104,18 @@ struct DriverInfo
 {
     Revision revision = Revision::kA;
     uint32_t play = 0;                    // the driver's play-song routine (Thumb), or 0 if it wasn't found
+    uint32_t play_effect = 0;             // the driver's routine that plays a sound effect, or 0
     uint32_t length_table = 0;            // 13 bytes: the note values that a note's length index picks
     uint32_t frequency_table = 0;         // 84 halfwords: the square and wave channels' frequency setting for each note
     uint32_t pcm_pitch_table = 0;         // 53 halfwords: each note's PCM rate change in 1/1000s of the sample's rate
     uint32_t lfo_table = 0;               // 256 signed bytes: one cycle of the LFO's sine
     uint32_t music_file = 0;              // the music file: the songs back to back
+    uint32_t effects_file = 0;            // the sound effects' file, in the same format, or 0
     uint32_t waves = 0;                   // the game's wave table, or 0
     std::array<uint32_t, 2> macros = {};  // each bank's noise macro table, or 0
     std::array<uint32_t, 2> samples = {}; // each bank's PCM sample file, or 0
     std::vector<uint32_t> song_addresses;
+    std::vector<uint32_t> effect_addresses;
 
     // Each sample's header, as the driver's sample tables hold them.
     std::array<std::vector<uint32_t>, 2> sample_addresses;
@@ -124,5 +127,30 @@ struct DriverInfo
 // Finds the driver in `rom`. Returns false and sets `error` if the driver's tables can't be read, or returns false with
 // `error` empty if the game shows no sign of the driver.
 bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info, std::string& error);
+
+// agbsf2 numbers the songs first and then the sound effects. Returns the number of both.
+inline int SongCount(const DriverInfo& info)
+{
+    return int(info.song_addresses.size() + info.effect_addresses.size());
+}
+
+// Returns the index of song `song` in the sound effects' file, or -1 if it isn't a sound effect.
+inline int EffectIndex(const DriverInfo& info, int song)
+{
+    const int index = song - int(info.song_addresses.size());
+    return index >= 0 && index < int(info.effect_addresses.size()) ? index : -1;
+}
+
+// Returns the address of the header of song `song`, or 0 if there's no such song.
+inline uint32_t SongAddress(const DriverInfo& info, int song)
+{
+    if (song < 0 || song >= SongCount(info))
+    {
+        return 0;
+    }
+
+    const int effect = EffectIndex(info, song);
+    return effect >= 0 ? info.effect_addresses[size_t(effect)] : info.song_addresses[size_t(song)];
+}
 
 } // namespace agbsf2::quintet

@@ -10,11 +10,15 @@ per-frame routines directly (no BIOS, no video), and captures what the driver pr
     render      the mixer's output: 8-bit mono samples at the driver's rate
 
     driver_emu.py ROM trace TUNE FRAMES
-    driver_emu.py ROM render TUNE FRAMES OUT.wav [--channels 0,9]
+    driver_emu.py ROM render TUNE FRAMES OUT.wav [--channels 0,9] [--under-water]
 
 The routine and RAM addresses are chosen by the ROM's game code. Those of Donkey Kong Country (A5NE), Sabre Wulf
 (AWUE), It's Mr. Pants (BPIE), Banjo-Kazooie: Grunty's Revenge (BKZX), Donkey Kong Country 2 (B2DE), Banjo-Pilot (BAJE)
 and Donkey Kong Country 3 (BDQE) are built in. Another game needs its own values; see GAMES and docs/rare.md.
+
+Donkey Kong Country 3 plays tune 12 as two arrangements: one above water and one under water. The game holds the
+channels of the other arrangement at a level of 0. A render of that tune takes the levels above water, or under water
+with --under-water. A trace keeps every channel at the level of 128 that the driver gives it when a tune starts.
 """
 import argparse
 import struct
@@ -55,6 +59,8 @@ class Addresses:
     channel_volume = 0x03001560  # 16 controller 7 values
     envelope_settings = None     # in BDQE's revision, 4 bytes for each channel from controllers 20-23
     music_volume = None          # in BDQE, the word that holds the music volume
+    channel_levels = None        # in BDQE, the 16 bytes that hold the channels' levels, out of 128
+    water = None                 # in BDQE, the tune played above and under water, with the channels of each arrangement
 
 
 class AddressesAWUE(Addresses):
@@ -145,6 +151,9 @@ class AddressesBDQE(Addresses):
     channel_volume = 0x03001380
     envelope_settings = 0x030023f0
     music_volume = 0x030023c4
+    channel_levels = 0x03001400
+    # The game's routine at 0x08085CE0 plays tune 12 on channels 0-3 above water and on channels 4-8 under water.
+    water = (12, range(0, 4), range(4, 9))
 
 
 GAMES = {b'A5NE': Addresses, b'AWUE': AddressesAWUE, b'BPIE': AddressesBPIE, b'BKZX': AddressesBKZX,
@@ -156,6 +165,16 @@ def addresses_for(rom):
     if code not in GAMES:
         raise SystemExit('no driver addresses known for game code %s' % code.decode('latin-1'))
     return GAMES[code]
+
+
+def silenced_channels(addr, tune, version):
+    """Returns the channels that the game holds at a level of 0 in a version of `tune`. The version is what the names
+    of agbsf2's files for it have after the tune's number: '' or 'underwater'. Returns None for a version that the game
+    doesn't play."""
+    if addr.water is None or addr.water[0] != tune:
+        return () if version == '' else None
+    _, above, under = addr.water
+    return {'': tuple(under), 'underwater': tuple(above)}.get(version)
 
 
 class Voice:
@@ -194,6 +213,7 @@ class DriverEmulator:
         self.uc = uc
         self.vcount = 0
         self.muted = None
+        self.silenced = ()  # the channels that the game holds at a level of 0
         self.call(addr.init)
 
         # The mixer starts sub sp, sp, #0x24 (#0x28 in BDQE); str lr, [sp, #8] in the code the init copies to IWRAM. A
@@ -308,6 +328,10 @@ class DriverEmulator:
         step that the mixer moved each note on by, in 1/2^23 bytes for each output sample, or 0 if it didn't mix it."""
         a = self.addr
         self.steps = [0] * len(self.steps)
+        # The game's code sets the levels between the driver's frames. The driver gives every channel a level of 128
+        # when a tune starts. The tune's first frame therefore plays every channel at that level. So does the game.
+        for c in self.silenced:
+            self.uc.mem_write(a.channel_levels + c, b'\0')
         self.call(a.frame)
         buffer = self.u32(a.buffers[0] if self.u32(a.buffer_flag) == 0 else a.buffers[1])
         count = self.u32(a.samples_per_frame)
@@ -375,12 +399,14 @@ def trace(rom, tune, frames):
             break
 
 
-def render(rom, tune, frames, channels=None):
+def render(rom, tune, frames, channels=None, version=''):
     """Returns the driver's output for the first `frames` frames of `tune`, and its rate in Hz. If `channels` is given,
-    the notes of the other channels are mixed at a level of 0. They still count towards the mixer's limit of voices."""
+    the notes of the other channels are mixed at a level of 0. They still count towards the mixer's limit of voices.
+    `version` picks the levels that the game gives the tune's channels. silenced_channels() takes the same values."""
     emu = DriverEmulator(rom)
     if channels is not None:
         emu.muted = set(range(16)) - set(channels)
+    emu.silenced = silenced_channels(emu.addr, tune, version) or ()
     emu.play(tune)
     out = [emu.frame() for _ in range(frames)]
     return np.concatenate(out), emu.rate()
@@ -394,6 +420,8 @@ def main():
     p.add_argument('frames', type=int)
     p.add_argument('out', nargs='?')
     p.add_argument('--channels', help='render: only these MIDI channels (0-15), such as 0,9')
+    p.add_argument('--under-water', action='store_true',
+                   help="render: the levels that Donkey Kong Country 3 gives tune 12 under water")
     a = p.parse_args()
     rom = load_rom(a.rom)
     if a.command == 'trace':
@@ -402,7 +430,10 @@ def main():
     if not a.out:
         p.error('an output file is needed')
     channels = [int(c) for c in a.channels.split(',')] if a.channels else None
-    mono, rate = render(rom, a.tune, a.frames, channels)
+    version = 'underwater' if a.under_water else ''
+    if silenced_channels(addresses_for(rom), a.tune, version) is None:
+        p.error('the game plays no version of tune %d under water' % a.tune)
+    mono, rate = render(rom, a.tune, a.frames, channels, version)
     write_wav(a.out, mono, rate)
 
 

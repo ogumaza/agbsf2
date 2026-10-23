@@ -10,6 +10,7 @@
 #include <iterator>
 #include <limits>
 #include <map>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -42,6 +43,10 @@ constexpr uint32_t kTicksPerQuarter = 24 * kTickUnits;
 // The longest conversion, in frames: about an hour.
 constexpr uint32_t kMaxFrames = 60 * 60 * 60;
 
+// The most frames that a sequence without a loop runs on after its end while the PSG still sounds: about 2 s. The PSG's
+// slowest envelope fades from 15 to 0 in 1.64 s, and a released wave voice fades out faster.
+constexpr uint32_t kRunOutFrames = 120;
+
 // The slowest tempo a MIDI file can hold at this resolution: at 3 or less, a quarter note lasts more than the 2^24
 // microseconds a tempo event can give it.
 constexpr int kMinMidiTempo = 4;
@@ -65,11 +70,63 @@ double Semitones(const Voice& v)
     return PsgSemitones(int(v.note_pitch), int(v.pitch));
 }
 
-// A frame's results for the conversion.
+// A frame's results for the conversion. `volume` holds each PSG channel's volume at the frame's start, from 0 to 15, or
+// -1 when the channel is off. The wave channel's volume is 15 times the share of its full level that NR32 sets.
 struct FrameData
 {
     int tempo = kStartTempo;                // the units the frame lasts
     std::array<double, kPlayerTracks> bend; // semitones from its note of each track's newest voice, or NaN for none
+    std::array<double, kPsgVoices> volume;
+    uint8_t nr51 = 0; // the PSG channels' sides after the frame
+};
+
+// The wave voice's PSG channel. The squares come before it, and the noise after it.
+constexpr int kWaveChannel = kWaveType - 1;
+
+// The offsets from 0x04000060 of the PSG's registers: each channel's NRx1 and NRx2, and its NRx3 and NRx4, then NR10,
+// NR30 and NR51.
+constexpr size_t kEnvelopeRegisters[kPsgVoices] = {0x02, 0x08, 0x12, 0x18};
+constexpr size_t kFrequencyRegisters[kPsgVoices] = {0x04, 0x0C, 0x14, 0x1C};
+constexpr size_t kNr10 = 0x00;
+constexpr size_t kNr30 = 0x10;
+constexpr size_t kNr51 = 0x21;
+
+// Returns PSG channel `c`'s registers after the sequencer's last frame, for the channel's model.
+PsgRegisters ChannelRegisters(const Sequencer& seq, int c)
+{
+    const std::array<uint8_t, 0x40>& r = seq.Registers();
+    const auto half = [&r](size_t at)
+    {
+        return uint16_t(r[at] | r[at + 1] << 8);
+    };
+
+    return {half(kNr10), half(kEnvelopeRegisters[c]), half(kFrequencyRegisters[c]), half(kNr30),
+            (seq.Restarted() >> c & 1) != 0};
+}
+
+// The models of the PSG channels, from the sequence's first frame.
+class PsgChannels
+{
+public:
+    PsgChannels() : models_{PsgModel(0), PsgModel(1), PsgModel(2), PsgModel(3)}
+    {
+    }
+
+    // Takes in the sequencer's last frame, and records each channel's volume at its start and the channels' sides. The
+    // wave channel's model gives 15 while the channel is on. NR32 then sets its share of that.
+    void Frame(const Sequencer& seq, FrameData& d)
+    {
+        for (int c = 0; c < kPsgVoices; c++)
+        {
+            const PsgRegisters r = ChannelRegisters(seq, c);
+            const int volume = models_[size_t(c)].Frame(r);
+            d.volume[size_t(c)] = c == kWaveChannel && volume >= 0 ? volume * WaveShare(r.envelope) : volume;
+        }
+        d.nr51 = seq.Registers()[kNr51];
+    }
+
+private:
+    std::array<PsgModel, kPsgVoices> models_;
 };
 
 // One of the model's events and the frame it happened in.
@@ -182,8 +239,10 @@ void UpdateTrackPlans(const Event& e, TrackPlans& tracks)
     }
     else if (e.kind == Event::kTrackStart && e.value < uint32_t(kPlayerTracks))
     {
-        tracks[e.value].started = true;
-        tracks[e.value].restarted = true;
+        // A track that F8 starts for the first time counts like the others.
+        TrackPlan& other = tracks[e.value];
+        other.restarted = other.restarted || other.started;
+        other.started = true;
     }
 }
 
@@ -269,10 +328,50 @@ std::vector<std::string> SimulationWarnings(const Sequencer& seq, const std::vec
     return warnings;
 }
 
+// Runs the model's next frame, and records the frame's results, the PSG channels' volumes and the tick after it.
+void StepFrame(Sequencer& seq, PsgChannels& psg, Simulation& sim)
+{
+    seq.Step();
+    sim.frames.push_back(RecordFrame(seq));
+    psg.Frame(seq, sim.frames.back());
+    sim.frame_ticks.push_back(seq.Elapsed());
+}
+
+// Returns true if any of the PSG's channels sounds at the start of the frame, at a volume above 0.
+bool PsgSounds(const FrameData& d)
+{
+    return std::any_of(d.volume.begin(), d.volume.end(), [](double volume) { return volume > 0; });
+}
+
+// Runs the model on after the end of a sequence without a loop. A square's or the noise's envelope can still fade then,
+// and the driver goes on fading a released wave voice. The sequence then ends at the start of the first frame in which
+// every channel is silent, or after kRunOutFrames.
+void RunOut(Sequencer& seq, PsgChannels& psg, Simulation& sim)
+{
+    if (sim.frames.empty() || !PsgSounds(sim.frames.back()))
+    {
+        return;
+    }
+
+    for (uint32_t n = 0; n < kRunOutFrames && PsgSounds(sim.frames.back()); n++)
+    {
+        StepFrame(seq, psg, sim);
+        const uint32_t f = uint32_t(sim.frames.size() - 1);
+        for (const Event& e : seq.Events())
+        {
+            sim.events.push_back({e, f});
+        }
+    }
+
+    const size_t silent = PsgSounds(sim.frames.back()) ? sim.frames.size() : sim.frames.size() - 1;
+    sim.plan.end = std::max(sim.plan.end, sim.frame_ticks[silent]);
+}
+
 // Runs the model until every track has looped or ended and the sequence has played its loop `loops` times. A track's
 // units are the MIDI file's ticks: each frame lasts the tempo's units, and each command comes at its track's time, or
 // with `frame_timing`, at the start of the frame the driver plays it in. From LoopStart::kSecondPass, the loop starts
-// at the sequence's second pass through it. The sequence then plays the first pass before it.
+// at the sequence's second pass through it. The sequence then plays the first pass before it. A sequence without a loop
+// runs on while the PSG sounds after the player stops (see RunOut()).
 Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops, bool frame_timing,
                     LoopStart start_pass)
 {
@@ -282,29 +381,28 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops,
     sim.frame_ticks.push_back(0);
 
     TrackPlans tracks;
+    PsgChannels psg;
     std::optional<SongPlan> loop;
     bool finished = false; // the sequence played what the plan requires, or ended
     for (uint32_t f = 0; f < kMaxFrames && seq.Valid(); f++)
     {
-        seq.Step();
+        StepFrame(seq, psg, sim);
         if (f == 0)
         {
             sim.volume2 = seq.GetPlayer().volume2;
         }
-
-        sim.frames.push_back(RecordFrame(seq));
-        sim.frame_ticks.push_back(seq.Elapsed());
+        for (const Event& e : seq.Events())
+        {
+            sim.events.push_back({e, f});
+            UpdateTrackPlans(e, tracks);
+        }
+        // The frame's events come first. A track that F8 starts in the frame then counts as started for the first time.
         for (int n = 0; n < kPlayerTracks; n++)
         {
             if (seq.GetPlayer().tracks[size_t(n)] >= 0)
             {
                 tracks[size_t(n)].started = true;
             }
-        }
-        for (const Event& e : seq.Events())
-        {
-            sim.events.push_back({e, f});
-            UpdateTrackPlans(e, tracks);
         }
 
         if (!loop)
@@ -319,6 +417,10 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops,
     }
 
     sim.plan = FinishPlan(loop, tracks, sim.frame_ticks.back());
+    if (finished && !sim.plan.loops && seq.Ended())
+    {
+        RunOut(seq, psg, sim);
+    }
     sim.warnings = SimulationWarnings(seq, sim.frames, finished);
 
     return sim;
@@ -389,14 +491,39 @@ struct Note
 {
     int track = 0;
     int key = 60;
-    int velocity = 127;
+    int velocity = 127; // the driver's, up to 255
     int program = 0;
     uint64_t on = 0; // MIDI ticks
     uint64_t off = 0;
     uint64_t length = 0;
     uint32_t frame = 0; // the frame the driver starts it in
     bool open = true;
+    int psg = -1;         // a PSG voice's channel, whose volume the note follows, or -1
+    uint32_t psg_end = 0; // the frame after the last that the note's CC11 follows (see NoteMaker::EndSound())
 };
+
+// Returns true if a voice of type `type` plays at its PSG channel's volume: a square's, the wave's or the noise's. The
+// MIDI file's CC11 follows that volume. A square's or the noise's envelope steps it through 16 values. NR32 gives the
+// wave channel 5 levels: 0, 25, 50, 75 and 100%.
+bool FollowsVolume(uint8_t type)
+{
+    return type == kSquare1Type || type == kSquare2Type || type == kWaveType || type == kNoiseType;
+}
+
+// Returns the tick of frame `f` on a note's time line: as far after the note's start as the frame comes after the one
+// the note starts in. With frame timing, that's the frame's start.
+uint64_t NoteFrameTick(const Simulation& sim, const Note& n, uint32_t f)
+{
+    return n.on + (sim.frame_ticks[f] - sim.frame_ticks[n.frame]);
+}
+
+// Returns a note's velocity in the MIDI file. A PSG voice's note plays at full velocity. Its CC11 follows the channel's
+// volume. The volume holds the velocity. Another note plays its velocity divided by its track's `scale` (see
+// VelocityScales()).
+int MidiVelocity(const Note& n, double scale)
+{
+    return n.psg >= 0 ? 127 : SquareRootValue(n.velocity, 127 * scale, 1);
+}
 
 // An instrument of the driver's banks, as a program of the MIDI file.
 struct Program
@@ -415,12 +542,15 @@ public:
     {
     }
 
-    // Works out the notes, the end of each, and the programs they play.
+    // Works out the notes, the end of each, and the programs they play. A PSG voice's note holds its channel until
+    // another note takes the channel. The note lasts as long as the channel sounds in that time (see EndSound()).
     std::vector<Note> Make()
     {
         std::vector<Note> notes;
         std::map<uint32_t, size_t> by_id;
         std::array<uint32_t, kVoices> voice_note = {};
+        std::array<int, kPsgVoices> holder; // the index of the note that holds each PSG channel, or -1
+        holder.fill(-1);
         const uint64_t end = TimeTick(sim_, sim_.plan.end);
 
         auto close = [&](uint32_t id, uint64_t tick)
@@ -442,9 +572,17 @@ public:
             const Event& e = te.event;
             if (e.kind == Event::kNote && e.voice >= 0)
             {
-                // A voice that plays a new note in legato ends its last one.
-                close(voice_note[size_t(e.voice)], EventTick(sim_, e.units, te.frame));
+                // A voice that plays a new note in legato ends its last one. A note on a PSG voice takes the channel
+                // from the note that held it, even if the conversion leaves the new note out.
+                const uint64_t tick = EventTick(sim_, e.units, te.frame);
+                close(voice_note[size_t(e.voice)], tick);
                 voice_note[size_t(e.voice)] = 0;
+                const int channel = e.voice >= kSampleVoices ? e.voice - kSampleVoices : -1;
+                if (channel >= 0 && holder[size_t(channel)] >= 0)
+                {
+                    EndSound(notes[size_t(holder[size_t(channel)])], te.frame, tick, end);
+                    holder[size_t(channel)] = -1;
+                }
                 if (e.velocity == 0 || e.track < 0 || !(mask_ >> e.track & 1) || e.units >= sim_.plan.end)
                 {
                     continue;
@@ -452,8 +590,8 @@ public:
 
                 Note n;
                 n.track = e.track;
-                n.velocity = SquareRootValue(e.velocity, 127, 1);
-                n.on = EventTick(sim_, e.units, te.frame);
+                n.velocity = e.velocity;
+                n.on = tick;
                 n.length = e.length;
                 n.frame = te.frame;
                 n.program = ProgramOf(e, n.key);
@@ -462,6 +600,11 @@ public:
                     continue;
                 }
 
+                if (channel >= 0 && FollowsVolume(e.type))
+                {
+                    n.psg = channel;
+                    holder[size_t(channel)] = int(notes.size());
+                }
                 by_id[e.id] = notes.size();
                 notes.push_back(n);
                 voice_note[size_t(e.voice)] = e.id;
@@ -484,6 +627,13 @@ public:
                 notes[i].off = std::max(end, notes[i].on + 1);
             }
         }
+        for (int h : holder)
+        {
+            if (h >= 0)
+            {
+                EndSound(notes[size_t(h)], uint32_t(sim_.frames.size()), end, end);
+            }
+        }
 
         return notes;
     }
@@ -499,6 +649,27 @@ public:
     }
 
 private:
+    // Ends `n`, a PSG voice's note. The note holds its channel until another note takes it in frame `until`, at tick
+    // `until_tick`. Where no note takes it, `until` is the frames' end. The channel sounds until the start of the frame
+    // after the last one in which its volume is above 0. The note lasts that long, but ends by `until_tick` and `end`.
+    // The release fades the volume out over frames. A square's or the noise's envelope can fade it out before the
+    // release. A note that the channel never sounds lasts a tick. The note's CC11 follows the channel's volume up to
+    // the frame in which the sound ends. That frame's volume of 0 holds CC11 at 0 until the note off.
+    void EndSound(Note& n, uint32_t until, uint64_t until_tick, uint64_t end) const
+    {
+        uint32_t silent = n.frame; // the frame in which the sound ends
+        for (uint32_t f = n.frame; f < until; f++)
+        {
+            if (sim_.frames[f].volume[size_t(n.psg)] > 0)
+            {
+                silent = f + 1;
+            }
+        }
+
+        n.psg_end = std::max(std::min(until, silent + 1), n.frame + 1);
+        n.off = std::max(std::min({NoteFrameTick(sim_, n, silent), until_tick, end}), n.on + 1);
+    }
+
     // Returns the tick at which a note's release or stop ends it in the MIDI file. A command's comes at its time. The
     // PSG voices' update comes at the start of its frame, and the mixer at the end, before the next frame: a release
     // there keeps to the note's length within the frame it starts, and a stop comes at that frame's start. With frame
@@ -538,10 +709,25 @@ private:
             return -1;
         }
 
-        // A sample instrument without drums or a sample for each key gets a zone for every key.
+        // The SoundFont has no zone for a sample that can't be read. The note is left out.
+        if (z->type == kSampleType && !SampleReadable(rom_, z->sound))
+        {
+            char text[96];
+            std::snprintf(text, sizeof text, "the sample at 0x%08X can't be read, so its notes are left out",
+                          unsigned(z->sound));
+            WarnOnce(warnings_, text);
+            return -1;
+        }
+
+        // A sample instrument without drums or a sample for each key gets a zone for every key. A note below the
+        // driver's tables replaces the zone that fills its key (see BelowTables()).
         const bool fill = e.type == kSampleType && !lk.drum && !lk.key_sample;
         const size_t p = FindProgram(e.bank, e.instrument, fill);
-        programs_[p].keys.emplace(key, *z);
+        const auto [at, added] = programs_[p].keys.emplace(key, *z);
+        if (!added && fill && BelowTables(uint8_t(key), RegionTuning(rom_, lk.region)))
+        {
+            at->second = *z;
+        }
 
         return int(p);
     }
@@ -570,7 +756,13 @@ private:
         if (e.type == kSampleType && !fixed)
         {
             key = e.key;
-            return SampleZone(e.sample, lk);
+            ZoneSound z = SampleZone(e.sample, lk);
+            if (BelowTables(e.key, RegionTuning(rom_, lk.region)))
+            {
+                z.root = key;
+                z.coarse = -kUnityIndex;
+            }
+            return z;
         }
 
         const uint32_t region = lk.region;
@@ -578,8 +770,14 @@ private:
         const int index = PitchIndex(fixed ? kFixedNote : e.key, tuning);
         ZoneSound z;
         z.type = e.type;
-        z.envelope = lk.envelope;
-        z.release = RegionRelease(rom_, region);
+
+        // The region's envelope and release set a PSG voice's volume. The notes' CC11 follows the volume, and the zone
+        // plays at a constant level.
+        if (!FollowsVolume(e.type))
+        {
+            z.envelope = lk.envelope;
+            z.release = RegionRelease(rom_, region);
+        }
         z.own_pan = lk.drum;
         if (lk.drum)
         {
@@ -604,7 +802,6 @@ private:
 
         case kWaveType:
             z.sound = e.psg;
-            z.envelope = 0; // the wave voice leaves its region's envelope out
             z.root = 48;
             key = index;
             break;
@@ -635,6 +832,14 @@ private:
     uint8_t SettledDuty(const Event& e) const
     {
         return HasPsgTable(rom_, e.lookup.region) ? LastPsgTableEntry(rom_, e.psg) : uint8_t(e.psg);
+    }
+
+    // Returns true if a note's pitch index falls below the driver's tables. The driver then plays it at the pitch of
+    // index 0 (see PitchIndex()). Its zone plays the note's key at that pitch. The zones that fill the keys that the
+    // sequence doesn't play keep the region's tuning.
+    static bool BelowTables(uint8_t note, uint8_t tuning)
+    {
+        return int(note) + kUnityIndex < int(tuning);
     }
 
     // Returns the zone of a sample region that plays `sample` at the region's tuning. The regions of drums, and of
@@ -771,11 +976,13 @@ std::vector<std::string> AddPresets(const Rom& rom, SoundfontBuilder& sf, const 
                 sf2::Generator::Value(sf2::kSampleModes, Looped(sf.File().samples[size_t(sample)]) ? 1 : 0));
             zone.generators.push_back(sf2::Generator::Value(sf2::kSampleId, sample));
 
-            // A square's or noise's release is the PSG's envelope. A sample's or the wave's takes a share of its level
-            // off each frame.
-            const bool psg_release = z.type == kSquare1Type || z.type == kSquare2Type || z.type == kNoiseType;
-            const int release = psg_release ? PsgRelease(z.release) : SampleRelease(z.release);
-            const Sf2Envelope env = z.type == kWaveType ? WaveEnvelope(release) : EnvelopeFor(rom, z.envelope, release);
+            // A sample's release takes a share of its level off each frame. A PSG voice plays at a constant level, and
+            // its notes' CC11 follows the channel's volume.
+            Sf2Envelope env;
+            if (z.type == kSampleType)
+            {
+                env = EnvelopeFor(rom, z.envelope, SampleRelease(z.release));
+            }
             AddEnvelope(zone, env);
             zones.push_back(zone);
         }
@@ -847,10 +1054,12 @@ std::array<bool, kPlayerTracks> PsgTracks(const std::vector<Note>& notes, const 
 // both sides at the centre pan, 0x40. At any other pan, it plays at twice the level on one side alone
 // (Sequencer::WritePan() and PsgLevel()). `psg` is set when every note that the track plays is a PSG note other than a
 // drum (see PsgTracks()). The controllers then follow the PSG's rule. TrackLevels() gives the two sides the same sum at
-// every pan: twice the level of each side at the centre.
-void TrackControllers(Revision revision, const Levels& l, bool psg, int& cc10, int& cc11)
+// every pan: twice the level of each side at the centre. CC11 plays the levels times `scale` (see VelocityScales()).
+void TrackControllers(Revision revision, const Levels& l, bool psg, double scale, int& cc10, int& cc11)
 {
-    const auto [left, right] = TrackLevels(revision, l.pan, l.volume, l.player_volume, l.player_volume2);
+    auto [left, right] = TrackLevels(revision, l.pan, l.volume, l.player_volume, l.player_volume2);
+    left *= scale;
+    right *= scale;
     if (!psg || l.pan == kCentre)
     {
         LevelsToControllers(left, right, cc10, cc11);
@@ -859,6 +1068,26 @@ void TrackControllers(Revision revision, const Levels& l, bool psg, int& cc10, i
 
     const double side = left + right;
     LevelsToControllers(l.pan < kCentre ? side : 0, l.pan < kCentre ? 0 : side, cc10, cc11);
+}
+
+// Returns CC11 for a note at full velocity on PSG channel `c` at volume `volume` (0-15, or -1 when the channel is off).
+// The note plays on the sides that `nr51` enables for the channel. The driver's volume already holds the note's
+// velocity and the volumes. Volume 15 plays at the level that PsgShare() gives it against a full-scale sample. A
+// SoundFont's PSG samples hold that share. The note's CC10 comes from its track's pan (see TrackControllers()).
+int PsgExpression(Revision revision, double volume, uint8_t nr51, int c)
+{
+    const double level = std::max(volume, 0.0) / PsgShare(revision);
+    int cc10 = 64, cc11 = 0;
+    LevelsToControllers((nr51 >> (c + 4) & 1) ? level : 0, (nr51 >> c & 1) ? level : 0, cc10, cc11);
+
+    return cc11;
+}
+
+// Returns the CC11 of a PSG voice's note in frame `f`, from its channel's volume at the frame's start.
+int NoteExpression(const Simulation& sim, Revision revision, const Note& n, uint32_t f)
+{
+    const FrameData& d = sim.frames[f];
+    return PsgExpression(revision, d.volume[size_t(n.psg)], d.nr51, n.psg);
 }
 
 // A change of a track's levels: its tick, the levels from there on, and whether it sets the track's pan.
@@ -927,43 +1156,160 @@ std::array<std::vector<LevelChange>, kPlayerTracks> TrackChanges(const Simulatio
     return changes;
 }
 
-// Writes a track's CC10 for pan and CC11 for loudness at the start and whenever they change. A player that jumps back
-// to `loop`, the loop's start, retains the levels from the loop's end, as the game does until the loop sets them. So
-// CC11 is written again at the first level-change record at or after `loop`, and CC10, which follows the pan alone, at
-// the first record that sets the pan, even if their values haven't changed. `start` gives the levels before the track's
-// first change. With `psg`, the controllers follow the PSG's rule (see TrackControllers()).
-void WriteLevels(MidiTrack& mt, int c, Revision revision, bool psg, const Levels& start,
-                 const std::vector<LevelChange>& changes, std::optional<uint64_t> loop)
+// Returns a track's levels from its start: `start` up to its first change, then each of `changes`. The records leave
+// `start` out when the first change comes at tick 0.
+std::vector<LevelChange> LevelRecords(const Levels& start, const std::vector<LevelChange>& changes)
 {
-    int cc10 = -1, cc11 = -1;
-    bool again10 = loop.has_value(), again11 = loop.has_value();
-
-    auto write = [&](const LevelChange& change)
-    {
-        const bool looped = loop && change.tick >= *loop;
-        const bool write10 = looped && again10 && change.pan, write11 = looped && again11;
-        again10 = again10 && !write10;
-        again11 = again11 && !write11;
-
-        int n10 = cc10 < 0 ? 64 : cc10, n11 = cc11 < 0 ? 0 : cc11;
-        TrackControllers(revision, change.levels, psg, n10, n11);
-        if (n10 != cc10 || write10)
-        {
-            mt.Control(uint32_t(change.tick), c, cc::kPan, cc10 = n10);
-        }
-        if (n11 != cc11 || write11)
-        {
-            mt.Control(uint32_t(change.tick), c, cc::kExpression, cc11 = n11);
-        }
-    };
-
+    std::vector<LevelChange> records;
     if (changes.empty() || changes[0].tick != 0)
     {
-        write({0, start, false});
+        records.push_back({0, start, false});
     }
-    for (const LevelChange& change : changes)
+    records.insert(records.end(), changes.begin(), changes.end());
+
+    return records;
+}
+
+// The amplitude of a track's levels on both sides, in 128ths, that CC11 plays at 127 (see LevelsToControllers()).
+constexpr double kLoudestLevels = 127 * std::numbers::sqrt2;
+
+// Returns, for each of the player's tracks, the factor that its CC11 raises its levels by. The driver plays a sample
+// note's level in proportion to its velocity. The velocity goes up to 255. A MIDI note's velocity stops at 127. A
+// track's sample notes therefore play at their velocity divided by the factor. The factor is the loudest sample note's
+// velocity over 127, and at least 1. It stops where CC11 would pass 127 at the track's loudest levels.
+std::array<double, kPlayerTracks> VelocityScales(Revision revision, const Levels& start, const std::vector<Note>& notes,
+                                                 const std::array<std::vector<LevelChange>, kPlayerTracks>& changes)
+{
+    std::array<int, kPlayerTracks> loudest{};
+    for (const Note& n : notes)
     {
-        write(change);
+        if (n.psg < 0)
+        {
+            loudest[size_t(n.track)] = std::max(loudest[size_t(n.track)], n.velocity);
+        }
+    }
+
+    std::array<double, kPlayerTracks> scales;
+    for (int t = 0; t < kPlayerTracks; t++)
+    {
+        double scale = loudest[size_t(t)] / 127.0;
+        for (const LevelChange& r : LevelRecords(start, changes[size_t(t)]))
+        {
+            const Levels& l = r.levels;
+            const auto [left, right] = TrackLevels(revision, l.pan, l.volume, l.player_volume, l.player_volume2);
+            const double amplitude = std::hypot(left, right);
+            if (amplitude > 0)
+            {
+                scale = std::min(scale, kLoudestLevels / amplitude);
+            }
+        }
+        scales[size_t(t)] = std::max(scale, 1.0);
+    }
+
+    return scales;
+}
+
+// A note's stretch of its track's CC11, from its note on until `end`. A PSG voice's note sets CC11 to the value of each
+// of its steps from the step's tick on. The steps follow the channel's volume (see PsgExpression()). Any other note has
+// no steps. It plays at its track's levels until its note off.
+struct ExpressionSpan
+{
+    uint64_t on = 0;
+    uint64_t end = 0;
+    std::vector<std::pair<uint64_t, int>> steps; // (tick, CC11)
+};
+
+// Returns the ticks at which a track's CC10 or CC11 can change: each of `records`, and each note on, step and end of
+// `spans`. Each tick comes with whether CC11 returns to the track's levels there when no span holds the tick. It
+// doesn't at a span's end.
+std::map<uint64_t, bool> LevelTicks(const std::vector<LevelChange>& records, const std::vector<ExpressionSpan>& spans)
+{
+    std::map<uint64_t, bool> ticks;
+    for (const LevelChange& change : records)
+    {
+        ticks[change.tick] = true;
+    }
+    for (const ExpressionSpan& span : spans)
+    {
+        ticks[span.on] = true;
+        for (const auto& step : span.steps)
+        {
+            ticks[step.first] = true;
+        }
+        ticks.emplace(span.end, false);
+    }
+
+    return ticks;
+}
+
+// Writes a track's CC10 for pan and CC11 for loudness at the start and whenever they change. A player that jumps back
+// to `loop`, the loop's start, retains the levels from the loop's end, as the game does until the loop sets them. So
+// CC11 is written again at the first tick at or after `loop` that sets it, even if its value hasn't changed. CC10
+// follows the pan alone. It's written again at the first level-change record that sets the pan. `start` gives the
+// levels before the track's first change. With `psg`, the controllers follow the PSG's rule (see TrackControllers()).
+// CC11 plays the track's levels times `scale` (see VelocityScales()).
+//
+// If any of the track's notes is a PSG voice's, `spans` holds each of the notes' stretches of CC11, in the order of
+// their note ons. Otherwise it's empty, and CC11 follows the track's levels. At each tick, of the spans that hold the
+// tick, the one with the latest note on sets CC11. Where no span holds a tick, CC11 follows the track's levels. It
+// returns to them at the next level change, note on or step after a span's end.
+void WriteLevels(MidiTrack& mt, int c, Revision revision, bool psg, double scale, const Levels& start,
+                 const std::vector<LevelChange>& changes, const std::vector<ExpressionSpan>& spans,
+                 std::optional<uint64_t> loop)
+{
+    const std::vector<LevelChange> records = LevelRecords(start, changes);
+
+    int cc10 = -1, cc11 = -1;
+    int level11 = 0; // CC11 for the track's levels
+    bool again10 = loop.has_value(), again11 = loop.has_value();
+    size_t next_record = 0, next_span = 0;
+    std::vector<size_t> held;                     // the spans that hold the tick, in the order of their note ons
+    std::vector<size_t> step_at(spans.size(), 0); // each span's last step so far
+    for (const auto& [tick, returns] : LevelTicks(records, spans))
+    {
+        // A level-change record sets CC10, and the track's levels for CC11.
+        const bool looped = loop && tick >= *loop;
+        if (next_record < records.size() && records[next_record].tick == tick)
+        {
+            const LevelChange& change = records[next_record++];
+            const bool write10 = looped && again10 && change.pan;
+            again10 = again10 && !write10;
+            int n10 = cc10 < 0 ? 64 : cc10;
+            TrackControllers(revision, change.levels, psg, scale, n10, level11);
+            if (n10 != cc10 || write10)
+            {
+                mt.Control(uint32_t(tick), c, cc::kPan, cc10 = n10);
+            }
+        }
+
+        // The span with the latest note on sets CC11.
+        while (next_span < spans.size() && spans[next_span].on <= tick)
+        {
+            held.push_back(next_span++);
+        }
+        std::erase_if(held, [&spans, tick](size_t s) { return spans[s].end <= tick; });
+        int n11 = level11;
+        if (!held.empty() && !spans[held.back()].steps.empty())
+        {
+            const auto& steps = spans[held.back()].steps;
+            size_t& k = step_at[held.back()];
+            while (k + 1 < steps.size() && steps[k + 1].first <= tick)
+            {
+                k++;
+            }
+            n11 = steps[k].second;
+        }
+        else if (held.empty() && !returns)
+        {
+            continue;
+        }
+
+        const bool write11 = looped && again11;
+        again11 = again11 && !write11;
+        if (n11 != cc11 || write11)
+        {
+            mt.Control(uint32_t(tick), c, cc::kExpression, cc11 = n11);
+        }
     }
 }
 
@@ -1010,9 +1356,10 @@ void WriteBends(MidiTrack& mt, int c, const Simulation& sim, int n, const std::v
 // Writes a track's notes, each with its program, which starts as `program` and is written again at the first note at or
 // after `loop`, the loop's start, since a looping player retains the program from the loop's end. A MIDI channel can't
 // play a key twice at once, so a new note on a sounding key ends the earlier one, and two notes on the same key that
-// start together become one MIDI note, the first, lasting as long as the longer of them.
+// start together become one MIDI note, the first, lasting as long as the longer of them. A sample note's velocity is
+// divided by `scale` (see VelocityScales()).
 void WriteNotes(MidiTrack& mt, int c, const std::vector<const Note*>& notes, const std::vector<BankProgram>& slots,
-                int program, std::optional<uint64_t> loop)
+                int program, double scale, std::optional<uint64_t> loop)
 {
     std::vector<uint64_t> offs(notes.size());
     std::vector<bool> merged(notes.size());
@@ -1059,7 +1406,7 @@ void WriteNotes(MidiTrack& mt, int c, const std::vector<const Note*>& notes, con
             program = note->program;
             mt.Program(uint32_t(note->on), c, slots[size_t(program)].program);
         }
-        mt.NoteOn(uint32_t(note->on), c, note->key, note->velocity);
+        mt.NoteOn(uint32_t(note->on), c, note->key, MidiVelocity(*note, scale));
         mt.NoteOff(uint32_t(std::max(offs[i], note->on + 1)), c, note->key);
     }
 }
@@ -1074,6 +1421,7 @@ bool FirstPassRepeats(const Rom& rom, const DriverInfo& info, const Simulation& 
     const std::vector<Note> notes = maker.Make();
     const std::array<bool, kPlayerTracks> psg = PsgTracks(notes, maker.Programs());
     const std::array<std::vector<LevelChange>, kPlayerTracks> changes = TrackChanges(sim);
+    const std::array<double, kPlayerTracks> scales = VelocityScales(info.revision, StartLevels(sim), notes, changes);
     const SongPlan& plan = sim.plan;
     PassComparison passes(plan.loop_start, plan.loop_end - plan.loop_start);
     for (const Note& n : notes)
@@ -1087,17 +1435,66 @@ bool FirstPassRepeats(const Rom& rom, const DriverInfo& info, const Simulation& 
         const auto after = std::upper_bound(list.begin(), list.end(), n.on, by_tick);
         const Levels levels = after == list.begin() ? StartLevels(sim) : std::prev(after)->levels;
         int cc10 = 64, cc11 = 0;
-        TrackControllers(info.revision, levels, psg[size_t(n.track)], cc10, cc11);
+        TrackControllers(info.revision, levels, psg[size_t(n.track)], scales[size_t(n.track)], cc10, cc11);
+
+        // A PSG voice's note starts at its channel's volume.
+        if (n.psg >= 0)
+        {
+            cc11 = NoteExpression(sim, info.revision, n, n.frame);
+        }
 
         // A note's bend is its track's newest voice's in the frame it starts, which a voice that the note didn't take
         // can leave unknown.
         const FrameData& d = sim.frames[n.frame];
         const double bend = std::isnan(d.bend[size_t(n.track)]) ? kNoBend : d.bend[size_t(n.track)];
         passes.Add(n.on, n.track, n.key,
-                   {double(n.velocity), double(n.program), double(cc10), double(cc11), bend, double(d.tempo)});
+                   {double(MidiVelocity(n, scales[size_t(n.track)])), double(n.program), double(cc10), double(cc11),
+                    bend, double(d.tempo)});
     }
 
     return passes.Alike();
+}
+
+// Returns the stretches of CC11 of a track's notes (see ExpressionSpan) before `end`, in the order of their note ons. A
+// PSG voice's note gets a step at each frame in which its channel's volume changes, from its first frame to the one
+// after its sound ends (see NoteMaker::EndSound()). Returns none if no note is a PSG voice's.
+std::vector<ExpressionSpan> TrackSpans(const Simulation& sim, Revision revision, const std::vector<const Note*>& notes,
+                                       uint64_t end)
+{
+    std::vector<ExpressionSpan> spans;
+    bool steps = false;
+    for (const Note* n : notes)
+    {
+        ExpressionSpan span;
+        span.on = n->on;
+        span.end = std::min(n->off, end);
+        if (n->psg >= 0)
+        {
+            span.end = std::min(NoteFrameTick(sim, *n, n->psg_end), end);
+            for (uint32_t f = n->frame; f < n->psg_end && NoteFrameTick(sim, *n, f) < end; f++)
+            {
+                const int value = NoteExpression(sim, revision, *n, f);
+                if (span.steps.empty() || span.steps.back().second != value)
+                {
+                    span.steps.emplace_back(NoteFrameTick(sim, *n, f), value);
+                }
+            }
+            steps = steps || !span.steps.empty();
+        }
+        spans.push_back(std::move(span));
+    }
+    if (!steps)
+    {
+        return {};
+    }
+
+    const auto by_on = [](const ExpressionSpan& a, const ExpressionSpan& b)
+    {
+        return a.on < b.on;
+    };
+    std::stable_sort(spans.begin(), spans.end(), by_on);
+
+    return spans;
 }
 
 // Writes the MIDI file: a conductor track, then a track for each of the player's tracks that plays notes, with the
@@ -1131,6 +1528,7 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
     const std::optional<uint64_t> loop = plan.loops && loop_start > 0 ? std::optional(loop_start) : std::nullopt;
 
     const auto changes = TrackChanges(sim);
+    const std::array<double, kPlayerTracks> scales = VelocityScales(revision, StartLevels(sim), notes, changes);
     for (int n = 0; n < kPlayerTracks; n++)
     {
         std::vector<const Note*> list;
@@ -1175,21 +1573,28 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
             WriteBends(mt, c, sim, n, list, range, loop);
         }
 
-        WriteLevels(mt, c, revision, psg[size_t(n)], StartLevels(sim), changes[size_t(n)], loop);
-        WriteNotes(mt, c, list, slots, program, loop);
+        WriteLevels(mt, c, revision, psg[size_t(n)], scales[size_t(n)], StartLevels(sim), changes[size_t(n)],
+                    TrackSpans(sim, revision, list, end), loop);
+        WriteNotes(mt, c, list, slots, program, scales[size_t(n)], loop);
     }
 
     return WriteFile(path, midi.Encode(), error);
 }
 
-// Converts a sequence, writing its files if `write` is set.
+// Converts a sequence or a sound effect. With `write`, it writes the files.
 SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings,
                SoundfontBuilder* shared, bool write)
 {
     SongReport report;
-    if (song < 0 || song >= int(info.sequence_addresses.size()))
+    const Effect* effect = SongEffect(info, song);
+    if (song < 0 || song >= SongCount(info))
     {
         report.warnings.push_back("there's no such sequence");
+        return report;
+    }
+    if (effect && !effect->address)
+    {
+        report.warnings.push_back("the sound effect's entry gives no track");
         return report;
     }
 
@@ -1247,14 +1652,25 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
     }
     for (const std::string& w : AddPresets(rom, sf, maker.Programs(), slots))
     {
-        report.warnings.push_back(w);
+        WarnOnce(report.warnings, w);
     }
 
     const std::string number = SongNumber(song, 0);
     const std::string title = rom.Title() + " #" + number;
     char about[160];
-    std::snprintf(about, sizeof about, "%s (%s) sequence %d at 0x%08X, converted by %s", rom.Title().c_str(),
-                  rom.GameCode().c_str(), song, unsigned(info.sequence_addresses[size_t(song)]), kProgramName);
+    if (effect)
+    {
+        std::snprintf(about, sizeof about,
+                      "%s (%s) sound effect at 0x%08X, track %d of the effects' sequence %d, "
+                      "converted by %s",
+                      rom.Title().c_str(), rom.GameCode().c_str(), unsigned(effect->address), effect->track,
+                      effect->sequence, kProgramName);
+    }
+    else
+    {
+        std::snprintf(about, sizeof about, "%s (%s) sequence %d at 0x%08X, converted by %s", rom.Title().c_str(),
+                      rom.GameCode().c_str(), song, unsigned(info.sequence_addresses[size_t(song)]), kProgramName);
+    }
     const std::string stem = SongStem(settings, number);
 
     std::string error;

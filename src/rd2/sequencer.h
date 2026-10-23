@@ -58,6 +58,10 @@ constexpr uint8_t kFixedNote = 0x30;
 // The pan that plays a voice on both sides alike.
 constexpr uint8_t kCentre = 0x40;
 
+// The priority and the echo send that a sound effect's tracks start with.
+constexpr uint8_t kEffectPriority = 12;
+constexpr uint8_t kEffectEcho = 0x7F;
+
 // The states of a voice, as the driver keeps them in the voice's byte 0x01.
 constexpr uint8_t kVoiceFree = 0;
 constexpr uint8_t kVoicePlaying = 1;
@@ -157,6 +161,7 @@ struct Player
     uint8_t volume = 0x80;    // 0x40: EA
     uint8_t volume2 = 0x80;   // 0x41
     bool active = false;      // 0x42
+    bool effect = false;      // 0x43: true while it plays a sound effect
 };
 
 // An instrument's settings for a note: the region to play, its envelope and its PSG settings.
@@ -268,8 +273,9 @@ struct Event
 class Sequencer
 {
 public:
-    // Keeps references to `rom` and `info`, which have to outlive the sequencer.
-    Sequencer(const Rom& rom, const DriverInfo& info, int sequence);
+    // Plays song `song`: a sequence, or a sound effect after the sequences (see SongEffect()). Keeps references to
+    // `rom` and `info`, which have to outlive the sequencer.
+    Sequencer(const Rom& rom, const DriverInfo& info, int song);
 
     // Returns false if the sequence can't be played.
     bool Valid() const
@@ -315,6 +321,19 @@ public:
         return writes_;
     }
 
+    // Returns the sound registers from 0x04000060 on: 0x40 bytes, with the values last written.
+    const std::array<uint8_t, 0x40>& Registers() const
+    {
+        return registers_;
+    }
+
+    // Returns the PSG channels that the last frame started again: bit c for channel c, from 0 for square 1 to 3 for the
+    // noise.
+    uint8_t Restarted() const
+    {
+        return restarted_;
+    }
+
     // Returns the time at which the next frame starts, in units from the sequence's start: the tempo of each frame so
     // far, added up.
     uint64_t Elapsed() const
@@ -335,6 +354,7 @@ public:
 
 private:
     void Start();
+    void StartEffect();
     void Warn(const std::string& text);
 
     // The sequencer.
@@ -393,6 +413,7 @@ private:
     const DriverInfo& info_;
     const RevisionTraits& traits_; // TraitsOf(info_.revision)
     int sequence_ = 0;
+    const Effect* effect_ = nullptr; // the sound effect that it plays, or null for a sequence
     bool valid_ = false;
     bool started_ = false;
     Player player_;
@@ -403,6 +424,7 @@ private:
     uint16_t key_sample_ = 0; // the sample in the driver's region of a sample for each key
     uint32_t current_wave_ = 0;
     std::array<uint8_t, 0x40> registers_ = {}; // 0x04000060 on, as last written
+    uint8_t restarted_ = 0;                    // bit c: the frame started PSG channel c again
     uint64_t elapsed_ = 0;
     uint32_t next_id_ = 1;
     Event::Phase phase_ = Event::kCommands;

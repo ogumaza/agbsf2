@@ -31,6 +31,9 @@ struct RevisionCode
     // channels from theirs, with their banks.
     const char* play;
 
+    // The routine that plays a sound effect. It skips each channel whose data starts with FF.
+    const char* play_effect;
+
     // The code that loads the variable of the noise macros, and the halfword of its ldr. The routine that gives the
     // driver bank 0's macros stores them in the variable, and the one for bank 1 in the word after it.
     const char* macro_variable;
@@ -44,9 +47,10 @@ struct RevisionCode
 };
 
 constexpr RevisionCode kRevisionCode[2] = {
-    {"B5F0 1C07 2400 4Exx 4Dxx CE01 Fxxx Fxxx CD01", "0600 0E03 1C19 48xx 7800 2800 D0xx 48xx 6802", 7,
-     "B570 1C02 48xx 2500 024C 237F", ""},
+    {"B5F0 1C07 2400 4Exx 4Dxx CE01 Fxxx Fxxx CD01", "B570 49xx 6008 2500 4Exx 48xx 6801 0068 1840 8840 1844 7820 28FF",
+     "0600 0E03 1C19 48xx 7800 2800 D0xx 48xx 6802", 7, "B570 1C02 48xx 2500 024C 237F", ""},
     {"B5F0 1C07 2500 4Exx 00AC CE01 2100 Fxxx Fxxx 48xx 1824 6820",
+     "B570 49xx 6008 2500 48xx 6801 0068 1840 8840 1846 7830 28FF",
      "B510 0600 0E03 48xx 6802 1C14 3490 2000 6020 2B00 D0xx 49xx 7B52 0090 1840", 11,
      "B570 4Bxx 008A 18D2 1C03 6013 48xx 2200 024D 247F", ", J revision"},
 };
@@ -125,9 +129,14 @@ uint32_t FindSetter(const Rom& rom, uint32_t variable, uint16_t store)
 }
 
 // Finds the music file from the game's calls to the driver's play routine: the game looks the file up, skips to the
-// song, and passes its address. Returns 0 if no call does so.
+// song, and passes its address. Returns 0 if no call does so. The sound effects' file is found the same way.
 uint32_t FindSongs(const Rom& rom, uint32_t play)
 {
+    if (!play)
+    {
+        return 0;
+    }
+
     for (uint32_t call : FindCalls(rom, play))
     {
         // The lookup's bl comes a few instructions before, after the moves of its arguments.
@@ -165,11 +174,17 @@ std::vector<uint32_t> ReadSampleList(const Rom& rom, uint32_t samples)
 }
 
 // Returns the game's bank 0 and bank 1 tables that it gives the driver by storing them in `variable` and the word after
-// it: the noise macros' tables. Either is 0 if it isn't found.
+// it: the noise macros' tables. The J revision's routine for bank 1 stores 4 bytes past the variable. The A revision's
+// loads the address of the word after it. Either table is 0 if it isn't found.
 std::array<uint32_t, 2> BankTables(const Rom& rom, uint32_t variable)
 {
-    return {TableFromSetter(rom, FindSetter(rom, variable, kStoreInVariable)),
-            TableFromSetter(rom, FindSetter(rom, variable, kStoreAfterVariable))};
+    uint32_t bank1 = TableFromSetter(rom, FindSetter(rom, variable, kStoreAfterVariable));
+    if (!bank1 && variable)
+    {
+        bank1 = TableFromSetter(rom, FindSetter(rom, variable + 4, kStoreInVariable));
+    }
+
+    return {TableFromSetter(rom, FindSetter(rom, variable, kStoreInVariable)), bank1};
 }
 
 // Returns the game's sample files for banks 0 and 1, from the routines that pass each to the driver's sample loader
@@ -225,6 +240,7 @@ void FindPlayRoutine(const Rom& rom, DriverInfo& info)
         {
             info.revision = Revision(r);
             info.play = play;
+            info.play_effect = FindFirstThumb(rom, kRevisionCode[r].play_effect);
             return;
         }
     }
@@ -258,18 +274,12 @@ void FindGameFiles(const Rom& rom, DriverInfo& info)
 {
     // The game gives the driver its wave table, noise macros and samples through routines that store them in the
     // driver's variables, which the routines that use them load. The A revision's music only ever reads bank 0. Its
-    // bank 1 holds the sound effects' macros and samples.
+    // sound effects read bank 1.
     const uint32_t wave_variable = FindLiteral(rom, "B530 0600 0E02 48xx 6801 1C05 2900", 3);
     info.waves = TableFromSetter(rom, FindSetter(rom, wave_variable, kStoreInVariable));
     const RevisionCode& code = kRevisionCode[size_t(info.revision)];
     info.macros = BankTables(rom, FindLiteral(rom, code.macro_variable, code.macro_ldr));
     info.samples = SampleFiles(rom, FindFirstThumb(rom, code.loader));
-    if (!TraitsOf(info.revision).banks)
-    {
-        info.macros[1] = 0;
-        info.samples[1] = 0;
-    }
-
     for (size_t bank = 0; bank < 2; bank++)
     {
         if (info.samples[bank])
@@ -314,6 +324,17 @@ bool FindMusicFile(const Rom& rom, const DriverOverrides& overrides, DriverInfo&
     return true;
 }
 
+// Finds the sound effects' file from the game's calls to the routine that plays a sound effect, and lists the sound
+// effects. A game without them has none.
+void FindEffectsFile(const Rom& rom, DriverInfo& info)
+{
+    info.effects_file = FindSongs(rom, info.play_effect);
+    if (info.effects_file)
+    {
+        info.effect_addresses = ReadSongList(rom, info.effects_file, kMaxSongs);
+    }
+}
+
 // Logs what detection found: the songs, the play routine and the tables. Adds a warning for each of the game's tables
 // that detection didn't find.
 void ReportDetection(DriverInfo& info)
@@ -332,12 +353,17 @@ void ReportDetection(DriverInfo& info)
 
     info.log.push_back(std::to_string(info.song_addresses.size()) + " songs, play routine at " + Hex(info.play) +
                        kRevisionCode[size_t(info.revision)].label);
+    if (info.effects_file)
+    {
+        const int songs = int(info.song_addresses.size());
+        info.log.push_back("sound effects' file at " + Hex(info.effects_file) + " (" +
+                           std::to_string(info.effect_addresses.size()) + " sound effects: songs " +
+                           std::to_string(songs) + "-" + std::to_string(SongCount(info) - 1) + "), play routine at " +
+                           Hex(info.play_effect));
+    }
     info.log.push_back("wave table " + found(info.waves) + ", noise macros " + found(info.macros[0]) +
                        ", PCM samples " + samples(0));
-    if (TraitsOf(info.revision).banks)
-    {
-        info.log.push_back("the sound effects' noise macros " + found(info.macros[1]) + ", PCM samples " + samples(1));
-    }
+    info.log.push_back("the sound effects' noise macros " + found(info.macros[1]) + ", PCM samples " + samples(1));
     info.log.push_back("length table " + Hex(info.length_table) + ", frequency table " + Hex(info.frequency_table) +
                        ", PCM pitch table " + Hex(info.pcm_pitch_table) + ", LFO table " + Hex(info.lfo_table));
 
@@ -378,6 +404,7 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
         return false;
     }
 
+    FindEffectsFile(rom, info);
     ReportDetection(info);
 
     return true;

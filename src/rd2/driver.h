@@ -64,35 +64,56 @@ struct MusicSettings
     int volume2 = 0x80;
 };
 
+// A sound effect: a track of one of the sound effects' sequences. Such a sequence starts with a table of its tracks.
+// The table holds a halfword for each track: its offset from the sequence's start. The game's request names the
+// sequence and the track. The driver then plays the track alone on a player (see docs/rd2.md).
+struct Effect
+{
+    int sequence = 0;     // the sound effects' sequence
+    int track = 0;        // the track's entry in the sequence's table
+    uint32_t address = 0; // the track's first command, or 0 if the entry gives none
+};
+
 // The driver's tables in a ROM, and the tables the game gives it. Each table of offsets holds a word for each entry,
 // counted from the table's start.
 struct DriverInfo
 {
     Revision revision = Revision::kLinkToThePast;
-    uint32_t init = 0;             // the driver's init routine (Thumb), or 0 if it wasn't found
-    uint32_t settings = 0;         // the game's settings, which it passes to init
-    uint32_t sample_sets = 0;      // the offset of each sample set's table of sample offsets
-    uint32_t banks = 0;            // the offset of each bank of instruments
-    uint32_t sequences = 0;        // the offset of each sequence
-    uint32_t effects = 0;          // the offset of each of the sound effects' sequences
-    uint32_t bank_sample_sets = 0; // a halfword for each bank: the sample set that its instruments play
-    uint32_t bank_lists = 0;       // the offset of each sequence's list of banks
-    uint32_t pitch_table = 0;      // 120 words: a sample's pitch for each pitch index, 0x8000 at the sample's rate
-    uint32_t frequency_table = 0;  // 120 halfwords: a square or wave voice's frequency setting for each pitch index
-    uint32_t noise_table = 0;      // 120 bytes: a noise voice's NR43 for each pitch index
-    uint32_t lfo_table = 0;        // 256 signed bytes: one cycle of the LFO's sine
-    uint32_t wave_volumes = 0;     // 5 bytes: the wave voice's NR32 for each of its volumes
-    uint32_t voice_classes = 0;    // a byte for each region type: the voices that can play it
-    uint32_t key_envelope = 0;     // the envelope of instruments that pick a sample for each key
+    uint32_t init = 0;              // the driver's init routine (Thumb), or 0 if it wasn't found
+    uint32_t settings = 0;          // the settings that the game passes to init
+    uint32_t sample_sets = 0;       // the offset of each sample set's table of sample offsets
+    uint32_t banks = 0;             // the offset of each bank of instruments
+    uint32_t sequences = 0;         // the offset of each sequence
+    uint32_t effects = 0;           // the offset of each of the sound effects' sequences
+    uint32_t bank_sample_sets = 0;  // a halfword for each bank: the sample set that its instruments play
+    uint32_t bank_lists = 0;        // the offset of each sequence's list of banks
+    uint32_t effect_bank_lists = 0; // the offset of each of the sound effects' sequences' list of banks
+    uint32_t pitch_table = 0;       // 120 words: a sample's pitch for each pitch index, 0x8000 at the sample's rate
+    uint32_t frequency_table = 0;   // 120 halfwords: a square or wave voice's frequency setting for each pitch index
+    uint32_t noise_table = 0;       // 120 bytes: a noise voice's NR43 for each pitch index
+    uint32_t lfo_table = 0;         // 256 signed bytes: one cycle of the LFO's sine
+    uint32_t wave_volumes = 0;      // 5 bytes: the wave voice's NR32 for each of its volumes
+    uint32_t voice_classes = 0;     // a byte for each region type: the voices that can play it
+    uint32_t key_envelope = 0;      // the envelope of instruments that pick a sample for each key
     std::vector<uint32_t> sequence_addresses;
     std::vector<uint32_t> bank_list_addresses;
     std::vector<MusicSettings> music_settings; // for each sequence, the settings that the game plays it with
-    std::vector<std::string> log;              // detection results for --info
-    std::vector<std::string> warnings;         // assumptions detection had to make
+    std::vector<uint32_t> effect_sequence_addresses;
+    std::vector<uint32_t> effect_bank_list_addresses;
+    std::vector<Effect> sound_effects; // each track of each of the sound effects' sequences, in order
+    std::vector<std::string> log;      // detection results for --info
+    std::vector<std::string> warnings; // assumptions detection had to make
 };
 
 // Finds the driver in `rom`. Returns false and sets `error` if the driver's tables can't be read, or returns false with
 // `error` empty if the game shows no sign of the driver.
 bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info, std::string& error);
+
+// Returns the number of songs: the sequences, then the sound effects. A sound effect's number is the count of sequences
+// plus its index in DriverInfo::sound_effects.
+int SongCount(const DriverInfo& info);
+
+// Returns the sound effect that song `song` is, or null if the song is a sequence or there's no such song.
+const Effect* SongEffect(const DriverInfo& info, int song);
 
 } // namespace agbsf2::rd2

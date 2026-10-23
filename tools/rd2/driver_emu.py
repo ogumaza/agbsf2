@@ -13,9 +13,13 @@ calls the driver makes are emulated), and captures what the driver does:
     render      the mixer's output, the samples the driver sends to the FIFOs, as a WAV file at the mixer's rate
                 (the PSG isn't rendered)
 
-    driver_emu.py ROM trace SEQUENCE FRAMES
-    driver_emu.py ROM dump SEQUENCE FRAMES
-    driver_emu.py ROM render SEQUENCE FRAMES OUT.wav
+    driver_emu.py ROM trace SONG FRAMES
+    driver_emu.py ROM dump SONG FRAMES
+    driver_emu.py ROM render SONG FRAMES OUT.wav
+
+SONG is agbsf2's number for a song. agbsf2 numbers the sequences first, then the sound effects. A sound effect is a
+track of one of the sound effects' sequences. The game's request for it names the sequence and the track. The script
+makes that request on the first of the players that the game plays its sound effects on.
 
 The routine and RAM addresses are chosen by the ROM's game code. Those of The Legend of Zelda: A Link to the Past
 (AZLE), Super Mario Advance 2 (AA2E) and Super Mario Advance 3 (A3AE) are built in. For another game, add an entry to
@@ -49,6 +53,9 @@ class Addresses:
     """AZLE (The Legend of Zelda: A Link to the Past & Four Swords, US)."""
     sound_init = 0x08129E60  # the game's sound init, which calls the driver's init with the game's settings
     request = 0x0812C718     # the driver's play request: r0 = player, r1 = sequence
+    effect_request = 0x0812C73C  # the driver's request for a sound effect: r0 = player, r1 = the sound effects'
+                                 # sequence, r2 = the track
+    settings = 0x030003CC    # where the driver keeps the address of the game's settings
     commit = 0x0812C704      # the driver's routine that hands the requests made since its last call to the next frame
     requests = 0x0812CC24    # the per-frame routine's first step: it carries out the requests handed over
     vblank = 0x0812A798      # the driver's VBlank routine: restarts timer 0 and the output DMAs
@@ -67,6 +74,7 @@ class Addresses:
     note_done = 0x0812B964   # in the note on, once it has set the voice's sample or PSG setting: r4 = the voice
     active_end = 0           # what the last voice in the mixer's list links to: 0, or a node that ends the list
     music_player = 0x12      # the player that the game plays its music on
+    effect_player = 0x10     # the first of the players that the game plays its sound effects on
     player_size = 0x48       # a player's record, and the offset of its byte that is 1 while it plays
     player_playing = 0x42
     voice_note = 0x09        # the offsets of a voice's note, before the transpose, and its velocity
@@ -80,6 +88,8 @@ class AddressesAA2E(Addresses):
     run between nodes at their ends."""
     sound_init = 0x0809B258
     request = 0x0809D840
+    effect_request = 0x0809D864
+    settings = 0x030004E4
     commit = 0x0809D82C
     requests = 0x0809DCA8
     vblank = 0x0809BA74
@@ -97,6 +107,7 @@ class AddressesAA2E(Addresses):
     note_voice = 0x0809C9F6
     note_done = 0x0809CAB8
     music_player = 0x13
+    effect_player = 0x11
     player_size = 0x44
     player_playing = 0x41
     voice_note = None
@@ -108,6 +119,8 @@ class AddressesA3AE(Addresses):
     another volume for sample voices. The driver's variables are 0x98 bytes lower than in A Link to the Past."""
     sound_init = 0x0812C214
     request = 0x0812EEBC
+    effect_request = 0x0812EEE0
+    settings = 0x03000334
     commit = 0x0812EEA8
     requests = 0x0812F3C8
     vblank = 0x0812CF50
@@ -124,6 +137,7 @@ class AddressesA3AE(Addresses):
     note_voice = 0x0812E046
     note_done = 0x0812E108
     music_player = 0x13
+    effect_player = 0x11
     play_music = 0x0812C3B4  # the game's play-music routine: r0 = the music number. It also requests the sample
                              # voices and the second volume that the music plays with.
     music_table = 0x083077E4  # a halfword for each music number: the sequence in its low byte
@@ -157,6 +171,7 @@ class DriverEmulator:
         uc.hook_add(UC_HOOK_MEM_WRITE, self._io_write, begin=PSG[0], end=PSG[1] - 1)
         self.uc = uc
         self.writes = []
+        self.player_number = self.addr.music_player
         self.call(self.addr.sound_init)
 
     def _unmapped(self, uc, access, address, size, value, user):
@@ -217,18 +232,52 @@ class DriverEmulator:
     def u32(self, address):
         return struct.unpack('<I', self.read(address, 4))[0]
 
-    def play(self, sequence):
+    def play(self, song):
         """Asks for a sequence on the music player, as the game's play routine does. The driver starts it in the next
         frame. Where the game's play-music routine gives the driver settings with the sequence, the routine starts it,
-        as the first music number that plays it."""
+        as the first music number that plays it.
+
+        A sound effect is asked for on the first of the game's players for sound effects."""
         self.writes = []
-        music = self.music_number(sequence)
-        if music is None:
-            self.call(self.addr.request, (self.addr.music_player, sequence))
+        effect = self.effect_of(song)
+        music = None if effect else self.music_number(song)
+        if effect:
+            self.player_number = self.addr.effect_player
+            self.call(self.addr.effect_request, (self.player_number,) + effect)
+        elif music is None:
+            self.call(self.addr.request, (self.addr.music_player, song))
         else:
             self.call(self.addr.play_music, (music,))
         self.call(self.addr.commit)
         return self.writes
+
+    def effect_of(self, song):
+        """Returns (the sound effects' sequence, the track) for the sound effect that agbsf2's song `song` is, or None
+        for a sequence. A table of offsets ends where its first entry points. The table of sequences and the table of
+        their bank lists give the count of sequences. A sound effects' sequence starts with a halfword for each of its
+        tracks, up to where its first track starts."""
+        settings = self.u32(self.addr.settings)
+
+        def count(table):
+            first = self.u32(table)
+            return first // 4 if first % 4 == 0 else 0
+
+        index = song - min(count(self.u32(settings + 8)), count(self.u32(settings + 20)))
+        if index < 0:
+            return None
+        effects, lists = self.u32(settings + 12), self.u32(settings + 24)
+        for sequence in range(min(count(effects), count(lists))):
+            start = effects + self.u32(effects + 4 * sequence)
+            end, track = 0x10000, 0
+            while 2 * track < end:
+                offset = struct.unpack('<H', self.read(start + 2 * track, 2))[0]
+                end = min(end, offset) if offset else end
+                track += 1
+            tracks = (end + 1) // 2
+            if index < tracks:
+                return sequence, index
+            index -= tracks
+        raise SystemExit('the game has no song %d' % song)
 
     def music_number(self, sequence):
         """Returns the first music number that plays `sequence` through the game's play-music routine, or None."""
@@ -249,23 +298,23 @@ class DriverEmulator:
         return self.writes
 
     def track_number(self, track):
-        """Returns the music player's number for the track at `track`, or -1."""
+        """Returns the player's number for the track at `track`, or -1."""
         for n in range(10):
             if self.u32(self.player() + 8 + 4 * n) == track:
                 return n
         return -1
 
     def mute_tracks_except(self, numbers):
-        """Mutes the music player's tracks other than `numbers`, with each track's mute flag, which stops it starting
-        notes."""
+        """Mutes the player's tracks other than `numbers` with each track's mute flag. The flag stops a track
+        starting notes."""
         for n in range(10):
             track = self.u32(self.player() + 8 + 4 * n)
             if track:
                 self.uc.mem_write(track + 0x4A, bytes([0 if n in numbers else 1]))
 
     def player(self):
-        """Returns the address of the music player's record."""
-        return self.addr.players + self.addr.player_size * self.addr.music_player
+        """Returns the address of the record of the player that plays the song."""
+        return self.addr.players + self.addr.player_size * self.player_number
 
     def playing(self):
         return self.read(self.player() + self.addr.player_playing, 1)[0] != 0
@@ -305,9 +354,9 @@ class DriverEmulator:
         return lines
 
 
-def render(rom, sequence, frames, out, tracks=None):
+def render(rom, song, frames, out, tracks=None):
     emu = DriverEmulator(rom)
-    emu.play(sequence)
+    emu.play(song)
     a = emu.addr
     if tracks is not None:
         # Carry out the request now, so that the tracks can be muted before they play anything. The per-frame routine
@@ -362,18 +411,23 @@ class NoteLog:
             note['sample'] = self.emu.u32(voice + 0x5C)
 
 
-def notes(rom, sequence, frames):
+def notes(rom, song, frames, writes=None):
     """Returns each frame's new notes and the voices' state after it: for each frame, (notes, voices, newest), where a
     note is a dict, voices[i] is (state, pitch) or None for a free voice, and newest[n] is the newest voice that track
-    n plays, or -1."""
+    n plays, or -1. With `writes`, a list, each write to the PSG's registers goes on its end as (frame, address, size,
+    value). The request's writes, before the first frame, have frame -1."""
     emu = DriverEmulator(rom)
     log = NoteLog(emu)
-    emu.play(sequence)
+    request = emu.play(song)
+    if writes is not None:
+        writes.extend((-1,) + w for w in request)
     a = emu.addr
     result = []
     for f in range(frames):
         log.notes = []
-        emu.frame()
+        frame_writes = emu.frame()
+        if writes is not None:
+            writes.extend((f,) + w for w in frame_writes)
         for n in log.notes:
             n['frame'] = f
         voices = []
@@ -399,9 +453,9 @@ def format_write(frame, write):
     return '%d %08x %d %0*x' % (frame, address, size, 2 * size, value)
 
 
-def trace(rom, sequence, frames):
+def trace(rom, song, frames):
     emu = DriverEmulator(rom)
-    for w in emu.play(sequence):
+    for w in emu.play(song):
         print(format_write(-1, w))
     for f in range(frames):
         for w in emu.frame():
@@ -412,9 +466,9 @@ def trace(rom, sequence, frames):
             break
 
 
-def dump(rom, sequence, frames):
+def dump(rom, song, frames):
     emu = DriverEmulator(rom)
-    emu.play(sequence)
+    emu.play(song)
     for f in range(frames):
         emu.frame()
     a = emu.addr
@@ -434,21 +488,21 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('rom')
     p.add_argument('command', choices=['trace', 'dump', 'render'])
-    p.add_argument('sequence', type=int)
+    p.add_argument('song', type=int)
     p.add_argument('frames', type=int)
     p.add_argument('out', nargs='?')
     p.add_argument('--tracks', help='render: only these of the player\'s tracks (0-9), such as 1,3')
     a = p.parse_args()
     rom = load_rom(a.rom)
     if a.command == 'trace':
-        trace(rom, a.sequence, a.frames)
+        trace(rom, a.song, a.frames)
     elif a.command == 'render':
         if not a.out:
             p.error('render needs OUT.wav')
-        render(rom, a.sequence, a.frames, a.out,
+        render(rom, a.song, a.frames, a.out,
                [int(t) for t in a.tracks.split(',')] if a.tracks else None)
     else:
-        dump(rom, a.sequence, a.frames)
+        dump(rom, a.song, a.frames)
 
 
 if __name__ == '__main__':

@@ -57,21 +57,33 @@ public:
     {
     }
 
+    // The sequences, then the sound effects.
     int SongCount() const override
     {
-        return int(info_.sequence_addresses.size());
+        return rd2::SongCount(info_);
     }
 
-    bool HasSong(int) const override
+    // A sound effect's entry can give no track.
+    bool HasSong(int song) const override
     {
-        return true;
+        const Effect* effect = SongEffect(info_, song);
+        return !effect || effect->address != 0;
     }
 
-    // Works out the sequence's length, loop points and tracks with notes, using the conversion settings.
+    // Works out the song's length, loop points and tracks that play notes, from the conversion settings. A sound
+    // effect's address is the address of its track.
     SongReport InspectSong(int song, const ConvertSettings& settings) const override
     {
         SongReport r = rd2::InspectSong(rom_, info_, song, settings);
-        r.address = song >= 0 && song < SongCount() ? info_.sequence_addresses[size_t(song)] : 0;
+        const Effect* effect = SongEffect(info_, song);
+        if (effect)
+        {
+            r.address = effect->address;
+        }
+        else if (song >= 0 && song < int(info_.sequence_addresses.size()))
+        {
+            r.address = info_.sequence_addresses[size_t(song)];
+        }
 
         return r;
     }

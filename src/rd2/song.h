@@ -35,7 +35,7 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
                       uint16_t wait);
 
 // Writes a text listing of every command of each track of a sequence, as the driver plays them. Returns false and sets
-// `error` on failure.
+// `error` on failure. A sound effect's listing holds its track and the tracks that its F8s start.
 bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::string& path, std::string& error);
 
 } // namespace agbsf2::rd2

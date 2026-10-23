@@ -5,7 +5,9 @@ driver's frames. Give the MIDI value that agbsf2 writes for a driver's level.
 
 A conversion names each song's MIDI file and SoundFont after the game and the song's number, such as game_05.mid and
 game_05.sf2. In a game with more than one driver, it converts each one's songs, and the files of every driver but the
-first that detection finds have the driver's --driver name after the game's, such as game_mp2k_005.mid.
+first that detection finds have the driver's --driver name after the game's, such as game_mp2k_005.mid. A song that the
+game plays in two versions gets a second pair of files, with the version's name after the song's number, such as
+game_12_underwater.mid.
 
 For drivers that count frames, the default conversion estimates the beat from the notes and moves events onto it.
 With --frame-timing, events stay on the frames where the driver plays them. The tools check this conversion against
@@ -18,18 +20,22 @@ import subprocess
 from pathlib import Path
 
 DRIVERS = ('konami', 'rare', 'quintet', 'rd2', 'mp2k', 'brownie', 'krawall', 'ubimilan')
+VERSIONS = ('underwater',)  # the names of the songs' other versions in the files' names
 
-_STEM = re.compile(r'(.+?)(?:_(%s))?_(\d+)' % '|'.join(DRIVERS))
+_STEM = re.compile(r'(.+?)(?:_(%s))?_(\d+)(?:_(%s))?' % ('|'.join(DRIVERS), '|'.join(VERSIONS)))
 
 
-def midi_files(folder, driver):
+def midi_files(folder, driver, versions=False):
     """Returns (song, path) for each of a driver's MIDI files in the folder, in song order: the files with the driver's
-    name, if there are any, or else the ones without a driver's name."""
+    name, if there are any, or else the ones without a driver's name. Those of a song's other versions are left out.
+    With `versions`, it returns (song, version, path) for every file, with a version of '' for a song as the game
+    starts it."""
     found = {}
     for path in Path(folder).glob('*.mid'):
         m = _STEM.fullmatch(path.stem)
-        if m:
-            found.setdefault(m.group(2), []).append((int(m.group(3)), path))
+        if m and (versions or m.group(4) is None):
+            entry = (int(m.group(3)), m.group(4) or '', path) if versions else (int(m.group(3)), path)
+            found.setdefault(m.group(2), []).append(entry)
     return sorted(found.get(driver) or found.get(None, []))
 
 

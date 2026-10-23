@@ -15,7 +15,8 @@ divided by 4 * 128. With `hardware`, the output is also scaled by the PSG's shar
 import numpy as np
 
 RATE = 32768
-FRAME_SAMPLES = RATE * 280896 / 16777216
+FRAME_CYCLES = 280896  # one frame of the GBA's video, in the CPU's cycles
+FRAME_SAMPLES = RATE * FRAME_CYCLES / 16777216
 DUTY = [0x01, 0x81, 0x87, 0x7E]
 CYCLES_PER_SAMPLE = 16777216 // RATE  # 512
 SEQUENCER_CYCLES = 32768  # one step of the frame sequencer, at 512 Hz
@@ -169,6 +170,14 @@ class APU:
                     if env['ticks'] >= env['period']:
                         env['ticks'] = 0
                         env['vol'] = min(env['vol'] + 1, 15) if env['up'] else max(env['vol'] - 1, 0)
+
+    def advance(self, cycles):
+        """Moves the frame sequencer on by `cycles` of the CPU's cycles, without rendering. With `hardware`, the
+        envelopes, length counters and sweep step as they do in render()."""
+        self.cycles += cycles
+        while self.hardware and self.cycles >= SEQUENCER_CYCLES:
+            self.cycles -= SEQUENCER_CYCLES
+            self._sequence()
 
     def render(self, count, only=None):
         out = np.zeros((count, 2), dtype=np.float32)

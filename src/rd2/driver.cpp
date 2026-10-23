@@ -25,6 +25,10 @@ namespace
 // The most sequences detection reads, so that unrelated ROM data can't keep it busy.
 constexpr int kMaxSequences = 1024;
 
+// The most sound effects that detection reads. Like kMaxSequences, it keeps unrelated ROM data from keeping detection
+// busy.
+constexpr size_t kMaxEffects = 4096;
+
 // The start of the driver's init routine, which stores the game's settings and sets up the sound hardware.
 constexpr const char* kInitPattern = "B530 49xx 6008 49xx 2000 7008 2080 7008 3904 4Axx 1C10 8008 3102 200D 7008";
 
@@ -406,6 +410,51 @@ uint32_t ReadSequenceTable(const Rom& rom, const DriverOverrides& overrides, Dri
     return game_count;
 }
 
+// Reads the sound effects' sequences, their lists of banks and their tracks. The table of the sequences ends where its
+// first sequence starts. So does the table of their bank lists. A sequence's table of tracks ends where its first track
+// starts. A track whose offset is 0, or points out of the ROM, gives no sound effect.
+void ReadEffects(const Rom& rom, DriverInfo& info)
+{
+    if (!rom.Contains(info.effects, 4) || !rom.Contains(info.effect_bank_lists, 4))
+    {
+        return;
+    }
+
+    const uint32_t count =
+        std::min({EntryCount(rom, info.effects), EntryCount(rom, info.effect_bank_lists), uint32_t(kMaxSequences)});
+    for (uint32_t s = 0; s < count && info.sound_effects.size() < kMaxEffects; s++)
+    {
+        const uint32_t sequence = Entry(rom, info.effects, s);
+        const uint32_t banks = Entry(rom, info.effect_bank_lists, s);
+        if (!sequence || !banks)
+        {
+            break;
+        }
+
+        info.effect_sequence_addresses.push_back(sequence);
+        info.effect_bank_list_addresses.push_back(banks);
+        uint32_t end = 0x10000;
+        for (uint32_t t = 0; 2 * t < end && rom.Contains(sequence + 2 * t, 2); t++)
+        {
+            const uint32_t offset = rom.U16(sequence + 2 * t);
+            if (offset != 0)
+            {
+                end = std::min(end, offset);
+            }
+        }
+        for (uint32_t t = 0;
+             2 * t < end && rom.Contains(sequence + 2 * t, 2) && info.sound_effects.size() < kMaxEffects; t++)
+        {
+            const uint32_t offset = rom.U16(sequence + 2 * t);
+            Effect e;
+            e.sequence = int(s);
+            e.track = int(t);
+            e.address = offset != 0 && rom.Contains(sequence + offset) ? sequence + offset : 0;
+            info.sound_effects.push_back(e);
+        }
+    }
+}
+
 // Adds the lines that --info prints: the revision, the game's settings and tables, and the driver's tables. `music` is
 // the line for the settings that the game's play-music routine makes. An empty line adds nothing.
 void LogDetection(const Rom& rom, const std::string& music, DriverInfo& info)
@@ -420,10 +469,14 @@ void LogDetection(const Rom& rom, const std::string& music, DriverInfo& info)
     info.log.push_back("sample sets: " + Hex(info.sample_sets) + " (" +
                        std::to_string(EntryCount(rom, info.sample_sets)) +
                        "), each bank's set: " + Hex(info.bank_sample_sets));
-    if (rom.Contains(info.effects, 4))
+    if (!info.sound_effects.empty())
     {
+        const size_t first = info.sequence_addresses.size();
         info.log.push_back("sound effects: " + Hex(info.effects) + " (" +
-                           std::to_string(EntryCount(rom, info.effects)) + " sequences, not converted)");
+                           std::to_string(info.effect_sequence_addresses.size()) + " sequences, " +
+                           std::to_string(info.sound_effects.size()) + " effects: songs " + std::to_string(first) +
+                           "-" + std::to_string(first + info.sound_effects.size() - 1) +
+                           "), bank lists: " + Hex(info.effect_bank_lists));
     }
     info.log.push_back("pitch table: " + Hex(info.pitch_table) + ", frequency table: " + Hex(info.frequency_table) +
                        ", noise table: " + Hex(info.noise_table) + ", LFO table: " + Hex(info.lfo_table));
@@ -487,6 +540,7 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
     info.effects = rom.U32(s + 12);
     info.bank_sample_sets = rom.U32(s + 16);
     info.bank_lists = rom.U32(s + 20);
+    info.effect_bank_lists = rom.U32(s + 24);
     for (uint32_t table : {info.sample_sets, info.banks, info.sequences, info.bank_sample_sets, info.bank_lists})
     {
         if (!rom.Contains(table, 4))
@@ -513,6 +567,7 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
     }
 
     const std::string music = ReadMusicSettings(rom, game_count, info);
+    ReadEffects(rom, info);
 
     int unreadable = 0;
     for (uint32_t sequence : info.sequence_addresses)
@@ -529,6 +584,17 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
     LogDetection(rom, music, info);
 
     return true;
+}
+
+int SongCount(const DriverInfo& info)
+{
+    return int(info.sequence_addresses.size() + info.sound_effects.size());
+}
+
+const Effect* SongEffect(const DriverInfo& info, int song)
+{
+    const int sequences = int(info.sequence_addresses.size());
+    return song >= sequences && song < SongCount(info) ? &info.sound_effects[size_t(song - sequences)] : nullptr;
 }
 
 } // namespace agbsf2::rd2

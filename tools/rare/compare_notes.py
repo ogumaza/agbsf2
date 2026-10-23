@@ -24,9 +24,15 @@ and key that starts within a frame and a half of it. For each pair, the script c
 A MIDI note that the driver doesn't play, or a driver note that the MIDI file doesn't have, counts as a difference. MIDI
 events land on their own ticks, where the driver plays them at the start of the frame that reaches them, so a difference
 of a frame and a half either way is allowed.
+
+Donkey Kong Country 3 plays tune 12 above water on some channels and under water on others. The game holds the
+channels of the other arrangement at a level of 0. agbsf2 writes NAME_12 above water and NAME_12_underwater under water.
+The driver plays the tune of each file with the levels of its arrangement. The check leaves out the notes of the
+channels at a level of 0. So does the conversion.
 """
 import argparse
 import bisect
+import functools
 import math
 import struct
 import sys
@@ -215,12 +221,14 @@ def value_at(changes, ch, t, default):
     return values[i - 1] if i else default
 
 
-def driver_notes(rom, song, frames):
+def driver_notes(rom, song, frames, silenced=()):
     """Runs the driver and returns its notes, each channel's volume on each frame, the mixer's rate in Hz and the fade
     table. The notes are dicts of channel, key, velocity, start and release frames (the end, for a note the driver
     didn't release), whether the driver released the note, its instrument's and sample's addresses, the step on each
-    frame, and the settings from controllers 20-23 that each phase of its envelope took, for the phases it reached."""
+    frame, and the settings from controllers 20-23 that each phase of its envelope took, for the phases it reached.
+    The channels in `silenced` play at a level of 0, and their notes are left out."""
     emu = driver_emu.DriverEmulator(rom)
+    emu.silenced = silenced
     emu.play(song)
     count = 16 * emu.addr.slots_per_channel
     notes, current = [], [None] * count
@@ -274,6 +282,7 @@ def driver_notes(rom, song, frames):
     for note in notes:
         if note['release'] is None:
             note['release'] = f + 1
+    notes = [n for n in notes if n['channel'] not in silenced]
     return notes, volume, emu.rate(), emu.fade_table()
 
 
@@ -324,12 +333,12 @@ def expected_envelope(rom, instrument, envelope, fade):
     return [None if v == -12000 else v for v in out]
 
 
-def check_song(rom, song, midi_path, sf2_path, frames_limit, report):
+def check_song(rom, song, midi_path, sf2_path, frames_limit, report, silenced=()):
     notes, programs, volumes, bends, ranges, length = read_midi(midi_path)
     volumes, bends = by_channel(volumes), by_channel(bends)
     presets = read_sf2(sf2_path)
     frames = min(frames_limit, int(length * FRAME_RATE))
-    played, volume, mix_rate, fade = driver_notes(rom, song, frames)
+    played, volume, mix_rate, fade = driver_notes(rom, song, frames, silenced)
 
     midi = [dict(channel=n[0], key=n[1], velocity=n[2], on=n[3] * FRAME_RATE,
                  off=(n[4] if n[4] is not None else length) * FRAME_RATE, program=n[5], bank=n[6], matched=False)
@@ -461,7 +470,7 @@ def check_song(rom, song, midi_path, sf2_path, frames_limit, report):
                 continue
         problems.append('%.1f: the MIDI file plays key %d on channel %d, which the driver doesn\'t' % (
             m['on'], m['key'], m['channel']))
-    report(song, checked, problems, worst_cents)
+    report(checked, problems, worst_cents)
     return not problems
 
 
@@ -474,26 +483,33 @@ def main():
     p.add_argument('-v', '--verbose', action='store_true', help='list every difference, not just the first ten')
     a = p.parse_args()
     rom = load_rom(a.rom)
-    files = conversion.midi_files(a.folder, 'rare')
+    addresses = driver_emu.addresses_for(rom)
+    files = conversion.midi_files(a.folder, 'rare', versions=True)
     if not files:
         raise SystemExit('found no MIDI files to check in %s' % a.folder)
     wanted = set(parse_range(a.songs)) if a.songs else None
     failed = total = 0
 
-    def report(song, checked, problems, worst):
-        print('song %d: %d notes, %d difference%s, pitch within %.2f cents' % (
-            song, checked, len(problems), '' if len(problems) == 1 else 's', worst))
+    def report(name, checked, problems, worst):
+        print('%s: %d notes, %d difference%s, pitch within %.2f cents' % (
+            name, checked, len(problems), '' if len(problems) == 1 else 's', worst))
         for line in problems if a.verbose else problems[:10]:
             print('    ' + line)
 
-    for song, midi in files:
+    for song, version, midi in files:
         if wanted is not None and song not in wanted:
             continue
         total += 1
-        if not check_song(rom, song, midi, midi.with_suffix('.sf2'), a.frames, report):
+        name = 'song %d%s' % (song, ' ' + version if version else '')
+        silenced = driver_emu.silenced_channels(addresses, song, version)
+        if silenced is None:
+            print('%s: the game plays no such version of the song' % name)
+            failed += 1
+        elif not check_song(rom, song, midi, midi.with_suffix('.sf2'), a.frames, functools.partial(report, name),
+                            silenced):
             failed += 1
     # agbsf2 writes no files for a song that plays no notes.
-    for song in sorted((wanted or set()) - {s for s, _ in files}):
+    for song in sorted((wanted or set()) - {s for s, _, _ in files}):
         print('song %d: no MIDI file to check' % song)
     if not total:
         raise SystemExit('found none of the songs to check')

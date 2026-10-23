@@ -8,6 +8,9 @@
 For every sequence, the script runs `AGBSF2 --trace` and the driver under driver_emu.py. The comparison covers each
 voice's state after each frame, the order of the sample voices, and every write to the PSG's registers. It reports
 the first difference in each sequence that has one.
+
+agbsf2 numbers the sound effects after the sequences. The script compares each in the same way. Without --songs, it
+compares every song that `AGBSF2 --info` lists.
 """
 import sys
 from pathlib import Path

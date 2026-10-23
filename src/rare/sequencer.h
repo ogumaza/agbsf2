@@ -139,9 +139,9 @@ struct Action
 class Sequencer
 {
 public:
-    // Sets up `tune` as the driver does when it starts a tune after its init. `rom` and `info` have to outlive the
-    // sequencer.
-    Sequencer(const Rom& rom, const DriverInfo& info, int tune);
+    // Sets up `tune` as the driver does when it starts a tune after its init. The game then holds the channels in
+    // `silenced` at a level of 0 (see SilencedChannels()). `rom` and `info` have to outlive the sequencer.
+    Sequencer(const Rom& rom, const DriverInfo& info, int tune, uint16_t silenced = 0);
 
     // Returns true if the tune's header was read.
     bool Valid() const
@@ -245,6 +245,7 @@ private:
 
     const Rom& rom_;
     const DriverInfo& info_;
+    uint16_t silenced_; // the channels at a level of 0
     bool valid_ = false;
     TuneHeader header_;
     std::vector<Track> tracks_;

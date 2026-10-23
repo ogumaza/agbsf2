@@ -161,6 +161,11 @@ const std::vector<std::string>& Music::Warnings() const
     return warnings_;
 }
 
+std::vector<SongVersion> Music::Versions(int) const
+{
+    return {SongVersion()};
+}
+
 bool Music::SupportsVoiceChannels() const
 {
     return false;

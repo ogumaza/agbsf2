@@ -2,6 +2,7 @@
 
 #include "quintet/sequencer.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -159,8 +160,8 @@ Sequencer::Sequencer(const Rom& rom, const DriverInfo& info, int song)
     : rom_(rom), info_(info), traits_(TraitsOf(info.revision))
 {
     SongHeader header;
-    if (song < 0 || song >= int(info.song_addresses.size()) ||
-        !ReadSongHeader(rom, info.song_addresses[size_t(song)], header))
+    const uint32_t address = SongAddress(info, song);
+    if (!address || !ReadSongHeader(rom, address, header))
     {
         return;
     }
@@ -173,10 +174,49 @@ Sequencer::Sequencer(const Rom& rom, const DriverInfo& info, int song)
         Write(fifo.timer, 4, 0);
         Write(fifo.dma_control, 2, 0);
     }
+    for (Channel& ch : channels_)
+    {
+        ResetChannel(ch);
+    }
+
+    writes_.clear();
+    effect_ = EffectIndex(info, song) >= 0;
+    if (effect_)
+    {
+        // The routine for sound effects starts each sound effect channel whose data doesn't start with FF. It resets
+        // the channel and turns its outputs on in the sound effects' image. The channel then reads the sound effects'
+        // bank of samples and noise macros. The music's channels play nothing.
+        music_image_ = image_;
+        ResetChannel(music_wave_);
+        for (int c = 0; c < kChannels; c++)
+        {
+            const uint32_t data = header.channels[size_t(c)];
+            if (rom_.U8(data) == 0xFF)
+            {
+                continue;
+            }
+
+            Channel& ch = channels_[size_t(c)];
+            ResetChannel(ch);
+            ch.sample_bank = 1;
+            ch.macro_bank = 1;
+            if (c < kPcmA)
+            {
+                image_[kNr50] = uint16_t(image_[kNr50] | 0x1100 << c);
+            }
+            else
+            {
+                image_[kSoundcntH] = 0x730E;
+            }
+            ch.position = data;
+        }
+
+        valid_ = true;
+        return;
+    }
 
     // The play routine resets the channels and the PSG, sets the PSG's master volume, and points each channel at its
     // data.
-    writes_.clear();
     for (Channel& ch : channels_)
     {
         ResetChannel(ch);
@@ -205,7 +245,8 @@ const std::vector<RegisterWrite>& Sequencer::Step()
     events_.clear();
     hardware_.restarted = 0;
 
-    // The music channels read their notes when their countdowns run out, and then apply their effects.
+    // The channels read their notes when their countdowns run out, and then apply their effects. When a sound effect's
+    // PSG channel ends, the driver writes its level of 0 straight to the channel's envelope register.
     for (int c = 0; c < kChannels; c++)
     {
         Channel& ch = channels_[size_t(c)];
@@ -219,6 +260,11 @@ const std::vector<RegisterWrite>& Sequencer::Step()
         {
             ReadNotes(c);
             UpdateImage(c);
+            if (effect_ && c < kPcmA && !ch.position)
+            {
+                const size_t r = size_t(kPsgEnvelope[c]);
+                Write(kImageRegisters[r], 2, image_[r]);
+            }
         }
 
         if (c < kPcmA)
@@ -677,7 +723,7 @@ void Sequencer::RunCommand(int c, uint8_t command)
         }
 
     case 0xDA:
-        LoadWave(c, arg());
+        LoadWave(ch, arg());
         break;
 
     case 0xDB:
@@ -1257,56 +1303,66 @@ void Sequencer::Output()
     };
 
     static constexpr Psg kPsgs[4] = {{kNr10, 3, 0x1100}, {kNr21, 2, 0x2200}, {kNr30, 3, 0x4400}, {kNr41, 2, 0x8800}};
-    uint16_t nr50 = uint16_t(image_[kNr50] & 0xFF);
+
+    // Each hardware channel plays the sound effect's image while the sound effect's channel plays, and otherwise the
+    // music's.
+    std::array<uint16_t, 12>& music = effect_ ? music_image_ : image_;
+    auto image_of = [&](int c) -> std::array<uint16_t, 12>&
+    {
+        return effect_ && channels_[size_t(c)].position ? image_ : music;
+    };
+
+    uint16_t nr50 = uint16_t(music[kNr50] & 0xFF);
     for (int p = 0; p < 4; p++)
     {
         const Psg& psg = kPsgs[p];
-        if (p == kWave)
+        std::array<uint16_t, 12>& image = image_of(p);
+        if (p == kWave && &image == &music)
         {
-            // The wave channel's waves go back into the wave RAM if something else has loaded others.
-            const Channel& wave = channels_[kWave];
+            // The music's waves go back into the wave RAM if something else has loaded others.
+            Channel& wave = effect_ ? music_wave_ : channels_[kWave];
             if (loaded_waves_[0] != wave.wave)
             {
-                LoadWave(kWave, wave.wave);
+                LoadWave(wave, wave.wave);
             }
             if (loaded_waves_[1] != wave.wave_high)
             {
-                LoadWave(kWave, wave.wave_high);
+                LoadWave(wave, wave.wave_high);
             }
         }
 
         const int last = psg.first + psg.count - 1;
-        if (image_[size_t(last)] & kRestart)
+        if (image[size_t(last)] & kRestart)
         {
             for (int r = psg.first; r <= last; r++)
             {
-                Write(kImageRegisters[r], 2, image_[size_t(r)]);
+                Write(kImageRegisters[r], 2, image[size_t(r)]);
             }
             if (p == kSquare1)
             {
-                Write(kImageRegisters[last], 2, image_[size_t(last)]);
-                Write(kImageRegisters[last], 2, image_[size_t(last)]);
+                Write(kImageRegisters[last], 2, image[size_t(last)]);
+                Write(kImageRegisters[last], 2, image[size_t(last)]);
             }
 
-            image_[size_t(last)] &= 0x7FFF;
+            image[size_t(last)] &= 0x7FFF;
             for (int r = psg.first; r <= last; r++)
             {
-                shadow_[size_t(r)] = image_[size_t(r)];
+                shadow_[size_t(r)] = image[size_t(r)];
             }
         }
         else
         {
             for (int r = psg.first; r <= last; r++)
             {
-                if (shadow_[size_t(r)] != image_[size_t(r)])
+                if (shadow_[size_t(r)] != image[size_t(r)])
                 {
-                    Write(kImageRegisters[r], 2, image_[size_t(r)]);
-                    shadow_[size_t(r)] = image_[size_t(r)];
+                    Write(kImageRegisters[r], 2, image[size_t(r)]);
+                    shadow_[size_t(r)] = image[size_t(r)];
                 }
             }
         }
 
-        nr50 = uint16_t(nr50 | (image_[kNr50] & psg.enable));
+        nr50 = uint16_t(nr50 | (image[kNr50] & psg.enable));
     }
 
     if (shadow_[kNr50] != nr50)
@@ -1318,7 +1374,7 @@ void Sequencer::Output()
     // The FIFOs' volumes and enables. The master volume that the game sets would halve or mute them at 4 or less, but
     // the play routine sets it to 7.
     uint16_t soundcnt_h = uint16_t(shadow_[kSoundcntH] & 0xCC03);
-    soundcnt_h = uint16_t(soundcnt_h | (image_[kSoundcntH] & 0x0304) | (image_[kSoundcntH] & 0x3008));
+    soundcnt_h = uint16_t(soundcnt_h | (image_of(kPcmA)[kSoundcntH] & 0x0304) | (image_of(kPcmB)[kSoundcntH] & 0x3008));
     if (shadow_[kSoundcntH] != soundcnt_h)
     {
         Write(kImageRegisters[kSoundcntH], 2, soundcnt_h);
@@ -1367,7 +1423,7 @@ uint16_t Sequencer::PcmPitch(const Channel& ch, int note) const
     return uint16_t(rom_.U16(info_.pcm_pitch_table + uint32_t(n) * 2) + ch.detune);
 }
 
-void Sequencer::LoadWave(int c, uint8_t wave)
+void Sequencer::LoadWave(Channel& ch, uint8_t wave)
 {
     if (!info_.waves)
     {
@@ -1376,11 +1432,11 @@ void Sequencer::LoadWave(int c, uint8_t wave)
 
     if (wave & 0x80)
     {
-        channels_[size_t(c)].wave_high = wave;
+        ch.wave_high = wave;
     }
     else
     {
-        channels_[size_t(c)].wave = wave;
+        ch.wave = wave;
     }
 
     // The wave RAM's writes go to the bank that isn't playing, so the driver selects the other bank, writes the wave

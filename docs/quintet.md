@@ -46,10 +46,12 @@ In `ASRJ` the routines are:
 |---|---|
 | `0x080034F0` | the game's sound init: calls the driver's init and the FIFO setup, and gives the driver the game's files |
 | `0x08003550` | the game's play-song routine: looks up the music file, skips to song `r0`, and calls the driver's play routine |
+| `0x08003594` | the game's routine for sound effects: looks up the sound effects' file, skips to sound effect `r0`, and calls the driver's routine for sound effects |
 | `0x08003544` | the game's per-frame sound routine, which calls the driver's |
 | `0x0805CF44` | init: resets the channels and the PSG |
 | `0x0805D1FC` | play a song: `r0` = the address of its header |
-| `0x0805D254` | play a sound effect |
+| `0x0805D254` | play a sound effect: `r0` = the address of its header |
+| `0x0805D184` | turn sound effect channel `r0`'s outputs on in the sound effects' image |
 | `0x0805D298` | set the wave table |
 | `0x0805D2A4` | set the music's noise macros |
 | `0x0805D2B0` | set the sound effects' noise macros |
@@ -64,6 +66,7 @@ In `ASRJ` the routines are:
 | `0x0805E588`, `0x0805E700`, `0x0805E820`, `0x0805EA24` | the volume envelope, the pitch envelope, the LFO and the slide |
 | `0x0805EAE4`, `0x0805EBE4` | the noise macro, the duty or wave bank switch |
 | `0x0805ED98` | the per-frame routine |
+| `0x0805EDB0`, `0x0805F13C` | its steps for the music channels and for the sound effect channels |
 | `0x0805F4FC` | the output stage |
 | `0x0805F890` | the FIFO setup |
 | `0x0805FC5C` | play a sample: stops the FIFO, sets its rate and range, and starts it |
@@ -90,11 +93,13 @@ Its tables in ROM and its RAM hold:
 | `0x0300079E` | the sample loaded into each FIFO: 2 bytes |
 | `0x030007A1`, `0x030007A2` | the master volume, left and right |
 | `0x03000030` | the music's register image |
+| `0x03000048` | the sound effects' register image |
+| `0x030007A0` | 1 while the per-frame routine reads the music channels, 0 while it reads the sound effect channels |
 | `0x03000BB0` | the FIFO records: 2 of 0x24 bytes |
 | `0x03000BA8` | the random number generator's seed |
 
-`agbsf2` doesn't convert sound effects. With no sound effect playing, the
-output stage writes the music's image.
+With no sound effect playing, the output stage writes the music's image.
+[Sound effects](#sound-effects) covers how a sound effect plays.
 
 ## Songs
 
@@ -392,6 +397,41 @@ point and sets the position to the loop point's count plus the rate. Each
 pass therefore lasts a whole number of frames and ends a frame or two before
 the endpoint set by `E7`.
 
+## Sound effects
+
+The game keeps its sound effects in a file of their own, in the songs' format.
+Its routine for sound effects finds sound effect *n* as the play-song routine
+finds a song, and passes its address to the driver's routine for sound
+effects. That routine leaves the music alone. For each channel whose data
+doesn't start with `FF`, it resets the sound effect channel, turns its
+outputs on in the sound effects' image (NR51's bits on a PSG channel, and
+SOUNDCNT_H = `0x730E` on a PCM channel) and points it at its data. A channel
+whose data starts with `FF` is left to the music.
+
+The per-frame routine reads the sound effect channels after the music
+channels, with these differences:
+
+* `DB` takes the sound effects' noise macros, and `DC` and `DD` their
+  samples. In the J revision, the reset puts a sound effect channel's bank
+  flags at 1, and `F0` switches them as it does a music channel's.
+* When `FF` ends a PSG channel, the routine writes the image's halfword with
+  the channel's NR12, NR22, NR32 or NR42 straight to the hardware. The level
+  in it is then 0.
+* A PCM channel's notes play the sample that its FIFO holds. A music channel
+  doesn't start or stop a FIFO while a sound effect channel plays on it.
+
+While a sound effect channel plays, the output stage writes the sound effects'
+image for its sound channel in place of the music's, NR51's bits included.
+NR50 comes from the music's image. The output stage loads the music's waves
+into the wave RAM again only while the music's image plays the wave channel.
+When the sound effect's channel ends, the music's registers go back to the
+hardware where they differ from the values last written.
+
+`agbsf2` converts each sound effect as a song. The music file's songs come
+first, then the sound effects. After the game's sound init, a sound effect
+plays with no music. Its conversion lasts until the last of its channels
+ends.
+
 ## The J revision
 
 *Super Robot Taisen J*'s driver keeps the same commands and data formats,
@@ -411,9 +451,9 @@ with these differences:
 | Timers | written when a FIFO starts or bends | written at the end of the frame, by `0x0807FE30` in `B6JJ`; a stop drops a setting that's waiting |
 | Noise macros | `DB` without a macro table leaves the channel's macro as it was | `DB` without a macro table turns the channel's macro off |
 
-In `B6JJ` the play routine is at `0x0807D250`, the note reader at
-`0x0807D844`, the per-frame routine at `0x0807EEE4`, and the routine that sets
-the seed at `0x0807D490`.
+In `B6JJ` the play routine is at `0x0807D250`, the routine for sound effects
+at `0x0807D2B8`, the note reader at `0x0807D844`, the per-frame routine at
+`0x0807EEE4`, and the routine that sets the seed at `0x0807D490`.
 
 ## Locating the driver
 
@@ -447,6 +487,25 @@ adds r4, r4, r0            ; 1824
 ldr  r0, [r4]              ; 6820
 ```
 
+The routine for sound effects skips each channel whose data starts with
+`FF`:
+
+```
+push {r4-r6, lr}           ; B570
+ldr  r1, =song playing     ; 49xx
+str  r0, [r1]              ; 6008
+movs r5, #0                ; 2500
+ldr  r6, =effect channels  ; 4Exx, in the A revision only
+ldr  r0, =song playing     ; 48xx
+ldr  r1, [r0]              ; 6801
+lsls r0, r5, #1            ; 0068
+adds r0, r0, r1            ; 1840
+ldrh r0, [r0, #2]          ; 8840
+adds r4, r0, r1            ; 1844, or adds r6, r0, r1 (1846) in the J revision
+ldrb r0, [r4]              ; 7820, or ldrb r0, [r6] (7830)
+cmp  r0, #0xFF             ; 28FF
+```
+
 The driver's tables come from the instructions that load their addresses,
 found by the instructions around them:
 
@@ -466,7 +525,10 @@ call, the game looks the file up: `movs r0, #archive; movs r1, #file; bl
 lookup`. `agbsf2` runs the game's lookup routine on a small Thumb
 interpreter to get the file's address. It finds the music file the same way,
 from the game's calls to the play routine, with the lookup a few instructions
-before.
+before. The sound effects' file comes from the game's calls to the routine for
+sound effects. In the A revision, the routine that gives the driver the sound
+effects' noise macros stores them through the address of the word after the
+music's variable.
 
 | Variable or routine | Found from |
 |---|---|
