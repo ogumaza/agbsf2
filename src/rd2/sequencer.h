@@ -273,9 +273,10 @@ struct Event
 class Sequencer
 {
 public:
-    // Plays song `song`: a sequence, or a sound effect after the sequences (see SongEffect()). Keeps references to
-    // `rom` and `info`, which have to outlive the sequencer.
-    Sequencer(const Rom& rom, const DriverInfo& info, int song);
+    // Plays song `song`: a sequence, or a sound effect after the sequences (see SongEffect()). A sequence plays with
+    // the settings of its version `version` (see VersionSettings()). Keeps references to `rom` and `info`. Both have to
+    // outlive the sequencer.
+    Sequencer(const Rom& rom, const DriverInfo& info, int song, int version = 0);
 
     // Returns false if the sequence can't be played.
     bool Valid() const
@@ -413,6 +414,7 @@ private:
     const DriverInfo& info_;
     const RevisionTraits& traits_; // TraitsOf(info_.revision)
     int sequence_ = 0;
+    int version_ = 0;
     const Effect* effect_ = nullptr; // the sound effect that it plays, or null for a sequence
     bool valid_ = false;
     bool started_ = false;

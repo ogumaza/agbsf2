@@ -96,8 +96,10 @@ public:
     virtual bool HasSong(int song) const = 0;
 
     // Returns the versions of a song that ConvertSong() writes, each to separate files. The first is the song as the
-    // game starts it. It has no name or suffix. Only Rare's driver gives more: Donkey Kong Country 3 plays Enchanted
-    // Riverbank above water and under water.
+    // game starts it. It has no name or suffix. Only the drivers of Rare and Nintendo R&D2 give more. Donkey Kong
+    // Country 3 plays Enchanted Riverbank above water and under water. Super Mario Advance 2 mutes one track of a
+    // sequence for one music number and another track for another. That game also plays a track of four sequences only
+    // while the player rides Yoshi.
     virtual std::vector<SongVersion> Versions(int song) const;
 
     // Works out a song's length, loop and tracks the way ConvertSong() does, without writing anything.

@@ -40,6 +40,15 @@ constexpr uint32_t kLinear[] = {1096155136, 1097144902, 1098135561, 1099127114, 
 // The start of krapPlay(), which starts a module: push {r4-r7, lr}, then its arguments and the test of the jingle mode.
 constexpr const char* kPlayPattern = "B5F0 4657 464E 4645 B4E0 1C0F 4680 4692 1C38 2204 4010 2800";
 
+// A game's call of krapPlay() for an entry of a table of modules: ldr r1, =table; lsls r0, rN, #2; adds r0, r0, r1;
+// ldr r0, [r0]; movs r1, #mode; movs r2, #song; bl krapPlay. Digimon Racing's routine at 0x080132D0 plays its jingle
+// that way. The routine starts with push {..., lr}; lsls r0, r0, #24; lsrs rN, r0, #24. The routine's first argument
+// then picks the entry. The game's calls of the routine give the entry's number with movs r0, #number.
+constexpr const char* kPlayEntryPattern = "49xx 00xx 1840 6800 21xx 22xx Fxxx Fxxx";
+
+// The most bytes from the start of such a routine to its call of krapPlay().
+constexpr uint32_t kMaxPlayEntryOffset = 64;
+
 // The note on of the row's routine for a module with instruments: ldr r1, =instruments ... ldr r7, =samples.
 constexpr const char* kTablesPattern = "0407 49xx 0BBA 588F 0071 616F 3902 5A78 4Fxx 0082 58B8 6128";
 constexpr int kInstrumentsIndex = 1;
@@ -406,17 +415,84 @@ void LogDetection(const Rom& rom, uint32_t table, DriverInfo& info)
     }
 }
 
+// Returns the start of the routine whose call of krapPlay() kPlayEntryPattern matches at `at`. The routine has to pass
+// its first argument to the register that picks the table's entry. Returns 0 otherwise.
+uint32_t PlayEntryRoutine(const Rom& rom, uint32_t at)
+{
+    const uint16_t entry_register = (rom.U16(at + 2) >> 3) & 7;
+    for (uint32_t back = 2; back <= kMaxPlayEntryOffset && at - back >= kRomBase; back += 2)
+    {
+        const uint32_t start = at - back;
+        if ((rom.U16(start) & 0xFF00) == 0xB500)
+        {
+            const bool argument = rom.U16(start + 2) == 0x0600 && rom.U16(start + 4) == (0x0E00 | entry_register);
+            return argument ? start : 0;
+        }
+    }
+
+    return 0;
+}
+
+// Returns the modules that the game plays once, as jingles: the entries of a table of modules that a routine of the
+// game plays with krapPlay() in the jingle mode (kPlayEntryPattern), by the number that each call of the routine gives.
+// The call's mode has to leave the loop bit clear. With that bit, krapPlay() loops the module in the jingle mode too.
+// Logs each such routine, and warns of a call whose number detection can't read.
+std::vector<uint32_t> FindJingles(const Rom& rom, DriverInfo& info)
+{
+    std::vector<uint32_t> jingles;
+    for (uint32_t at : FindThumb(rom, ParseThumbPattern(kPlayEntryPattern)))
+    {
+        const bool lsls = (rom.U16(at + 2) & 0xFFC7) == 0x0080;
+        const int mode = rom.U16(at + 8) & 0xFF;
+        if (!lsls || (mode & (kModeJingle | kModeLoop)) != kModeJingle || BlTarget(rom, at + 12) != info.play)
+        {
+            continue;
+        }
+        const uint32_t routine = PlayEntryRoutine(rom, at);
+        if (!routine)
+        {
+            continue;
+        }
+
+        const uint32_t table = ThumbLiteral(rom, at);
+        for (uint32_t call : FindCalls(rom, routine))
+        {
+            const uint16_t before = rom.U16(call - 2);
+            const uint32_t entry = table + 4 * uint32_t(before & 0xFF);
+            if ((before & 0xFF00) != 0x2000 || !rom.Contains(entry, 4))
+            {
+                info.warnings.push_back("the game plays a module once from " + Hex(call) +
+                                        ", by a number that detection can't read. That module converts as a loop");
+                continue;
+            }
+
+            jingles.push_back(rom.U32(entry));
+        }
+
+        info.log.push_back("the game's routine that plays a module once, as a jingle: " + Hex(routine));
+    }
+
+    return jingles;
+}
+
 // Lists the songs. A module without markers converts as a whole. One with markers converts song by song, each in the
-// player's song mode.
+// player's song mode. A whole module that the game plays once converts in the jingle mode. Logs the jingles.
 void ListSongs(const Rom& rom, DriverInfo& info)
 {
+    const std::vector<uint32_t> jingles = FindJingles(rom, info);
+    std::string listed;
     for (uint32_t at : info.modules)
     {
         ModuleInfo module;
         const int songs = ReadModule(rom, at, module) ? SongsInModule(module) : 0;
         if (songs == 0)
         {
-            info.songs.push_back({at, -1});
+            const bool jingle = std::find(jingles.begin(), jingles.end(), at) != jingles.end();
+            if (jingle)
+            {
+                listed += (listed.empty() ? "" : ", ") + std::to_string(info.songs.size());
+            }
+            info.songs.push_back({at, -1, jingle});
             continue;
         }
 
@@ -429,6 +505,11 @@ void ListSongs(const Rom& rom, DriverInfo& info)
         std::snprintf(text, sizeof text, "the module at %s separates %d %s with +++", Hex(at).c_str(), songs,
                       songs == 1 ? "song" : "songs");
         info.log.push_back(text);
+    }
+
+    if (!listed.empty())
+    {
+        info.log.push_back("jingles, which play once: " + listed);
     }
 }
 

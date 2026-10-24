@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.20)
-project(agbsf2 VERSION 1.7.0 LANGUAGES CXX)
+project(agbsf2 VERSION 1.7.1 LANGUAGES CXX)
 
 # The name of the macOS droplet app.
 set(AGBSF2_APP_NAME Agbsf2)

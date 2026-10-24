@@ -13,13 +13,20 @@ calls the driver makes are emulated), and captures what the driver does:
     render      the mixer's output, the samples the driver sends to the FIFOs, as a WAV file at the mixer's rate
                 (the PSG isn't rendered)
 
-    driver_emu.py ROM trace SONG FRAMES
-    driver_emu.py ROM dump SONG FRAMES
-    driver_emu.py ROM render SONG FRAMES OUT.wav
+    driver_emu.py ROM trace SONG FRAMES [--music N] [--yoshi]
+    driver_emu.py ROM dump SONG FRAMES [--music N] [--yoshi]
+    driver_emu.py ROM render SONG FRAMES OUT.wav [--music N] [--yoshi] [--tracks 1,3]
 
 SONG is agbsf2's number for a song. agbsf2 numbers the sequences first, then the sound effects. A sound effect is a
 track of one of the sound effects' sequences. The game's request for it names the sequence and the track. The script
 makes that request on the first of the players that the game plays its sound effects on.
+
+Where the game has a play-music routine that gives the driver settings with the sequence, the script starts a sequence
+through it as the first music number that plays the sequence. --music N starts it as music number N instead. Super
+Mario Advance 2's routine mutes track 8 of sequence 30 as music 17 and track 9 as music 18. agbsf2 writes the version
+of music 18 to <name>_30_music18. That game also mutes track 6 of sequences 15 to 18 unless the player rides Yoshi.
+The script starts those sequences without Yoshi, like agbsf2's first version. --yoshi starts them with the player
+riding Yoshi, like agbsf2's <name>_NN_yoshi.
 
 The routine and RAM addresses are chosen by the ROM's game code. Those of The Legend of Zelda: A Link to the Past
 (AZLE), Super Mario Advance 2 (AA2E) and Super Mario Advance 3 (A3AE) are built in. For another game, add an entry to
@@ -80,6 +87,7 @@ class Addresses:
     voice_note = 0x09        # the offsets of a voice's note, before the transpose, and its velocity
     voice_velocity = 0x0A
     play_music = None        # the game's play-music routine, where it gives the driver settings with the sequence
+    yoshi_mute = None        # Super Mario Advance 2's routine that mutes tracks unless the player rides Yoshi
 
 
 class AddressesAA2E(Addresses):
@@ -112,6 +120,15 @@ class AddressesAA2E(Addresses):
     player_playing = 0x41
     voice_note = None
     voice_velocity = 0x09
+    play_music = 0x0809B348  # the game's play-music routine: r0 = the music number. For sequence 30, it also mutes
+                             # track 8 as music 17 and track 9 as music 18.
+    music_table = 0x08177064  # a halfword for each music number: the sequence in its low byte
+    music_count = 0x30
+    # The routine that mutes track 6 of the music whose entry in the table has bit 9 set: r0 = 0 mutes it and r0 = 1
+    # lets it play. The game's level start code (0x08003D52) calls it after the play-music routine, with the flag that
+    # the player rides Yoshi.
+    yoshi_mute = 0x0809B3CC
+    yoshi_bit = 0x200
 
 
 class AddressesA3AE(Addresses):
@@ -232,15 +249,23 @@ class DriverEmulator:
     def u32(self, address):
         return struct.unpack('<I', self.read(address, 4))[0]
 
-    def play(self, song):
+    def play(self, song, music=None, yoshi=False):
         """Asks for a sequence on the music player, as the game's play routine does. The driver starts it in the next
-        frame. Where the game's play-music routine gives the driver settings with the sequence, the routine starts it,
-        as the first music number that plays it.
+        frame. Where the game's play-music routine gives the driver settings with the sequence, the routine starts it
+        as music number `music`. By default that is the first music number that plays the sequence. In Super Mario
+        Advance 2, the game's routine for the tracks that play only while the player rides Yoshi follows. `yoshi` lets
+        them play.
 
         A sound effect is asked for on the first of the game's players for sound effects."""
         self.writes = []
         effect = self.effect_of(song)
-        music = None if effect else self.music_number(song)
+        if music is None and not effect:
+            music = self.music_number(song)
+        elif music is not None and (effect or self.addr.play_music is None or self.music_sequence(music) != song):
+            raise SystemExit('music %d doesn\'t play song %d' % (music, song))
+        a = self.addr
+        if yoshi and (music is None or a.yoshi_mute is None or not self.music_entry(music) & a.yoshi_bit):
+            raise SystemExit('song %d has no tracks that play only while the player rides Yoshi' % song)
         if effect:
             self.player_number = self.addr.effect_player
             self.call(self.addr.effect_request, (self.player_number,) + effect)
@@ -248,6 +273,8 @@ class DriverEmulator:
             self.call(self.addr.request, (self.addr.music_player, song))
         else:
             self.call(self.addr.play_music, (music,))
+            if self.addr.yoshi_mute is not None:
+                self.call(self.addr.yoshi_mute, (1 if yoshi else 0,))
         self.call(self.addr.commit)
         return self.writes
 
@@ -285,9 +312,18 @@ class DriverEmulator:
         if a.play_music is None:
             return None
         for music in range(a.music_count):
-            if self.read(a.music_table + 2 * music, 1)[0] == sequence:
+            if self.music_sequence(music) == sequence:
                 return music
         return None
+
+    def music_sequence(self, music):
+        """Returns the sequence that music number `music` plays, or None for a music number past the table's end."""
+        a = self.addr
+        return self.read(a.music_table + 2 * music, 1)[0] if 0 <= music < a.music_count else None
+
+    def music_entry(self, music):
+        """Returns the entry of music number `music` in the game's table of music."""
+        return struct.unpack('<H', self.read(self.addr.music_table + 2 * music, 2))[0]
 
     def frame(self):
         """Runs one frame as the game's VBlank handler does: the driver's VBlank routine, then its per-frame routine.
@@ -304,13 +340,22 @@ class DriverEmulator:
                 return n
         return -1
 
-    def mute_tracks_except(self, numbers):
-        """Mutes the player's tracks other than `numbers` with each track's mute flag. The flag stops a track
-        starting notes."""
+    def muted_tracks(self):
+        """Returns the numbers of the player's tracks whose mute flag is set."""
+        muted = set()
+        for n in range(10):
+            track = self.u32(self.player() + 8 + 4 * n)
+            if track and self.read(track + 0x4A, 1)[0]:
+                muted.add(n)
+        return muted
+
+    def mute_tracks_except(self, numbers, muted=()):
+        """Mutes the player's tracks other than `numbers` with each track's mute flag. The tracks that the game muted,
+        `muted`, stay muted. The flag stops a track starting notes."""
         for n in range(10):
             track = self.u32(self.player() + 8 + 4 * n)
             if track:
-                self.uc.mem_write(track + 0x4A, bytes([0 if n in numbers else 1]))
+                self.uc.mem_write(track + 0x4A, bytes([0 if n in numbers and n not in muted else 1]))
 
     def player(self):
         """Returns the address of the record of the player that plays the song."""
@@ -354,18 +399,20 @@ class DriverEmulator:
         return lines
 
 
-def render(rom, song, frames, out, tracks=None):
+def render(rom, song, frames, out, tracks=None, music=None, yoshi=False):
     emu = DriverEmulator(rom)
-    emu.play(song)
+    emu.play(song, music, yoshi)
     a = emu.addr
+    muted = set()
     if tracks is not None:
-        # Carry out the request now, so that the tracks can be muted before they play anything. The per-frame routine
-        # then finds no requests, which is the only difference.
+        # Carry out the requests now. The tracks can then be muted before they play anything. The per-frame routine
+        # then finds no requests. That is the only difference. The tracks that the game's requests muted stay muted.
         emu.call(a.requests)
+        muted = emu.muted_tracks()
     pcm = bytearray()
     for f in range(frames):
         if tracks is not None:
-            emu.mute_tracks_except(tracks)
+            emu.mute_tracks_except(tracks, muted)
         emu.frame()
         buffer = emu.u32(a.outputs + 4 * emu.read(a.output_index, 1)[0])
         data = emu.read(buffer, 352)
@@ -411,14 +458,15 @@ class NoteLog:
             note['sample'] = self.emu.u32(voice + 0x5C)
 
 
-def notes(rom, song, frames, writes=None):
+def notes(rom, song, frames, writes=None, music=None, yoshi=False):
     """Returns each frame's new notes and the voices' state after it: for each frame, (notes, voices, newest), where a
     note is a dict, voices[i] is (state, pitch) or None for a free voice, and newest[n] is the newest voice that track
     n plays, or -1. With `writes`, a list, each write to the PSG's registers goes on its end as (frame, address, size,
-    value). The request's writes, before the first frame, have frame -1."""
+    value). The request's writes, before the first frame, have frame -1. A sequence starts as music number `music`,
+    with the player riding Yoshi with `yoshi` (see DriverEmulator.play())."""
     emu = DriverEmulator(rom)
     log = NoteLog(emu)
-    request = emu.play(song)
+    request = emu.play(song, music, yoshi)
     if writes is not None:
         writes.extend((-1,) + w for w in request)
     a = emu.addr
@@ -453,9 +501,9 @@ def format_write(frame, write):
     return '%d %08x %d %0*x' % (frame, address, size, 2 * size, value)
 
 
-def trace(rom, song, frames):
+def trace(rom, song, frames, music=None, yoshi=False):
     emu = DriverEmulator(rom)
-    for w in emu.play(song):
+    for w in emu.play(song, music, yoshi):
         print(format_write(-1, w))
     for f in range(frames):
         for w in emu.frame():
@@ -466,9 +514,9 @@ def trace(rom, song, frames):
             break
 
 
-def dump(rom, song, frames):
+def dump(rom, song, frames, music=None, yoshi=False):
     emu = DriverEmulator(rom)
-    emu.play(song)
+    emu.play(song, music, yoshi)
     for f in range(frames):
         emu.frame()
     a = emu.addr
@@ -492,17 +540,20 @@ def main():
     p.add_argument('frames', type=int)
     p.add_argument('out', nargs='?')
     p.add_argument('--tracks', help='render: only these of the player\'s tracks (0-9), such as 1,3')
+    p.add_argument('--music', type=int, help='start the sequence as this music number through the game\'s play-music '
+                   'routine (default: the first music number that plays it)')
+    p.add_argument('--yoshi', action='store_true', help='start the sequence with the player riding Yoshi (AA2E)')
     a = p.parse_args()
     rom = load_rom(a.rom)
     if a.command == 'trace':
-        trace(rom, a.song, a.frames)
+        trace(rom, a.song, a.frames, a.music, a.yoshi)
     elif a.command == 'render':
         if not a.out:
             p.error('render needs OUT.wav')
         render(rom, a.song, a.frames, a.out,
-               [int(t) for t in a.tracks.split(',')] if a.tracks else None)
+               [int(t) for t in a.tracks.split(',')] if a.tracks else None, a.music, a.yoshi)
     else:
-        dump(rom, a.song, a.frames)
+        dump(rom, a.song, a.frames, a.music, a.yoshi)
 
 
 if __name__ == '__main__':

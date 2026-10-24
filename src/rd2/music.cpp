@@ -70,6 +70,13 @@ public:
         return !effect || effect->address != 0;
     }
 
+    // A sequence that the game plays with other tracks muted for some music numbers, or for some of the game's states,
+    // has a version for each.
+    std::vector<SongVersion> Versions(int song) const override
+    {
+        return SongVersions(info_, song);
+    }
+
     // Works out the song's length, loop points and tracks that play notes, from the conversion settings. A sound
     // effect's address is the address of its track.
     SongReport InspectSong(int song, const ConvertSettings& settings) const override

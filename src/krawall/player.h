@@ -24,11 +24,6 @@ namespace agbsf2::krawall
 constexpr int kMixChannels = 32;
 constexpr int kPlayerChannels = 20;
 
-// The modes of krapPlay(): loop the module, play one of its songs, or play it as a jingle.
-constexpr int kModeLoop = 1;
-constexpr int kModeSong = 2;
-constexpr int kModeJingle = 4;
-
 // The frequency that the period of an Amiga module divides: 8363 Hz times 1712, the period of C-4.
 constexpr int32_t kAmigaClock = 14317456;
 
@@ -165,8 +160,8 @@ public:
     // which have to outlive the player.
     Player(const Rom& rom, const DriverInfo& info, uint32_t module, int mode = kModeLoop, int song = 0);
 
-    // Starts a piece that the conversion numbers. A whole module plays in loop mode, and a song of a module in loop and
-    // song mode.
+    // Starts a piece that the conversion numbers. A whole module plays in loop mode, or in the jingle mode if the game
+    // plays it once. A song of a module plays in loop and song mode.
     Player(const Rom& rom, const DriverInfo& info, const ModuleSong& song);
 
     // Returns false if the module can't be played.

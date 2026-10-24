@@ -159,8 +159,12 @@ file, with the same name: for example `game/game_00.mid` and
 `game/game_00.sf2`. A game with more than one sound driver gets every driver's
 songs (see [Options](#options)). Enchanted Riverbank in *Donkey Kong Country 3*
 gets a second pair for the arrangement that the game plays under water (see
-[MIDI from Rare's driver](#midi-from-rares-driver)). Pass several files to
-convert them together.
+[MIDI from Rare's driver](#midi-from-rares-driver)). Sequence 30 of *Super Mario
+Advance 2* gets a second pair for the ending that the game plays as music 18.
+Sequences 15 to 18 of that game get one for the track that plays while the
+player rides Yoshi (see
+[MIDI from Nintendo R&D2's driver](#midi-from-nintendo-rd2s-driver)). Pass
+several files to convert them together.
 Characters that Windows forbids in filenames are replaced with underscores.
 Trailing dots and spaces are removed, and reserved device names such as `CON`
 get an underscore prefix.
@@ -740,6 +744,19 @@ The MIDI file follows what the driver plays:
   level there, up to the channel's highest volume. On a track whose notes are
   all PSG notes other than drums, CC10 follows that rule.
 
+*Super Mario Advance 2* plays sequence 30, a jingle, as music 17 and as music
+18. Tracks 8 and 9 each hold a version of the jingle's last hit. The game mutes
+track 8 as music 17 and track 9 as music 18. A muted track plays no notes. The
+sequence therefore gets two pairs of files: `game_30.mid` and `game_30.sf2` as
+music 17, and `game_30_music18.mid` and `game_30_music18.sf2` as music 18. Each
+pair leaves out the track that the game mutes.
+
+The game also mutes track 6 of sequences 15 to 18 unless the player rides
+Yoshi. A new game starts without Yoshi. The first pair of each of those
+sequences, such as `game_15.mid` and `game_15.sf2`, therefore leaves the track
+out. A second pair, such as `game_15_yoshi.mid` and `game_15_yoshi.sf2`, plays
+it as the game does while the player rides Yoshi.
+
 ### SoundFont from Nintendo R&D2's driver
 
 Each sequence's SoundFont has a preset for each instrument the sequence plays,
@@ -868,6 +885,13 @@ number of MIDI ticks, with a tempo change to preserve its playback duration.
 Playback starts on the module's first tick. A loop is detected when a row
 returns to an earlier position with the same speed, tempo and pattern-loop
 state, for example at a jump or the end of the order list.
+
+A game can play a module once, as a jingle. `agbsf2` finds the jingles
+through the game's routine that plays them. Detection reads that routine in
+the form that *Digimon Racing* has. The MIDI file of a jingle plays the module
+to its end and stops, with no loop markers. Krawall plays a jingle that way
+while no other module plays. `--info` lists the jingles. In *Digimon Racing*,
+module 16 is a jingle.
 
 | Game | MIDI |
 |---|---|
@@ -1068,6 +1092,9 @@ SoundFonts.
   envelope again. A PSG voice's CC11 continues through legato.
 * **Echo.** The driver can add an echo to the voices of tracks with an echo
   send, but only the game's code turns it on, so the conversion leaves it out.
+  *Super Mario Advance 2* turns it on in some levels. No track of its music has
+  an echo send. In those levels the echo reaches only the sound effects.
+  `agbsf2` converts the effects without it.
 * **PSG.** The MIDI file changes a square's or the noise's CC11 at the start
   of a frame. The PSG's envelope steps the volume at 64 Hz. The hardware's step
   can then come up to a frame before the step in the MIDI file. The PSG's notes
@@ -1081,9 +1108,11 @@ SoundFonts.
 * **Doubled notes.** A track that plays a key twice at once is up to 6 dB
   louder in the game than the one MIDI note it becomes, since a MIDI channel
   plays a key only once.
-* **Tracks the game mutes.** A game can mute some of a sequence's tracks when
-  it plays it, as *Super Mario Advance 2* does to choose between two endings of
-  a jingle. The MIDI file has every track.
+* **Tracks the game mutes.** A game can mute some of a sequence's tracks while
+  the sequence plays. `agbsf2` reads only the mutes of two routines of *Super
+  Mario Advance 2*: the play-music routine and the routine for the track that
+  plays while the player rides Yoshi. For another game, the MIDI file has every
+  track.
 * **Voices and volumes the game sets.** A game can also give the driver fewer
   sample voices, or lower the music's volume, when it plays a sequence.
   `agbsf2` reads the settings that *Super Mario Advance 3*'s play-music
@@ -1183,8 +1212,6 @@ SoundFonts.
 
   The file `nointerp.txt` holds the line `interp 0`. The game clips a level
   past the mixer's full scale. The conversion plays it at full scale.
-* **Jingles.** A game can play a module once, as a jingle, but nothing in the
-  module says so, and its conversion loops like any other.
 * **The game's settings.** The conversion plays each module on its own, at the
   music volume that the library starts with. A game that changes the music's
   volume, or fades it, does so outside the module.

@@ -14,14 +14,15 @@ same two buffers and a frame's samples each time. It captures what the player an
                 work out periods and frequencies.
     render      the mix's 8-bit output, left and right
 
-    driver_emu.py ROM trace MODULE FRAMES [--song N]
-    driver_emu.py ROM render MODULE FRAMES OUT.wav [--song N]
+    driver_emu.py ROM trace MODULE FRAMES [--song N | --jingle]
+    driver_emu.py ROM render MODULE FRAMES OUT.wav [--song N | --jingle]
 
 MODULE is the address of the module's header in hex. `agbsf2 --info` lists the addresses. krapPlay() plays the
 module in loop mode. With --song, krapPlay() plays song N of a module whose orders separate songs with +++, in song
-mode. Song mode loops back to the song's start at the song's end. The routine and RAM addresses are chosen by the ROM's
-game code. Those of Digimon Racing (BDGE) are built in. Another game requires its values in GAMES (see
-docs/krawall.md).
+mode. Song mode loops back to the song's start at the song's end. With --jingle, krapPlay() plays the module once, in
+the jingle mode. With no module playing, the jingle mode plays the module to its end and stops. The routine and RAM
+addresses are chosen by the ROM's game code. Those of Digimon Racing (BDGE) are built in. Another game requires its
+values in GAMES (see docs/krawall.md).
 """
 import argparse
 import struct
@@ -43,7 +44,7 @@ CHANNEL_SIZE = 0x60
 MIX_SIZE = 0x2C
 MIX_CHANNELS = 32
 PERIOD_POINTERS = (0x24, 0x2C)  # the player's pointers to the routines that work out periods and frequencies
-MODE_LOOP, MODE_SONG = 1, 2  # krapPlay()'s modes: loop the module, and play one of its songs
+MODE_LOOP, MODE_SONG, MODE_JINGLE = 1, 2, 4  # krapPlay()'s modes: loop, play one of the module's songs, play once
 ORDER_SKIP = 254  # the order that separates songs (+++)
 
 
@@ -64,6 +65,8 @@ class DigimonRacing:
     timer = 0x0200163C            # the sound timer's step and count
     music_volume = 0x02001640
     plays = 0x03000600            # the count of plays, which the mixer's handles hold
+    module_table = 0x087D7CEC     # the game's table of modules, a word each
+    jingles = (16,)               # the entries that the game's routine at 0x080132D0 plays once, in the jingle mode
 
 
 GAMES = {b'BDGE': DigimonRacing}
@@ -194,16 +197,26 @@ def song_count(rom, module):
     return min(songs, 64) if ORDER_SKIP in orders else 0
 
 
+def jingle_modules(rom):
+    """Returns the addresses of the modules that the game plays once, in the jingle mode."""
+    a = addresses_for(rom)
+    return {struct.unpack_from('<I', rom, a.module_table + 4 * n - ROM_BASE)[0] for n in a.jingles}
+
+
 def song_plays(rom, modules):
     """Returns how krapPlay() plays each piece that agbsf2 numbers: a (module, mode, song) for each number. `modules`
-    maps the numbers to the modules' addresses. A module without markers plays in loop mode. Each song of a module with
-    markers plays in song mode, in the order of the numbers."""
+    maps the numbers to the modules' addresses. A module without markers plays in loop mode, or in the jingle mode if
+    the game plays it once. Each song of a module with markers plays in song mode, in the order of the numbers."""
     plays, seen = {}, {}
+    jingles = jingle_modules(rom)
     for n in sorted(modules):
         module = modules[n]
         song = seen.get(module, 0)
         seen[module] = song + 1
-        plays[n] = (module, MODE_LOOP | MODE_SONG, song) if song_count(rom, module) else (module, MODE_LOOP, 0)
+        if song_count(rom, module):
+            plays[n] = (module, MODE_LOOP | MODE_SONG, song)
+        else:
+            plays[n] = (module, MODE_JINGLE if module in jingles else MODE_LOOP, 0)
     return plays
 
 
@@ -244,10 +257,14 @@ def main():
     p.add_argument('frames', type=int)
     p.add_argument('out', nargs='?')
     p.add_argument('--song', type=int, help='play this song of a module that separates songs with +++, in song mode')
+    p.add_argument('--jingle', action='store_true', help='play the module once, in the jingle mode')
     a = p.parse_args()
     rom = load_rom(a.rom)
     module = int(a.module, 16)
-    mode, song = (MODE_LOOP | MODE_SONG, a.song) if a.song is not None else (MODE_LOOP, 0)
+    if a.song is not None:
+        mode, song = MODE_LOOP | MODE_SONG, a.song
+    else:
+        mode, song = (MODE_JINGLE if a.jingle else MODE_LOOP), 0
     if a.command == 'trace':
         trace(rom, module, a.frames, mode, song)
         return

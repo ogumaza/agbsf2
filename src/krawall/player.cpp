@@ -192,6 +192,17 @@ bool SlideLevel(int8_t& level, uint8_t slide)
     return false;
 }
 
+// Returns the mode of krapPlay() that plays a piece that the conversion numbers.
+int PlayMode(const ModuleSong& song)
+{
+    if (song.jingle)
+    {
+        return kModeJingle;
+    }
+
+    return song.song >= 0 ? kModeLoop | kModeSong : kModeLoop;
+}
+
 } // namespace
 
 uint32_t AmigaPeriod(const Rom& rom, const DriverInfo& info, uint32_t note, int fine_tune)
@@ -279,7 +290,7 @@ Player::Player(const Rom& rom, const DriverInfo& info, uint32_t module, int mode
 }
 
 Player::Player(const Rom& rom, const DriverInfo& info, const ModuleSong& song)
-    : Player(rom, info, song.module, song.song >= 0 ? kModeLoop | kModeSong : kModeLoop, std::max(song.song, 0))
+    : Player(rom, info, song.module, PlayMode(song), std::max(song.song, 0))
 {
 }
 

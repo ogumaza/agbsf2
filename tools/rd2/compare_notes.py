@@ -29,6 +29,12 @@ way.
 A sequence named in --songs that has no MIDI file mustn't play any notes. AGBSF2 is used for its --info report. The
 report names the driver's tables and gives each sequence's length.
 
+A sequence that the game plays with other tracks muted for another music number has a second pair of files for it,
+named after the music number, such as NAME_30_music18.mid. The driver plays each file's version: the sequence starts
+through the game's play-music routine as the file's music number, or by default as the first one that plays it. A
+sequence with tracks that play only while the player rides Yoshi has a pair named NAME_NN_yoshi.mid. The driver plays
+it with the player riding Yoshi, and the first version without Yoshi (see driver_emu.DriverEmulator.play()).
+
 agbsf2 numbers the sound effects after the sequences. Each is checked in the same way. The conversion leaves out the
 notes that it can't make a sound for. They are a note at velocity 0, a note that its instrument has no region for and a
 note whose sample can't be read. The check leaves them out too (see converted()).
@@ -380,15 +386,17 @@ def zone_cents(zone, key, rate):
     return 1200 * math.log2(played / rate)
 
 
-def check_song(rom, raw_rom, tables, bank_starts, share, song, midi_path, sf2_path, frames_limit):
+def check_song(rom, raw_rom, tables, bank_starts, share, song, midi_path, sf2_path, frames_limit, music=None,
+               yoshi=False):
     """Returns the notes checked and the problems found. The notes that converted() leaves out aren't checked.
-    `share` is the PSG's share of full scale at volume 15."""
+    `share` is the PSG's share of full scale at volume 15. The sequence starts as music number `music`, with the player
+    riding Yoshi with `yoshi` (see driver_emu.DriverEmulator.play())."""
     notes, bends, expressions, ranges, length = read_midi(midi_path)
 
     sf = SoundFont(sf2_path)
     frames = min(frames_limit, int(length * FRAME_RATE) + 2)
     writes = []
-    played = driver_emu.notes(raw_rom, song, frames, writes)
+    played = driver_emu.notes(raw_rom, song, frames, writes, music, yoshi)
     psg = psg_frames(writes, len(played))
     problems = []
     end_frame = length * FRAME_RATE
@@ -590,18 +598,16 @@ def main():
     rom = Rom(raw_rom)
     tables, (bank_table, bank_count), lengths, share = driver_info(a.agbsf2, a.rom)
     bank_starts = {bank_table + rom.u32(bank_table + 4 * i) for i in range(bank_count)}
-    midis = dict(conversion.midi_files(a.folder, 'rd2'))
-    if not midis:
+    files = conversion.midi_files(a.folder, 'rd2', versions=True)
+    midis = {song: path for song, version, path in files if not version}
+    if not files:
         raise SystemExit('found no MIDI files to check in %s' % a.folder)
-    songs = sorted(set(parse_range(a.songs))) if a.songs else sorted(midis)
+    songs = sorted(set(parse_range(a.songs))) if a.songs else sorted({song for song, _, _ in files})
     count = failed = total = 0
     for song in songs:
         midi = midis.get(song)
-        if midi is None:
+        if midi is None and song in lengths:
             # A sequence without a MIDI file mustn't play any notes.
-            if song not in lengths:
-                print('sequence %d: no MIDI file, and --info lists no such sequence' % song)
-                continue
             count += 1
             played = sum(1 for started, _, _ in driver_emu.notes(raw_rom, song, min(a.frames, lengths[song] + 2))
                          for note in started if converted(rom, bank_starts, note))
@@ -610,18 +616,34 @@ def main():
                 print('sequence %d: no MIDI file, but the driver plays %d notes' % (song, played))
             else:
                 print('sequence %d: no MIDI file, and the driver plays no notes' % song)
-            continue
-        count += 1
-        checked, problems = check_song(rom, raw_rom, tables, bank_starts, share, song, midi,
-                                       midi.with_suffix('.sf2'), a.frames)
-        total += checked
-        if problems:
-            failed += 1
-            print('sequence %d: %d problems in %d notes' % (song, len(problems), checked))
-            for problem in problems[:10]:
-                print('    ' + problem)
-        else:
-            print('sequence %d: all %d notes match' % (song, checked))
+        elif midi is None:
+            print('sequence %d: no MIDI file, and --info lists no such sequence' % song)
+
+        # The sequence as the game starts it, then each of its other versions. A version's files are named after the
+        # music number that plays it, or after the player riding Yoshi.
+        checks = [('sequence %d' % song, midi, None, False)] if midi else []
+        for version, path in ((v, p) for s, v, p in files if s == song and v):
+            music = re.fullmatch(r'music(\d+)', version)
+            if music:
+                checks.append(('sequence %d %s' % (song, version), path, int(music.group(1)), False))
+            elif version == 'yoshi':
+                checks.append(('sequence %d %s' % (song, version), path, None, True))
+            else:
+                count += 1
+                failed += 1
+                print('sequence %d %s: no music number plays this version' % (song, version))
+        for name, path, music, yoshi in checks:
+            count += 1
+            checked, problems = check_song(rom, raw_rom, tables, bank_starts, share, song, path,
+                                           path.with_suffix('.sf2'), a.frames, music, yoshi)
+            total += checked
+            if problems:
+                failed += 1
+                print('%s: %d problems in %d notes' % (name, len(problems), checked))
+                for problem in problems[:10]:
+                    print('    ' + problem)
+            else:
+                print('%s: all %d notes match' % (name, checked))
     if not count:
         raise SystemExit('found none of the sequences to check')
     print('%d of %d sequences match the driver, %d notes checked' % (count - failed, count, total))

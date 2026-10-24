@@ -240,8 +240,13 @@ uint8_t NoiseTableEntry(const Rom& rom, const DriverInfo& info, uint32_t index)
     return rom.U8(info.noise_table + std::min<uint32_t>(index, kLastIndex));
 }
 
-Sequencer::Sequencer(const Rom& rom, const DriverInfo& info, int song)
-    : rom_(rom), info_(info), traits_(TraitsOf(info.revision)), sequence_(song), effect_(SongEffect(info, song))
+Sequencer::Sequencer(const Rom& rom, const DriverInfo& info, int song, int version)
+    : rom_(rom),
+      info_(info),
+      traits_(TraitsOf(info.revision)),
+      sequence_(song),
+      version_(version),
+      effect_(SongEffect(info, song))
 {
     valid_ = effect_ ? effect_->address != 0 : song >= 0 && song < int(info.sequence_addresses.size());
 
@@ -329,9 +334,8 @@ void Sequencer::Start()
     }
 
     // The game's play-music routine requests the sample voices that the sequence plays with, then the sequence, then
-    // the player's second volume. The driver handles the requests in that order.
-    const MusicSettings settings =
-        size_t(sequence_) < info_.music_settings.size() ? info_.music_settings[size_t(sequence_)] : MusicSettings();
+    // the player's second volume or the mute of some of its tracks. The driver handles the requests in that order.
+    const MusicSettings settings = VersionSettings(info_, sequence_, version_);
     SetSampleVoices(settings.sample_voices);
 
     StopPlayer();
@@ -359,6 +363,16 @@ void Sequencer::Start()
         if (slot >= 0)
         {
             StartTrack(slot, player_.sequence + offset, i, 0);
+        }
+    }
+
+    // The request that mutes tracks sets the mute of each track in its mask that the player has.
+    for (int i = 0; i < kPlayerTracks; i++)
+    {
+        const int slot = player_.tracks[size_t(i)];
+        if (((settings.muted_tracks >> i) & 1) && slot >= 0)
+        {
+            tracks_[size_t(slot)].mute = 1;
         }
     }
 

@@ -121,13 +121,19 @@ constexpr uint8_t kEnvelopeOn = 1;
 constexpr uint8_t kEnvelopeSustains = 2;
 constexpr uint8_t kEnvelopeLoops = 4;
 
+// The modes of krapPlay(): loop the module, play one of its songs, or play it as a jingle.
+constexpr int kModeLoop = 1;
+constexpr int kModeSong = 2;
+constexpr int kModeJingle = 4;
+
 // A piece of music that the conversion converts: a module, or one of the songs that its orders separate with +++.
 struct ModuleSong
 {
     auto operator<=>(const ModuleSong&) const = default;
 
     uint32_t module = 0;
-    int song = -1; // the song's number in its module, or -1 for a whole module without markers
+    int song = -1;       // the song's number in its module, or -1 for a whole module without markers
+    bool jingle = false; // a whole module that the game plays once, in krapPlay()'s jingle mode
 };
 
 // Krawall's tables, which the player reads, and the settings that the game gives the mixer.

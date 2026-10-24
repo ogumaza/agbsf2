@@ -99,6 +99,33 @@ constexpr TablePattern kKeyEnvelope = {"8869 1859 4Axx 0070 1840 8800 8050 6022 
 // that many sample voices.
 constexpr const char* kPlayMusicPattern = "49xx 0060 1840 8801 7805 2080 00C0 4008 2800 D0xx 20xx Fxxx Fxxx";
 
+// The lookup of the music's sequence in Super Mario Advance 2's play-music routine, and the request that follows it.
+// The code is ldr r0, =table; lsls r1, r5, #1; adds r1, r1, r0; ldrb r4, [r1]; movs r0, #player; adds r1, r4, #0; bl
+// (the request for the sequence); adds r0, r5, #0; bl (which keeps the music number). For one sequence, the routine
+// then mutes tracks of the player: cmp r4, #sequence; bne; movs r1, #mask; lsls r1, r1, #shift; cmp r5, #music; bne;
+// movs r1, #mask; lsls r1, r1, #shift; movs r0, #player; movs r2, #1; bl (kMuteRequestPattern). The music number of the
+// cmp mutes the tracks of the second mask, and every other music number those of the first.
+constexpr const char* kMutingPlayMusicPattern =
+    "48xx 0069 1809 780C 20xx 1C21 Fxxx Fxxx 1C28 Fxxx Fxxx 2Cxx D1xx 21xx 0xx9 2Dxx D1xx 21xx 0xx9 20xx 2201 Fxxx "
+    "Fxxx";
+
+// The driver's routine that makes request 0x0100. That request sets the mute of a player's tracks: r0 = the player,
+// r1 = a mask of its tracks and r2 = the mute. The request holds its type, then (player << 16) | mute, then the mask.
+constexpr const char* kMuteRequestPattern = "B510 0612 0E12 4Bxx 681C 2380 005B 8023 0400 4310 6060 60A1";
+
+// Super Mario Advance 2's routine that mutes tracks of the music by the game's state: push {r4, lr}; lsls r0, r0, #24;
+// lsrs r4, r0, #24; bl (the music number that plays, or -1); lsls r0, r0, #16; asrs r0, r0, #16; cmp r0, #0; blt;
+// ldr r1, =table; lsls r0, r0, #1; adds r0, r0, r1; ldrh r1, [r0]; movs r0, #value; lsls r0, r0, #shift; ands r0, r1;
+// cmp r0, #0; beq; movs r2, #0; cmp r4, #0; bne; movs r2, #1; movs r0, #player; movs r1, #mask; bl
+// (kMuteRequestPattern). Where the music's entry has the bit, an argument of 0 mutes the tracks of the mask, and 1 lets
+// them play. The game's callers pass the flag that the player rides Yoshi.
+constexpr const char* kYoshiMutePattern =
+    "B510 0600 0E04 Fxxx Fxxx 0400 1400 2800 DBxx 49xx 0040 1840 8801 20xx 00xx "
+    "4008 2800 D0xx 2200 2C00 D1xx 2201 20xx 21xx Fxxx Fxxx";
+
+// A mask of every track of a player.
+constexpr uint32_t kTracks = (1u << kPlayerTracks) - 1;
+
 // The most music numbers that detection reads from the game's table.
 constexpr uint32_t kMaxMusic = 256;
 
@@ -208,16 +235,29 @@ bool PlausibleSequence(const Rom& rom, uint32_t at)
     return true;
 }
 
-// What the code of the game's play-music routine gives: its table of music, the bit of an entry that picks the sample
-// voices, and the voices with the bit and without it. `volumes` holds each music number that sets the player's second
-// volume, and the volume it sets.
+// What the code of the game's play-music routine gives: its table of music and the requests that it makes along with
+// the request for the sequence. Super Mario Advance 3's form picks the sample voices by a bit of the entry, `bit`:
+// `with_bit` voices with it and `without_bit` without. `volumes` holds each music number that sets the player's second
+// volume, and the volume it sets. Super Mario Advance 2's form mutes tracks of one sequence, `muted_sequence`. Every
+// music number that plays it mutes the tracks in `mask`, except `music`. That one mutes those in `music_mask`. The
+// requests go to `player`, through the driver's routine at `mute_request` (kMuteRequestPattern). Unless the player
+// rides Yoshi, that game also mutes the tracks in `yoshi_mask` of each music whose entry has `yoshi_bit` set
+// (kYoshiMutePattern).
 struct PlayMusicRoutine
 {
     uint32_t table = 0;
     uint32_t bit = 0;
-    int with_bit = 0;
-    int without_bit = 0;
+    int with_bit = kSampleVoices;
+    int without_bit = kSampleVoices;
     std::vector<std::pair<uint32_t, int>> volumes;
+    int muted_sequence = -1;
+    uint32_t music = 0;
+    uint16_t mask = 0;
+    uint16_t music_mask = 0;
+    uint32_t player = 0;
+    uint32_t mute_request = 0;
+    uint32_t yoshi_bit = 0;
+    uint16_t yoshi_mask = 0;
 };
 
 // Reads the play-music routine where kPlayMusicPattern matches it, at `at`. With the entry's bit clear, the beq goes to
@@ -260,12 +300,92 @@ std::optional<PlayMusicRoutine> ParsePlayMusic(const Rom& rom, uint32_t at)
     return routine;
 }
 
-// Gives each sequence the settings of the first music number that plays it. The game's table of music doesn't give its
-// length. Detection reads it up to the first entry whose sequence the game doesn't have. The game has `game_count`
-// sequences. An override of the count doesn't change that. An entry for a sequence that isn't converted is skipped.
+// Returns the value that movs r1, #value at `at` and lsls r1, r1, #shift after it give, or nothing if the lsls shifts
+// another register.
+std::optional<uint32_t> ShiftedValue(const Rom& rom, uint32_t at)
+{
+    const uint16_t shift = rom.U16(at + 2);
+    if ((shift & 0xF83F) != 0x0009)
+    {
+        return std::nullopt;
+    }
+
+    return uint32_t(rom.U16(at) & 0xFF) << ((shift >> 6) & 0x1F);
+}
+
+// Reads Super Mario Advance 2's play-music routine where kMutingPlayMusicPattern matches it, at `at`. The form requires
+// both requests to go to the same player and the masks to hold only the player's tracks. The last bl has to call the
+// request that mutes tracks (kMuteRequestPattern). Returns nothing if the code doesn't take that form.
+std::optional<PlayMusicRoutine> ParseMutingPlayMusic(const Rom& rom, uint32_t at)
+{
+    const std::optional<uint32_t> mask = ShiftedValue(rom, at + 26);
+    const std::optional<uint32_t> music_mask = ShiftedValue(rom, at + 34);
+    const std::vector<uint32_t> requests = FindThumb(rom, ParseThumbPattern(kMuteRequestPattern));
+    const uint32_t request = BlTarget(rom, at + 42);
+    if (!mask || !music_mask || (*mask & ~kTracks) || (*music_mask & ~kTracks) || rom.U16(at + 8) != rom.U16(at + 38) ||
+        std::find(requests.begin(), requests.end(), request) == requests.end())
+    {
+        return std::nullopt;
+    }
+
+    PlayMusicRoutine routine;
+    routine.table = ThumbLiteral(rom, at);
+    routine.muted_sequence = rom.U16(at + 22) & 0xFF;
+    routine.music = rom.U16(at + 30) & 0xFFu;
+    routine.mask = uint16_t(*mask);
+    routine.music_mask = uint16_t(*music_mask);
+    routine.player = rom.U16(at + 8) & 0xFFu;
+    routine.mute_request = request;
+
+    return routine;
+}
+
+// Reads into `routine` Super Mario Advance 2's routine that mutes tracks unless the player rides Yoshi.
+// kYoshiMutePattern matches the routine at `at`. The routine has to read the play-music routine's table and request the
+// mute on its player. The mask has to hold only the player's tracks. The last bl has to call the routine that the
+// play-music routine calls for the mute. Leaves `routine` as it is if the code doesn't take that form.
+void ParseYoshiMute(const Rom& rom, uint32_t at, PlayMusicRoutine& routine)
+{
+    const uint16_t shift = rom.U16(at + 28);
+    const uint32_t mask = rom.U16(at + 46) & 0xFFu;
+    if ((shift & 0xF83F) != 0 || ThumbLiteral(rom, at + 18) != routine.table ||
+        (rom.U16(at + 44) & 0xFFu) != routine.player || (mask & ~kTracks) ||
+        BlTarget(rom, at + 48) != routine.mute_request)
+    {
+        return;
+    }
+
+    routine.yoshi_bit = uint32_t(rom.U16(at + 26) & 0xFF) << ((shift >> 6) & 0x1F);
+    routine.yoshi_mask = uint16_t(mask);
+}
+
+// Returns the settings that the play-music routine makes for music number `music` from its entry in the table, `entry`.
+MusicSettings SettingsOf(const PlayMusicRoutine& routine, uint32_t music, uint16_t entry)
+{
+    MusicSettings s;
+    s.music = int(music);
+    s.sample_voices = (entry & routine.bit) ? routine.with_bit : routine.without_bit;
+    for (const auto& [number, volume] : routine.volumes)
+    {
+        if (number == music)
+        {
+            s.volume2 = volume;
+        }
+    }
+    if ((entry & 0xFF) == routine.muted_sequence)
+    {
+        s.muted_tracks = music == routine.music ? routine.music_mask : routine.mask;
+    }
+
+    return s;
+}
+
+// Gives each sequence the settings of the first music number that plays it, and a version for each later music number
+// that mutes other tracks. The game's table of music doesn't give its length. Detection reads it up to the first entry
+// whose sequence the game doesn't have. The game has `game_count` sequences. An override of the count doesn't change
+// that. An entry for a sequence that isn't converted is skipped.
 void ApplyMusicTable(const Rom& rom, const PlayMusicRoutine& routine, uint32_t game_count, DriverInfo& info)
 {
-    std::vector<bool> seen(info.sequence_addresses.size());
     for (uint32_t music = 0; music < kMaxMusic && rom.Contains(routine.table + 2 * music, 2); music++)
     {
         const uint16_t entry = rom.U16(routine.table + 2 * music);
@@ -274,32 +394,80 @@ void ApplyMusicTable(const Rom& rom, const PlayMusicRoutine& routine, uint32_t g
         {
             break;
         }
-        if (sequence >= seen.size() || seen[sequence])
+        if (sequence >= info.music_settings.size())
         {
             continue;
         }
 
-        seen[sequence] = true;
-        MusicSettings& s = info.music_settings[sequence];
-        s.sample_voices = (entry & routine.bit) ? routine.with_bit : routine.without_bit;
-        for (const auto& [number, volume] : routine.volumes)
+        // Unless the player rides Yoshi, Super Mario Advance 2 mutes the tracks in yoshi_mask of the music whose entry
+        // has yoshi_bit set. A new game starts without Yoshi. The version with those tracks muted comes first.
+        MusicSettings s = SettingsOf(routine, music, entry);
+        std::vector<MusicSettings> made = {s};
+        if ((entry & routine.yoshi_bit) && routine.yoshi_mask)
         {
-            if (number == music)
+            made.front().muted_tracks |= routine.yoshi_mask;
+            s.riding_yoshi = true;
+            made.push_back(s);
+        }
+
+        std::vector<MusicSettings>& versions = info.music_settings[sequence];
+        for (const MusicSettings& m : made)
+        {
+            const auto same_mutes = [&m](const MusicSettings& v)
             {
-                s.volume2 = volume;
+                return v.muted_tracks == m.muted_tracks;
+            };
+            if (versions.front().music < 0)
+            {
+                versions.front() = m;
+            }
+            else if (std::none_of(versions.begin(), versions.end(), same_mutes))
+            {
+                versions.push_back(m);
             }
         }
     }
 }
 
+// Returns a list in words: "a", "a and b", or "a, b and c".
+std::string ListOf(const std::vector<std::string>& items)
+{
+    std::string text;
+    for (size_t i = 0; i < items.size(); i++)
+    {
+        text += (i == 0 ? "" : i + 1 == items.size() ? " and " : ", ") + items[i];
+    }
+
+    return text;
+}
+
+// Returns the tracks of a mask in words for --info: "track 8" or "tracks 8 and 9".
+std::string TrackList(uint16_t mask)
+{
+    std::vector<std::string> tracks;
+    for (int t = 0; t < kPlayerTracks; t++)
+    {
+        if ((mask >> t) & 1)
+        {
+            tracks.push_back(std::to_string(t));
+        }
+    }
+
+    return (tracks.size() == 1 ? "track " : "tracks ") + ListOf(tracks);
+}
+
 // Returns the line for --info: the game's table of music, and the sequences that play with other settings than the
-// driver's.
+// driver's defaults. The form of the routine in Super Mario Advance 3 gives the sample voices and the second volume.
+// The form in Super Mario Advance 2 gives the tracks that each version of a sequence mutes. That game's tracks that
+// play only while the player rides Yoshi come last.
 std::string MusicSettingsLine(const PlayMusicRoutine& routine, const DriverInfo& info)
 {
     std::string voices, volume2;
+    std::vector<std::string> mutes, yoshi;
     for (size_t sequence = 0; sequence < info.music_settings.size(); sequence++)
     {
-        const MusicSettings& s = info.music_settings[sequence];
+        const std::vector<MusicSettings>& versions = info.music_settings[sequence];
+        const MusicSettings& s = versions.front();
         if (s.sample_voices != kSampleVoices)
         {
             voices += (voices.empty() ? "" : ", ") + std::to_string(sequence);
@@ -309,25 +477,92 @@ std::string MusicSettingsLine(const PlayMusicRoutine& routine, const DriverInfo&
             volume2 += (volume2.empty() ? "" : ", ") + std::to_string(sequence) + " (" +
                        xsflib::Hex(uint32_t(s.volume2), 2, true) + ")";
         }
+
+        // The tracks that each version of the sequence mutes, without those that play while the player rides Yoshi.
+        const bool riding =
+            std::any_of(versions.begin(), versions.end(), [](const MusicSettings& v) { return v.riding_yoshi; });
+        std::vector<std::string> muted;
+        for (const MusicSettings& v : versions)
+        {
+            const uint16_t mask = riding ? v.muted_tracks & ~routine.yoshi_mask : v.muted_tracks;
+            if (mask && !v.riding_yoshi)
+            {
+                muted.push_back(TrackList(mask) + " as music " + std::to_string(v.music));
+            }
+        }
+        if (!muted.empty())
+        {
+            mutes.push_back("in sequence " + std::to_string(sequence) + ", " + ListOf(muted));
+        }
+
+        if (riding)
+        {
+            yoshi.push_back(std::to_string(sequence));
+        }
     }
 
-    return "the game's music table: " + Hex(routine.table) + "; sequences with " + std::to_string(routine.with_bit) +
-           " sample voices: " + (voices.empty() ? "none" : voices) +
-           "; second volume: " + (volume2.empty() ? "none" : volume2);
+    std::string line = "the game's music table: " + Hex(routine.table);
+    if (routine.bit)
+    {
+        line += "; sequences with " + std::to_string(routine.with_bit) +
+                " sample voices: " + (voices.empty() ? "none" : voices) +
+                "; second volume: " + (volume2.empty() ? "none" : volume2);
+    }
+
+    if (routine.muted_sequence >= 0)
+    {
+        std::string list;
+        for (const std::string& m : mutes)
+        {
+            list += (list.empty() ? "" : "; ") + m;
+        }
+        line += "; muted tracks: " + (list.empty() ? "none" : list);
+    }
+
+    if (routine.yoshi_mask)
+    {
+        line += "; muted unless riding Yoshi: " +
+                (yoshi.empty() ? "none"
+                               : TrackList(routine.yoshi_mask) +
+                                     (yoshi.size() == 1 ? " of sequence " : " of sequences ") + ListOf(yoshi));
+    }
+
+    return line;
 }
 
-// Where kPlayMusicPattern matches the game's play-music routine, reads the settings that the routine makes along with
-// each sequence. Returns a line for --info, or an empty one if the game has no such routine.
-std::string ReadMusicSettings(const Rom& rom, uint32_t game_count, DriverInfo& info)
+// Finds the game's play-music routine in one of the forms that detection reads: the form in Super Mario Advance 3
+// (kPlayMusicPattern) or the form in Super Mario Advance 2 (kMutingPlayMusicPattern). Returns nothing otherwise.
+std::optional<PlayMusicRoutine> FindPlayMusic(const Rom& rom)
 {
-    info.music_settings.assign(info.sequence_addresses.size(), MusicSettings());
-    const std::vector<uint32_t> hits = FindThumb(rom, ParseThumbPattern(kPlayMusicPattern));
-    if (hits.size() != 1)
+    const std::vector<uint32_t> voices = FindThumb(rom, ParseThumbPattern(kPlayMusicPattern));
+    if (voices.size() == 1)
     {
-        return "";
+        return ParsePlayMusic(rom, voices[0]);
     }
 
-    const std::optional<PlayMusicRoutine> routine = ParsePlayMusic(rom, hits[0]);
+    const std::vector<uint32_t> mutes = FindThumb(rom, ParseThumbPattern(kMutingPlayMusicPattern));
+    if (mutes.size() == 1)
+    {
+        std::optional<PlayMusicRoutine> routine = ParseMutingPlayMusic(rom, mutes[0]);
+        const std::vector<uint32_t> yoshi = FindThumb(rom, ParseThumbPattern(kYoshiMutePattern));
+        if (routine && yoshi.size() == 1)
+        {
+            ParseYoshiMute(rom, yoshi[0], *routine);
+        }
+
+        return routine;
+    }
+
+    return std::nullopt;
+}
+
+// Reads the settings that the game's play-music routine makes along with each sequence, and the versions of the
+// sequences that it plays with other tracks muted. Returns a line for --info, or an empty one if the game has no such
+// routine.
+std::string ReadMusicSettings(const Rom& rom, uint32_t game_count, DriverInfo& info)
+{
+    info.music_settings.assign(info.sequence_addresses.size(), {MusicSettings()});
+    const std::optional<PlayMusicRoutine> routine = FindPlayMusic(rom);
     if (!routine)
     {
         return "";
@@ -595,6 +830,17 @@ const Effect* SongEffect(const DriverInfo& info, int song)
 {
     const int sequences = int(info.sequence_addresses.size());
     return song >= sequences && song < SongCount(info) ? &info.sound_effects[size_t(song - sequences)] : nullptr;
+}
+
+MusicSettings VersionSettings(const DriverInfo& info, int song, int version)
+{
+    if (song < 0 || size_t(song) >= info.music_settings.size() || info.music_settings[size_t(song)].empty())
+    {
+        return MusicSettings();
+    }
+
+    const std::vector<MusicSettings>& versions = info.music_settings[size_t(song)];
+    return versions[size_t(std::clamp(version, 0, int(versions.size()) - 1))];
 }
 
 } // namespace agbsf2::rd2

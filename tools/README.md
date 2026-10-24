@@ -400,7 +400,24 @@ smaller scale. Its notes' velocities then have to fit one scale.
 `driver_emu.py render` writes the mixer's stereo output at 10512 Hz: the 8-bit
 samples the driver sends to the FIFOs, without the PSG. `--tracks` mutes the
 player's other tracks with their mute flags. A track's output can then be
-compared with a render of `agbsf2 -t` alone.
+compared with a render of `agbsf2 -t` alone. The tracks that the game mutes
+stay muted.
+
+*Super Mario Advance 2* (`AA2E`) plays sequence 30 as music 17 and as music
+18. Its play-music routine mutes track 8 as music 17 and track 9 as music 18.
+`agbsf2` writes `rom_30` as music 17 and `rom_30_music18` as music 18.
+`compare_notes.py` checks each file with the driver started through the
+routine as the file's music number. `driver_emu.py` starts a sequence as the
+first music number that plays it. `--music` starts it as another, such as
+`--music 18`. `compare_trace.py` compares the first version.
+
+The game also mutes track 6 of sequences 15 to 18 unless the player rides
+Yoshi. `agbsf2` writes `rom_15` without Yoshi and `rom_15_yoshi` with the
+player riding Yoshi. By default, `driver_emu.py` starts those sequences
+without Yoshi. The script calls the play-music routine and then the game's
+routine for the track (`yoshi_mute`). `--yoshi` starts the sequences with the
+player riding Yoshi. `compare_notes.py` checks each file with the driver in
+the same state.
 
 ### Working out Nintendo R&D2's driver
 
@@ -456,8 +473,13 @@ with:
   routine gives the driver settings along with the sequence, as *Super Mario
   Advance 3*'s does: the routine, its table of music, and the number of music
   numbers in the table. `driver_emu.py` then starts each sequence through the
-  routine, as the first music number that plays it. Otherwise `play_music` is
-  `None`.
+  routine as the first music number that plays it. *Super Mario Advance 2*'s
+  routine mutes tracks of one sequence. In a game without such a routine,
+  `play_music` is `None`.
+* `yoshi_mute` and `yoshi_bit`, in *Super Mario Advance 2*: the game's routine
+  for track 6, and the bit of a music's entry that the routine tests. Unless
+  the player rides Yoshi, the routine mutes track 6 of the music whose entry
+  has the bit. In a game without the routine, `yoshi_mute` is `None`.
 
 A region read from a bank's table of offsets can find its sample's address
 outside the GBA's memory. The emulator reads 0 there, and so does `agbsf2`.
@@ -733,7 +755,9 @@ play as before.
 rate. It names a module by the address of its header, which `--info` lists.
 `--song N` plays song N of a module that separates songs with `+++`, in song
 mode. agbsf2 converts each such song that way. The two comparisons play it
-that way too.
+that way too. `--jingle` plays a module once, in the jingle mode. agbsf2
+converts each module that the game plays as a jingle in that mode. The two
+comparisons play the modules that `jingles` names in that mode too.
 
 ### Working out Krawall
 
@@ -770,6 +794,9 @@ entry to `GAMES` with:
   `plays`: the samples of a frame, and the addresses of the player's record,
   the mixer's channels, the master volumes, the sound timer's step and count,
   the music's volume and the count of plays.
+* `module_table` and `jingles`: the game's table of modules, and the entries
+  of it that the game plays once, as jingles. In *Digimon Racing*, the routine
+  at `0x080132D0` plays entry 16 that way.
 
 `test_song.py` also needs, in its `GAMES`, the address of the game's table of
 samples and the player's literals that give the tables of samples and

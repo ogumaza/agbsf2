@@ -2,6 +2,7 @@
 
 // Unit tests for Krawall. They build small synthetic cartridges in memory, so no game ROM is needed.
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -37,7 +38,8 @@ using test::ReadMidi;
 using test::ReadSf2;
 
 // Addresses in a test cartridge: the code patterns that detection reads, the game's calls of the library's settings,
-// the version string, the player's tables, the game's tables of samples and modules, the samples and the modules.
+// the game's routine that plays a jingle and its calls, the version string, the player's tables, the game's tables of
+// samples and modules, the samples and the modules.
 constexpr uint32_t kPlay = kRomBase + 0x100;
 constexpr uint32_t kTables = kRomBase + 0x140;
 constexpr uint32_t kTimer = kRomBase + 0x180;
@@ -46,6 +48,8 @@ constexpr uint32_t kInit = kRomBase + 0x200;
 constexpr uint32_t kQuality = kRomBase + 0x240;
 constexpr uint32_t kMaster = kRomBase + 0x280;
 constexpr uint32_t kGameInit = kRomBase + 0x2C0;
+constexpr uint32_t kJingle = kRomBase + 0x300;
+constexpr uint32_t kJingleCalls = kRomBase + 0x340;
 constexpr uint32_t kVersion = kRomBase + 0x400;
 constexpr uint32_t kSineTable = kRomBase + 0x1000;
 constexpr uint32_t kRampTable = kRomBase + 0x1080;
@@ -181,6 +185,23 @@ public:
         {
             Put8(header + 3 + o, o < orders.size() ? orders[o] : kOrderEnd);
         }
+    }
+
+    // Writes the game's routine that plays an entry of its table of modules once, in krapPlay()'s jingle mode. The
+    // routine takes the form of the one in Digimon Racing: push {r4, lr}; lsls r0, r0, #24; lsrs r4, r0, #24; ldr r1,
+    // =table; lsls r0, r4, #2; adds r0, r0, r1; ldr r0, [r0]; movs r1, #mode; movs r2, #0; bl krapPlay. Digimon Racing
+    // gives the jingle mode alone. One of the calls gives entry `entry` with movs r0, #entry. The other passes r5.
+    void Jingle(int entry, int mode = kModeJingle)
+    {
+        PutHalfwords(kJingle,
+                     {0xB510, 0x0600, 0x0E04, 0x4906, 0x00A0, 0x1840, 0x6800, uint16_t(0x2100 | mode), 0x2200});
+        PutBl(kJingle + 18, kPlay);
+        PutHalfwords(kJingle + 22, {0xBC10, 0xBC01, 0x4700});
+        Put32(kJingle + 0x20, kModuleTable);
+        Put16(kJingleCalls, uint16_t(0x2000 | entry));
+        PutBl(kJingleCalls + 2, kJingle);
+        Put16(kJingleCalls + 6, 0x1C28);
+        PutBl(kJingleCalls + 8, kJingle);
     }
 
 private:
@@ -769,6 +790,63 @@ void TestMusic()
     SEQLIB_CHECK(trace_text.find("\n1 m0 ") != std::string::npos);
 }
 
+// A whole module that the game plays once, through its routine for jingles, converts once and without loop markers. In
+// loop mode, the same module plays its pattern twice. The log names the routine and the jingle. A call of the routine
+// whose entry detection can't read gets a warning.
+void TestJingles()
+{
+    Cart cart;
+    const uint32_t looped = cart.Module(1, 4, {{0, 0, 49, 1}});
+    const uint32_t jingle = cart.Module(1, 4, {{0, 0, 49, 1}});
+    cart.Jingle(1);
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+    ConvertSettings opt;
+    opt.out_dir = test::g_temp.string();
+    opt.base_name = "krawall_jingles";
+
+    const SongReport loop = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport once = ConvertSong(rom, info, 1, opt, nullptr);
+
+    SEQLIB_CHECK(info.songs == (std::vector<ModuleSong>{{looped, -1, false}, {jingle, -1, true}}));
+    const auto logged = [&info](const std::string& line)
+    {
+        return std::find(info.log.begin(), info.log.end(), line) != info.log.end();
+    };
+    SEQLIB_CHECK(logged("the game's routine that plays a module once, as a jingle: 0x08000300"));
+    SEQLIB_CHECK(logged("jingles, which play once: 1"));
+    SEQLIB_CHECK(info.warnings == std::vector<std::string>({"the game plays a module once from 0x08000348, by a number "
+                                                            "that detection can't read. That module converts as a "
+                                                            "loop"}));
+    SEQLIB_REQUIRE(loop.ok && once.ok);
+    SEQLIB_CHECK(loop.loop_end > 0 && once.loop_start < 0 && once.loop_end < 0);
+    SEQLIB_CHECK_EQ(ReadMidi(loop.midi_path).Find(0x90).size(), 2u);
+    SEQLIB_CHECK_EQ(ReadMidi(once.midi_path).Find(0x90).size(), 1u);
+    bool marker = false;
+    for (const auto& [tick, bytes] : ReadMidi(once.midi_path).Find(0xFF))
+    {
+        marker = marker || bytes[1] == 0x06;
+    }
+    SEQLIB_CHECK(!marker);
+}
+
+// In the jingle mode with the loop bit, krapPlay() loops the module. An entry that a routine plays in that mode isn't
+// a jingle. The entry's module converts as a loop, without a warning for the call that passes r5.
+void TestLoopingJingleMode()
+{
+    Cart cart;
+    const uint32_t module = cart.Module(1, 4, {{0, 0, 49, 1}});
+    cart.Jingle(0, kModeJingle | kModeLoop);
+    const Rom rom = cart.ToRom();
+
+    const DriverInfo info = Detect(rom);
+
+    SEQLIB_CHECK(info.songs == (std::vector<ModuleSong>{{module, -1, false}}));
+    SEQLIB_CHECK(info.warnings.empty());
+    SEQLIB_CHECK(std::none_of(info.log.begin(), info.log.end(),
+                              [](const std::string& line) { return line.find("jingle") != std::string::npos; }));
+}
+
 // A sample of 20 points that loops forwards over its last 6 gets its loop repeated 6 times: 36 points, the first length
 // of kMinLoop points or more.
 void TestShortLoop()
@@ -805,6 +883,8 @@ void RunTests()
     TestLoopStartsAtSecondPass();
     TestManyChannels();
     TestMusic();
+    TestJingles();
+    TestLoopingJingleMode();
     TestShortLoop();
 }
 

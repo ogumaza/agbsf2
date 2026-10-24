@@ -7,7 +7,7 @@ A conversion names each song's MIDI file and SoundFont after the game and the so
 game_05.sf2. In a game with more than one driver, it converts each one's songs, and the files of every driver but the
 first that detection finds have the driver's --driver name after the game's, such as game_mp2k_005.mid. A song that the
 game plays in two versions gets a second pair of files, with the version's name after the song's number, such as
-game_12_underwater.mid.
+game_12_underwater.mid or game_30_music18.mid.
 
 For drivers that count frames, the default conversion estimates the beat from the notes and moves events onto it.
 With --frame-timing, events stay on the frames where the driver plays them. The tools check this conversion against
@@ -20,7 +20,9 @@ import subprocess
 from pathlib import Path
 
 DRIVERS = ('konami', 'rare', 'quintet', 'rd2', 'mp2k', 'brownie', 'krawall', 'ubimilan')
-VERSIONS = ('underwater',)  # the names of the songs' other versions in the files' names
+# The names of the songs' other versions in the files' names, as patterns: Rare's tune under water, an R&D2 sequence
+# that another music number plays with other tracks muted, and one with the player riding Yoshi.
+VERSIONS = ('underwater', r'music\d+', 'yoshi')
 
 _STEM = re.compile(r'(.+?)(?:_(%s))?_(\d+)(?:_(%s))?' % ('|'.join(DRIVERS), '|'.join(VERSIONS)))
 

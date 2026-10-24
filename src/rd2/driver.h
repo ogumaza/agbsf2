@@ -57,11 +57,15 @@ struct RevisionTraits
 const RevisionTraits& TraitsOf(Revision r);
 
 // The driver's settings that a game's play-music routine makes along with a sequence: the sample voices it gives the
-// driver, and the music player's second volume.
+// driver, the music player's second volume and the player's tracks that it mutes. In Super Mario Advance 2, the tracks
+// that the game mutes unless the player rides Yoshi play in the version with `riding_yoshi`.
 struct MusicSettings
 {
+    int music = -1; // the game's music number that plays the sequence with these settings, or -1 for none
     int sample_voices = kSampleVoices;
     int volume2 = 0x80;
+    uint16_t muted_tracks = 0; // a bit for each of the player's tracks, 0 to 9
+    bool riding_yoshi = false;
 };
 
 // A sound effect: a track of one of the sound effects' sequences. Such a sequence starts with a table of its tracks.
@@ -97,7 +101,11 @@ struct DriverInfo
     uint32_t key_envelope = 0;      // the envelope of instruments that pick a sample for each key
     std::vector<uint32_t> sequence_addresses;
     std::vector<uint32_t> bank_list_addresses;
-    std::vector<MusicSettings> music_settings; // for each sequence, the settings that the game plays it with
+
+    // For each sequence, the settings of each of its versions: those of the first music number that plays it, then
+    // those of each later one that mutes other tracks. A sequence that no music number plays has the driver's settings.
+    std::vector<std::vector<MusicSettings>> music_settings;
+
     std::vector<uint32_t> effect_sequence_addresses;
     std::vector<uint32_t> effect_bank_list_addresses;
     std::vector<Effect> sound_effects; // each track of each of the sound effects' sequences, in order
@@ -115,5 +123,9 @@ int SongCount(const DriverInfo& info);
 
 // Returns the sound effect that song `song` is, or null if the song is a sequence or there's no such song.
 const Effect* SongEffect(const DriverInfo& info, int song);
+
+// Returns the settings that the game plays version `version` of song `song` with. A version that the sequence doesn't
+// have gets the settings of its last version. A sound effect gets the driver's settings.
+MusicSettings VersionSettings(const DriverInfo& info, int song, int version);
 
 } // namespace agbsf2::rd2

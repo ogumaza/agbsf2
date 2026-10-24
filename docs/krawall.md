@@ -30,6 +30,8 @@ player's ticks. In `BDGE` the routines are:
 | Address | Routine |
 |---|---|
 | `0x080130B4` | the game's sound init: `kragInit(1)`, `kramSetMasterVol(0x40080)`, `kramQualityMode(0)` |
+| `0x08013194` | the game's routine that plays entry `n` of its table of modules in mode 1 if the music is on |
+| `0x080132D0` | the game's routine that plays entry `n` of its table of modules once as a jingle (mode 4) if the music is on |
 | `0x080372A8` | `kragInit(stereo)`: sets up the sound, the DMA and the timers, and calls `kramSetMasterVol(0x80)` |
 | `0x08037490` | `kramQualityMode(mode)` |
 | `0x08037518` | `kramSetMasterVol(volume)` |
@@ -382,6 +384,19 @@ plays louder than 5 down over 16 samples.
   `B530 2210 4002 2A00 D0xx 49xx 2301 700B` and
   `B5F0 1C04 0C20 2800 D0xx 49xx`. `kragInit()` calls `kramSetMasterVol()`
   itself, before the game can.
+* A game's call of `krapPlay()` for an entry of a table of modules:
+  `49xx 00xx 1840 6800 21xx 22xx Fxxx Fxxx`. That's `ldr r1, =table`,
+  `lsls r0, rN, #2`, `adds r0, r0, r1`, `ldr r0, [r0]`, `movs r1, #mode`,
+  `movs r2, #song` and the `bl`. Where the mode has bit 2 set and bit 0
+  clear, the call plays a jingle. With bit 0 set too, `krapPlay()` loops the
+  module. The routine that holds the call has to start within 64 bytes before
+  it, with `push {..., lr}`, `lsls r0, r0, #24` and `lsrs rN, r0, #24`. The
+  routine's first argument then picks the entry. Each of the game's calls of
+  the routine gives the entry with `movs r0, #entry`. `agbsf2` converts the
+  module of each of those entries once, as a jingle. In `BDGE`, the routine at
+  `0x080132D0` takes that form. The game's three calls of the routine give
+  entry 16. A module whose orders separate songs with `+++` still converts
+  song by song.
 
 The player's tables are found by their first values. The modules are found by
 a scan of the ROM for headers that the player can play: up to 32 channels, a

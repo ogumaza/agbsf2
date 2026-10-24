@@ -76,6 +76,9 @@ constexpr uint32_t kMusicTable = kRomBase + 0x780;
 constexpr uint32_t kSetVoices = kRomBase + 0x7C0;
 constexpr uint32_t kRequest = kRomBase + 0x7C4;
 constexpr uint32_t kSetVolume2 = kRomBase + 0x7C8;
+constexpr uint32_t kMuteRequest = kRomBase + 0x7D0;
+constexpr uint32_t kYoshiMute = kRomBase + 0x700;
+constexpr uint32_t kRequestQueue = 0x03000100; // the RAM word that holds the next request's address
 
 // The test bank's instruments.
 constexpr uint8_t kLooped = 0;      // a looped sample, with an envelope that rises and falls
@@ -236,6 +239,51 @@ public:
         {
             Put16(kMusicTable + 2 * m, table[m]);
         }
+    }
+
+    // Writes a play-music routine in the form of the one in Super Mario Advance 2, from its lookup of the music's
+    // sequence on, its table, a halfword for each music number, and the driver's routine that mutes tracks. The routine
+    // mutes tracks of sequence `sequence`: those in `music_mask` for music number `music`, and those in `mask` for the
+    // other music numbers that play the sequence. Each mask is a value of up to 8 bits, shifted left by up to 31.
+    void MutingPlayMusic(const std::vector<uint16_t>& table, int sequence, int music, std::pair<int, int> mask,
+                         std::pair<int, int> music_mask)
+    {
+        const auto movs_r1 = [](int value)
+        {
+            return xsflib::Hex(0x2100u | unsigned(value), 4, false);
+        };
+        const auto lsls_r1 = [](int shift)
+        {
+            return xsflib::Hex(0x0009u | unsigned(shift) << 6, 4, false);
+        };
+        const std::string code = "4800 0069 1809 780C 2013 1C21 0000 0000 1C28 0000 0000 " +
+                                 xsflib::Hex(0x2C00u | unsigned(sequence), 4, false) + " D109 " + movs_r1(mask.first) +
+                                 " " + lsls_r1(mask.second) + " " + xsflib::Hex(0x2D00u | unsigned(music), 4, false) +
+                                 " D101 " + movs_r1(music_mask.first) + " " + lsls_r1(music_mask.second) +
+                                 " 2013 2201 0000 0000 4770";
+        Code(kPlayMusic, code.c_str(), {{0, kMusicTable}});
+        PutBl(kPlayMusic + 12, kRequest);
+        PutBl(kPlayMusic + 18, kSetVoices);
+        PutBl(kPlayMusic + 42, kMuteRequest);
+        Code(kMuteRequest, "B510 0612 0E12 4B00 681C 2380 005B 8023 0400 4310 6060 60A1 BD10", {{3, kRequestQueue}});
+
+        for (uint32_t m = 0; m < table.size(); m++)
+        {
+            Put16(kMusicTable + 2 * m, table[m]);
+        }
+    }
+
+    // Writes Super Mario Advance 2's routine that mutes the tracks in `mask` of the music whose entry has bit 9 set
+    // unless the player rides Yoshi. The routine reads the table and makes the request that MutingPlayMusic() writes.
+    void YoshiMute(int mask)
+    {
+        const std::string code =
+            "B510 0600 0E04 0000 0000 0400 1400 2800 DB10 4900 0040 1840 8801 2080 0080 4008 "
+            "2800 D007 2200 2C00 D100 2201 2013 " +
+            xsflib::Hex(0x2100u | unsigned(mask), 4, false) + " 0000 0000 BC10 BC01 4700";
+        Code(kYoshiMute, code.c_str(), {{9, kMusicTable}});
+        PutBl(kYoshiMute + 6, kSetVoices);
+        PutBl(kYoshiMute + 48, kMuteRequest);
     }
 
 private:
@@ -439,10 +487,10 @@ DriverInfo Detect(const Rom& rom)
     return info;
 }
 
-// Runs a sequence for `frames` frames, and returns each frame's events.
-std::vector<std::vector<Event>> Run(const Rom& rom, const DriverInfo& info, int sequence, int frames)
+// Runs version `version` of a sequence for `frames` frames, and returns each frame's events.
+std::vector<std::vector<Event>> Run(const Rom& rom, const DriverInfo& info, int sequence, int frames, int version = 0)
 {
-    Sequencer seq(rom, info, sequence);
+    Sequencer seq(rom, info, sequence, version);
     std::vector<std::vector<Event>> out;
     for (int f = 0; f < frames; f++)
     {
@@ -685,8 +733,10 @@ void TestMusicSettings()
     const int kSecondVolumes[4] = {0x80, 0x80, 0x37, 0x80};
     for (int s = 0; s < 4; s++)
     {
-        SEQLIB_CHECK_EQ(info.music_settings[size_t(s)].sample_voices, kVoiceCounts[s]);
-        SEQLIB_CHECK_EQ(info.music_settings[size_t(s)].volume2, kSecondVolumes[s]);
+        SEQLIB_REQUIRE_EQ(info.music_settings[size_t(s)].size(), 1);
+        SEQLIB_CHECK_EQ(info.music_settings[size_t(s)][0].sample_voices, kVoiceCounts[s]);
+        SEQLIB_CHECK_EQ(info.music_settings[size_t(s)][0].volume2, kSecondVolumes[s]);
+        SEQLIB_CHECK_EQ(SongVersions(info, s).size(), 1);
     }
 
     // With 7 voices, seven notes at once each have one. With 6, the seventh takes the first note's voice.
@@ -729,8 +779,141 @@ void TestMusicSettingsWithCount()
     SEQLIB_CHECK(DetectDriver(rom, overrides, info, error));
 
     SEQLIB_REQUIRE_EQ(info.music_settings.size(), 2);
-    SEQLIB_CHECK_EQ(info.music_settings[0].sample_voices, 6);
-    SEQLIB_CHECK_EQ(info.music_settings[0].volume2, 0x37);
+    SEQLIB_REQUIRE_EQ(info.music_settings[0].size(), 1);
+    SEQLIB_CHECK_EQ(info.music_settings[0][0].sample_voices, 6);
+    SEQLIB_CHECK_EQ(info.music_settings[0][0].volume2, 0x37);
+}
+
+// Returns the keys of the note-ons on every channel of a MIDI file, from the lowest.
+std::vector<int> NoteKeys(const std::string& path)
+{
+    const MidiEvents midi = ReadMidi(path);
+    std::vector<int> keys;
+    for (int channel = 0; channel < 16; channel++)
+    {
+        for (const auto& e : midi.Find(uint8_t(0x90 | channel)))
+        {
+            if (e.bytes[2])
+            {
+                keys.push_back(e.bytes[1]);
+            }
+        }
+    }
+    std::sort(keys.begin(), keys.end());
+
+    return keys;
+}
+
+void TestMutedTracks()
+{
+    // The game's play-music routine mutes tracks of sequence 1: track 2 for music 2, and track 1 for the other music
+    // numbers that play it. Music 1 plays the sequence first and gives the first version. Music 2 makes a second
+    // version. Music 3 mutes the same track as music 1 and makes no version.
+    Cart cart;
+    cart.Sequences({{Chord(1)},
+                    {TrackData().Bytes({0xC2, kPlain}).Note(60, 6, 127).Wait(6).End(),
+                     TrackData().Bytes({0xC2, kPlain}).Note(62, 6, 127).Wait(6).End(),
+                     TrackData().Bytes({0xC2, kPlain}).Note(64, 6, 127).Wait(6).End()}});
+    cart.MutingPlayMusic({0x0000, 0x0001, 0x0001, 0x0001, 0x0009}, 1, 2, {1, 1}, {1, 2});
+    const Rom rom = cart.ToRom();
+
+    const DriverInfo info = Detect(rom);
+
+    SEQLIB_REQUIRE_EQ(info.music_settings.size(), 2);
+    SEQLIB_REQUIRE_EQ(info.music_settings[0].size(), 1);
+    SEQLIB_CHECK_EQ(info.music_settings[0][0].music, 0);
+    SEQLIB_CHECK_EQ(info.music_settings[0][0].muted_tracks, 0);
+    SEQLIB_CHECK_EQ(info.music_settings[0][0].sample_voices, 7);
+    SEQLIB_REQUIRE_EQ(info.music_settings[1].size(), 2);
+    SEQLIB_CHECK_EQ(info.music_settings[1][0].music, 1);
+    SEQLIB_CHECK_EQ(info.music_settings[1][0].muted_tracks, 0x2);
+    SEQLIB_CHECK_EQ(info.music_settings[1][1].music, 2);
+    SEQLIB_CHECK_EQ(info.music_settings[1][1].muted_tracks, 0x4);
+    SEQLIB_CHECK(std::find(info.log.begin(), info.log.end(),
+                           "the game's music table: 0x08000780; muted tracks: in sequence 1, track 1 as music 1 and "
+                           "track 2 as music 2") != info.log.end());
+
+    const std::vector<SongVersion> versions = SongVersions(info, 1);
+    SEQLIB_REQUIRE_EQ(versions.size(), 2);
+    SEQLIB_CHECK(versions[0].name.empty() && versions[0].suffix.empty());
+    SEQLIB_CHECK(versions[1].name == "as music 2" && versions[1].suffix == "_music2");
+    SEQLIB_CHECK_EQ(SongVersions(info, 0).size(), 1);
+
+    // A muted track plays no notes. Each version's files have its suffix after the sequence's number.
+    for (int v = 0; v < 2; v++)
+    {
+        int notes = 0;
+        for (const auto& frame : Run(rom, info, 1, 4, v))
+        {
+            for (const Event& e : frame)
+            {
+                notes += e.kind == Event::kNote ? 1 : 0;
+            }
+        }
+        SEQLIB_CHECK_EQ(notes, 2);
+
+        ConvertSettings opt = TempSettings("rd2_muted_tracks");
+        opt.version = v;
+        const SongReport r = ConvertSong(rom, info, 1, opt, nullptr);
+        SEQLIB_REQUIRE(r.ok);
+        SEQLIB_CHECK_EQ(r.tracks, 2);
+        SEQLIB_CHECK(r.midi_path.ends_with(v == 0 ? "_01.mid" : "_01_music2.mid"));
+        SEQLIB_CHECK(NoteKeys(r.midi_path) == (v == 0 ? std::vector<int>({60, 64}) : std::vector<int>({60, 62})));
+    }
+
+    // The Music interface gives the versions too.
+    std::string error;
+    const std::unique_ptr<Music> music = agbsf2::OpenMusic(rom, Overrides(), error);
+    SEQLIB_REQUIRE(music != nullptr);
+    SEQLIB_CHECK_EQ(music->Versions(1).size(), 2);
+    SEQLIB_CHECK(music->Versions(1)[1].name == "as music 2");
+}
+
+void TestYoshiTracks()
+{
+    // Unless the player rides Yoshi, the game mutes track 1 of the music whose entry has bit 9 set. Music 1 plays
+    // sequence 1 with the bit. The first version mutes the track, and a second version, riding Yoshi, plays it. Music 0
+    // plays sequence 0 without the bit, in one version.
+    Cart cart;
+    cart.Sequences({{Chord(1)},
+                    {TrackData().Bytes({0xC2, kPlain}).Note(60, 6, 127).Wait(6).End(),
+                     TrackData().Bytes({0xC2, kPlain}).Note(62, 6, 127).Wait(6).End(),
+                     TrackData().Bytes({0xC2, kPlain}).Note(64, 6, 127).Wait(6).End()}});
+    cart.MutingPlayMusic({0x0000, 0x0201, 0x0009}, 5, 9, {1, 0}, {1, 1});
+    cart.YoshiMute(0x02);
+    const Rom rom = cart.ToRom();
+
+    const DriverInfo info = Detect(rom);
+
+    SEQLIB_REQUIRE_EQ(info.music_settings.size(), 2);
+    SEQLIB_REQUIRE_EQ(info.music_settings[0].size(), 1);
+    SEQLIB_CHECK_EQ(info.music_settings[0][0].muted_tracks, 0);
+    SEQLIB_REQUIRE_EQ(info.music_settings[1].size(), 2);
+    SEQLIB_CHECK_EQ(info.music_settings[1][0].music, 1);
+    SEQLIB_CHECK_EQ(info.music_settings[1][0].muted_tracks, 0x2);
+    SEQLIB_CHECK(!info.music_settings[1][0].riding_yoshi);
+    SEQLIB_CHECK_EQ(info.music_settings[1][1].music, 1);
+    SEQLIB_CHECK_EQ(info.music_settings[1][1].muted_tracks, 0);
+    SEQLIB_CHECK(info.music_settings[1][1].riding_yoshi);
+    SEQLIB_CHECK(std::find(info.log.begin(), info.log.end(),
+                           "the game's music table: 0x08000780; muted tracks: none; muted unless riding Yoshi: track 1 "
+                           "of sequence 1") != info.log.end());
+
+    const std::vector<SongVersion> versions = SongVersions(info, 1);
+    SEQLIB_REQUIRE_EQ(versions.size(), 2);
+    SEQLIB_CHECK(versions[0].name.empty() && versions[0].suffix.empty());
+    SEQLIB_CHECK(versions[1].name == "riding Yoshi" && versions[1].suffix == "_yoshi");
+
+    // The first version leaves out the track's notes. The second has them.
+    for (int v = 0; v < 2; v++)
+    {
+        ConvertSettings opt = TempSettings("rd2_yoshi_tracks");
+        opt.version = v;
+        const SongReport r = ConvertSong(rom, info, 1, opt, nullptr);
+        SEQLIB_REQUIRE(r.ok);
+        SEQLIB_CHECK(r.midi_path.ends_with(v == 0 ? "_01.mid" : "_01_yoshi.mid"));
+        SEQLIB_CHECK(NoteKeys(r.midi_path) == (v == 0 ? std::vector<int>({60, 64}) : std::vector<int>({60, 62, 64})));
+    }
 }
 
 void TestEnvelope()
@@ -1772,6 +1955,8 @@ void RunTests()
     TestVoices();
     TestMusicSettings();
     TestMusicSettingsWithCount();
+    TestMutedTracks();
+    TestYoshiTracks();
     TestEnvelope();
     TestPsg();
     TestInstruments();

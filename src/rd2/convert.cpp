@@ -371,13 +371,13 @@ void RunOut(Sequencer& seq, PsgChannels& psg, Simulation& sim)
 // units are the MIDI file's ticks: each frame lasts the tempo's units, and each command comes at its track's time, or
 // with `frame_timing`, at the start of the frame the driver plays it in. From LoopStart::kSecondPass, the loop starts
 // at the sequence's second pass through it. The sequence then plays the first pass before it. A sequence without a loop
-// runs on while the PSG sounds after the player stops (see RunOut()).
-Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int loops, bool frame_timing,
+// runs on while the PSG sounds after the player stops (see RunOut()). The sequence plays as its version `version`.
+Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int version, int loops, bool frame_timing,
                     LoopStart start_pass)
 {
     Simulation sim;
     sim.frame_timing = frame_timing;
-    Sequencer seq(rom, info, song);
+    Sequencer seq(rom, info, song, version);
     sim.frame_ticks.push_back(0);
 
     TrackPlans tracks;
@@ -1601,10 +1601,12 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
     // The marked loop starts at the sequence's second pass if its first plays unlike it, as when the tracks come back
     // to their loops with the pan or volume that the loop's end left them. The passes are compared on the beat, as the
     // default MIDI file plays them, so frame timing moves the same loops.
-    Simulation sim = Simulate(rom, info, song, settings.loops, settings.frame_timing, LoopStart::kFirstPass);
-    if (sim.plan.loops && !FirstPassRepeats(rom, info, Simulate(rom, info, song, 2, false, LoopStart::kFirstPass)))
+    const int version = settings.version;
+    Simulation sim = Simulate(rom, info, song, version, settings.loops, settings.frame_timing, LoopStart::kFirstPass);
+    if (sim.plan.loops &&
+        !FirstPassRepeats(rom, info, Simulate(rom, info, song, version, 2, false, LoopStart::kFirstPass)))
     {
-        sim = Simulate(rom, info, song, settings.loops, settings.frame_timing, LoopStart::kSecondPass);
+        sim = Simulate(rom, info, song, version, settings.loops, settings.frame_timing, LoopStart::kSecondPass);
     }
     report.warnings = sim.warnings;
 
@@ -1655,9 +1657,13 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
         WarnOnce(report.warnings, w);
     }
 
+    // A version after the first has its name in the titles and its suffix in the files' names.
     const std::string number = SongNumber(song, 0);
-    const std::string title = rom.Title() + " #" + number;
-    char about[160];
+    const std::vector<SongVersion> versions = SongVersions(info, song);
+    const SongVersion& picked = versions[size_t(std::clamp(version, 0, int(versions.size()) - 1))];
+    const std::string named = picked.name.empty() ? "" : " " + picked.name;
+    const std::string title = rom.Title() + " #" + number + named;
+    char about[192];
     if (effect)
     {
         std::snprintf(about, sizeof about,
@@ -1668,10 +1674,11 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
     }
     else
     {
-        std::snprintf(about, sizeof about, "%s (%s) sequence %d at 0x%08X, converted by %s", rom.Title().c_str(),
-                      rom.GameCode().c_str(), song, unsigned(info.sequence_addresses[size_t(song)]), kProgramName);
+        std::snprintf(about, sizeof about, "%s (%s) sequence %d%s at 0x%08X, converted by %s", rom.Title().c_str(),
+                      rom.GameCode().c_str(), song, named.c_str(), unsigned(info.sequence_addresses[size_t(song)]),
+                      kProgramName);
     }
-    const std::string stem = SongStem(settings, number);
+    const std::string stem = SongStem(settings, number) + picked.suffix;
 
     std::string error;
     report.midi_path = stem + ".mid";
@@ -1700,6 +1707,34 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
 }
 
 } // namespace
+
+std::vector<SongVersion> SongVersions(const DriverInfo& info, int song)
+{
+    std::vector<SongVersion> versions = {SongVersion()};
+    if (song < 0 || size_t(song) >= info.music_settings.size())
+    {
+        return versions;
+    }
+
+    const std::vector<MusicSettings>& settings = info.music_settings[size_t(song)];
+    for (size_t v = 1; v < settings.size(); v++)
+    {
+        SongVersion version;
+        if (settings[v].music != settings[0].music)
+        {
+            const std::string music = std::to_string(settings[v].music);
+            version = {"as music " + music, "_music" + music};
+        }
+        if (settings[v].riding_yoshi)
+        {
+            version.name += (version.name.empty() ? "" : " ") + std::string("riding Yoshi");
+            version.suffix += "_yoshi";
+        }
+        versions.push_back(version);
+    }
+
+    return versions;
+}
 
 SongReport InspectSong(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings)
 {

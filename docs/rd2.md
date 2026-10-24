@@ -527,8 +527,10 @@ In `AA2E` the routines are:
 | `0x0809B258` | the game's sound init, which calls the driver's init with the game's settings at `0x08177044` |
 | `0x0809B9A8` | init, which copies the ARM routines from `0x0809DCDC` to `0x03001518` |
 | `0x0809B348` | the game's play-music routine: the low byte of each halfword of the table at `0x08177064` turns the game's music number into a sequence |
+| `0x0809B3CC` | the game's routine that mutes track 6 of the music (`r0` = 0) or lets it play (`r0` = 1) if the music's entry in the table has bit 9 set |
 | `0x0809D840` | request a sequence: `r0` = player, `r1` = sequence |
 | `0x0809D864` | request a sound effect: `r0` = player, `r1` = the sound effects' sequence, `r2` = the track |
+| `0x0809D984` | request the mute of a player's tracks: `r0` = player, `r1` = a mask of its tracks, `r2` = the mute |
 | `0x0809D82C` | hand over the requests made since its last call |
 | `0x0809BA74` | the VBlank routine |
 | `0x0809BA80` | the per-frame routine |
@@ -614,8 +616,50 @@ The revision differs in these ways:
   buffer. The echo's level starts at 31, which leaves nothing of the mix in the
   history, and its shift rounds. Only the game's code turns the echo on.
 
-The game's play-music routine mutes a track of sequence 30 through a request:
-track 8 when it plays the sequence as music 17, and track 9 as music 18.
+The game's play-music routine mutes a track of sequence 30 with request
+`0x0100`, the first handler of the second table: track 8 when it plays the
+sequence as music 17, and track 9 as music 18. The request comes after the
+request for the sequence. It sets the mute of each of the player's tracks in
+its mask. A muted track starts no notes. `agbsf2` converts the sequence once
+as music 17 and once as music 18. The second version's files end in
+`_30_music18`.
+
+Unless the player rides Yoshi, the game also mutes track 6 of the music whose
+entry in the table has bit 9 set. Music 5, 6, 7 and 23 have the bit. They play
+sequences 16, 15, 17 and 18. The routine at `0x0809B3CC` makes the request:
+`r0` = 0 mutes the track, and 1 lets it play. The game's code that starts a
+level's music, from `0x08003D52`, calls the play-music routine and then that
+routine. That code passes the byte at offset `0x10FA` of the record that
+`0x03003F98` points to. The game sets that byte to 1 when the player mounts a
+Yoshi, and clears it when the player loses Yoshi. Each time, the game also
+calls the routine. `agbsf2` converts each of the four sequences twice. A new
+game starts without Yoshi. The first version therefore mutes track 6. The
+second version plays track 6. Its files end in `_yoshi`.
+
+The same code requests the echo in three kinds of level. The low five bits of
+the halfword at offset `0xFC` of the record that `0x03002360` points to pick
+the level's music from the table at `0x080D4870`. When the low four bits are
+6, the code calls the routine at `0x0809B28C` with 1. The argument is 3 for 7,
+2 for 8 and 0 for the rest. The routine makes request `0x0300` with that entry
+of the byte table at `0x08177060`: 31, 2, 3 or 3. The fourth table's handler 0
+stores the value at `0x03000297`. The mixer then moves the echo's level 1
+towards it each frame. The code at `0x080223E8` requests level 31 again. Music
+index 6 plays sequence 17 with the echo at level 2. Indices 7 and 8 play
+sequences 21 and 22 at level 3. Each 18 frames, the echo repeats the voices
+with an echo send. Each repeat is 12 dB quieter than the last at level 2, and
+18 dB quieter at level 3.
+
+No track of the game's music has an echo send. A sequence's track starts with
+a send of 0. The game's sequences have no `E3` but `E3 00`. No request sets a
+track's send. The echo therefore reaches only the sound effects. Their tracks
+start with a send of `7F`. Leaving the echo out changes nothing in the
+conversions of the three sequences. `agbsf2` converts each sound effect
+without the echo. The game plays the effects that way in the other levels.
+
+Last, the level start code calls `0x0809B42C` with two bits of the game's
+state. For music whose entry in the table has bit 8 set, that routine sets the
+music player's tempo change with request 4: +20 for the first bit and −25 for
+the second. `agbsf2` converts the music without a tempo change.
 
 A bank's table of offsets can leave an instrument out, and a drum kit or a key
 split a region, with an offset of 0. A note on it reads the bank's table of
@@ -746,3 +790,36 @@ it, and a `bl` to the same routine. Both ways go on with `adds r1, r5, #0`,
 the request for the second volume follows. The table doesn't give its length.
 `agbsf2` reads it up to the first entry whose sequence the game doesn't
 have.
+
+Where that lookup isn't found, detection looks for the one in Super Mario
+Advance 2's play-music routine:
+
+    48xx 0069 1809 780C 20xx 1C21 Fxxx Fxxx 1C28 Fxxx Fxxx 2Cxx D1xx 21xx 0xx9
+    2Dxx D1xx 21xx 0xx9 20xx 2201 Fxxx Fxxx
+
+The `ldr` loads the table's address. `ldrb r4` reads the sequence. After the
+request for the sequence and a `bl` that keeps the music number, the routine
+mutes tracks of the sequence that `cmp r4` names. The first `movs r1` and
+`lsls` give the mask of the tracks to mute. Where the music number is the one
+that `cmp r5` names, the second pair gives the mask instead. The last `bl` has
+to call the request for the mute. That routine starts with
+
+    B510 0612 0E12 4Bxx 681C 2380 005B 8023 0400 4310 6060 60A1
+
+The first music number that plays a sequence gives the sequence its first
+version. A later music number gives the sequence another version if that
+number mutes other tracks than each version so far.
+
+Detection then looks for Super Mario Advance 2's routine for the track that
+plays while the player rides Yoshi:
+
+    B510 0600 0E04 Fxxx Fxxx 0400 1400 2800 DBxx 49xx 0040 1840 8801 20xx 00xx
+    4008 2800 D0xx 2200 2C00 D1xx 2201 20xx 21xx Fxxx Fxxx
+
+The first `bl` returns the music number that plays. The `ldr` has to load the
+play-music routine's table. The `movs r0` and `lsls` after the `ldrh` give the
+bit of the entry. The `movs r0, #player` has to name the play-music routine's
+player. The `movs r1` gives the mask of the tracks, and the last `bl` has to
+call the request for the mute. Each sequence of the music whose entry has the
+bit gets two versions. The first has the tracks of the mask muted. The second,
+"riding Yoshi", plays them.
