@@ -62,7 +62,7 @@ void Usage(FILE* f)
                  "                        Brown's, 0-3 are the music's PSG channels, 4-7 the sound\n"
                  "                        effects' and 8 and up the sample channels, in Ubisoft\n"
                  "                        Milan's, 0-2 are the PSG channels and 9 the kit, and in\n"
-                 "                        Krawall, the module's channels, 0-19)\n"
+                 "                        Krawall, the module's channels, 0-31)\n"
                  "      --single-sf2      write one SoundFont for all songs\n"
                  "      --voice-channels  give each of the driver's sound channels a MIDI channel\n"
                  "                        (MP2K), so that notes stop where the game cuts them\n"
@@ -222,11 +222,11 @@ bool NextValue(const std::vector<std::string>& args, size_t& i, const char* opti
 // one adds its tracks to those before it. Returns false, after a message, for a bad list.
 bool AddTracks(const std::string& list, Options& o)
 {
-    // Krawall's modules have up to 20 channels, and the other drivers 16 tracks at most.
+    // Krawall's modules have up to 32 channels, one for each bit of the mask. The other drivers have 16 tracks at most.
     std::set<int> tracks;
-    if (!ParseList(list, tracks) || tracks.empty() || *tracks.rbegin() >= 20)
+    if (!ParseList(list, tracks) || tracks.empty() || *tracks.rbegin() >= 32)
     {
-        OptionError("bad track list (tracks are 0-19)");
+        OptionError("bad track list (tracks are 0-31)");
         return false;
     }
 

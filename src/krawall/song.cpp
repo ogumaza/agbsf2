@@ -97,7 +97,8 @@ std::string NoteName(int note)
 bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::string& path, std::string& error)
 {
     ModuleInfo module;
-    if (song < 0 || size_t(song) >= info.songs.size() || !ReadModule(rom, info.songs[size_t(song)].module, module))
+    if (song < 0 || size_t(song) >= info.songs.size() ||
+        !ReadModule(rom, info.build, info.songs[size_t(song)].module, module))
     {
         error = "module " + std::to_string(song) + " can't be read";
         return false;
@@ -140,18 +141,18 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
     for (size_t p = 0; p < module.patterns.size(); p++)
     {
         const uint32_t pattern = module.patterns[p];
-        const int rows = rom.U8(pattern + kPatternRows);
+        const int rows = int(PatternRows(rom, info.build, pattern));
         std::snprintf(line, sizeof line, "\nPattern %d at 0x%08X, %d rows\n", int(p), unsigned(pattern), rows);
         out += line;
 
-        uint32_t at = pattern + kPatternData;
+        uint32_t at = PatternData(info.build, pattern);
         for (int row = 0; row < rows && rom.Contains(at); row++)
         {
             std::snprintf(line, sizeof line, "%3d", row);
             std::string text = line;
             for (uint8_t flags = rom.U8(at++); flags && rom.Contains(at); flags = rom.U8(at++))
             {
-                const RowEntry entry = ReadEntry(rom, flags, at);
+                const RowEntry entry = ReadEntry(rom, info.build, flags, at);
                 std::snprintf(line, sizeof line, " | c%d", entry.channel);
                 text += line;
                 if (entry.note)

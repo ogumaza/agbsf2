@@ -725,11 +725,12 @@ python tools/krawall/driver_emu.py rom.gba render ADDRESS 3000 ref.wav  # a modu
 
 `compare_trace.py` runs `agbsf2 --trace` and the game's code side by side.
 Frame by frame, the script compares the changes to the mixer's variables (the
-master volumes, the mixer's quality settings, the sound timer's step and count,
-the music's volume and the count of plays), the player's record, each of the
-module's channels and each mixer channel, in hex as Krawall keeps them in RAM.
-It reports the first difference in each module that has one. `-j` compares
-several modules at once.
+music's master volume, the mixer's quality settings, the sound timer's step and
+count, the music's volume and the count of plays), the player's record, each of
+the module's channels and each mixer channel, in hex as Krawall keeps them in
+RAM. It leaves out the sound effects' master volume. The music doesn't use
+that volume. A game's sound init can set it. The script reports the first
+difference in each module that has one. `-j` compares several modules at once.
 
 `compare_notes.py` runs the game's code and reads the module channels after
 each player tick, from a hook where the mixer's worker resumes. For each
@@ -737,7 +738,7 @@ active mixer channel still owned by the module channel's last note, it
 records the sample, position, step and levels, plus position changes made by
 `kramSetPos()`. It derives notes from that state in the same way as the
 converter, then checks the MIDI and SoundFont tick by tick. Note starts and
-ends must be within a millisecond on the correct MIDI channel. The preset
+ends must be within a millisecond, on the module channel's track. The preset
 must match the sample data, loop and start offset. Pitch must be within 5
 cents, and CC10 and CC11 within one step of the values needed for the
 recorded levels.
@@ -753,11 +754,13 @@ play as before.
 
 `driver_emu.py render` writes the mixer's 8-bit stereo output at the mixer's
 rate. It names a module by the address of its header, which `--info` lists.
-`--song N` plays song N of a module that separates songs with `+++`, in song
-mode. agbsf2 converts each such song that way. The two comparisons play it
-that way too. `--jingle` plays a module once, in the jingle mode. agbsf2
-converts each module that the game plays as a jingle in that mode. The two
-comparisons play the modules that `jingles` names in that mode too.
+In a game whose modules are packed in music files, it names a music file
+instead. `--info` lists each file with its module. `--song N` plays song N
+of a module that separates songs with `+++`, in song mode. agbsf2 converts
+each such song that way. The two comparisons play it that way too.
+`--jingle` plays a module once, in the jingle mode. agbsf2 converts each
+module that the game plays as a jingle in that mode. The two comparisons
+play the modules that `jingles` names in that mode too.
 
 ### Working out Krawall
 
@@ -776,9 +779,9 @@ The player is Thumb code in ROM, and the mixer is ARM code in IWRAM:
 3. **Model.** The player, the effects and the mixer's progress through each
    sample were reimplemented from that reading.
 
-`driver_emu.py` picks the addresses by the ROM's game code. Those of *Digimon
-Racing* (`BDGE`) are built in. For another game with the same build, add an
-entry to `GAMES` with:
+`driver_emu.py` picks the addresses by the ROM's game code. Those of the
+supported games are built in. For another game, add an entry to `GAMES` with
+the class of its build, `Build2003` or `Build2004` (from 2004/09/17 on), and:
 
 * `iwram` and `ewram`: the ROM's copies of the library's IWRAM code and data
   and of its EWRAM data, which the game's start-up code makes, as (source,
@@ -797,6 +800,45 @@ entry to `GAMES` with:
 * `module_table` and `jingles`: the game's table of modules, and the entries
   of it that the game plays once, as jingles. In *Digimon Racing*, the routine
   at `0x080132D0` plays entry 16 that way.
+* `play_table`: the game's table of what it plays, as (address, entries). Each
+  entry gives a module, the mode and the song. *Eragon* plays every piece that
+  way.
+* What the game's code does around the library, where it matters:
+  `sound_init_args` and `sound_init_arm` for a sound init that takes
+  arguments or is ARM code, `after_init` for the game's calls into the
+  library after its sound init, as (routine, arguments), `settings` for bytes
+  that the game stores before its sound init, `after_play` for bytes that it
+  stores when it starts a module, and `frame_routine` for a routine of the
+  game's that runs before the worker in each frame. *Juka and the Monophonic
+  Menace* fades its music in through such a routine.
+* For a build of `player.c` before 1.4, `mix_channels`, `mix_size` and
+  `left_slot`: 24 mixer channels of `0x28` bytes in IWRAM, and the worker's
+  slot for the left buffer, `0x18`. Build 1.4 keeps the values of 2003/09/01.
+* For a build that another compiler built, `iwram_at` and `left_at_sp`: where
+  the start-up code copies `iwram`, and whether the worker keeps the pointer
+  to the left buffer at its stack pointer. *Puppy Luv: Spa and Resort* copies
+  `iwram` to `0x03000500`. Its worker keeps the pointer at its stack pointer.
+* For the modified build, whose modules are packed in music files:
+  * `play_file`: the game's routine that loads a music file and plays its
+    module, with the file and a loop flag. The comparisons start each module
+    through it, with the file that `--info` lists for the module.
+  * `unpacked`: the word that holds the address of the unpacked data after a
+    load. The harness moves the records' pointers into the data
+    (`player_pointers` and `channel_pointers`) to agbsf2's addresses.
+  * `jingle_files`: the files that the game plays once, in the jingle mode.
+  * `vram`: the code and data that the start-up code copies to VRAM, as
+    (source, size, destination).
+  * `heap` or `before_init`: the game's heap pointer, as (address, value), or
+    its calls before the sound init that set up its `malloc()`.
+  * `worker_state`, `out_left`, `out_right` and `left_reg`: the values that
+    the worker reads to mix a frame, as (address, value, size), the buffers it
+    mixes into, and the register that holds the left buffer's pointer after a
+    tick.
+  * `sample_length`: True, for a sample's header that gives its length.
+
+  *Big Mutha Truckers* and *Street Racing Syndicate* keep the mixer's code in
+  VRAM. *M&M's Break 'Em* and *Princess Natasha* keep it in IWRAM, and their
+  loader takes memory from the game's `malloc()`.
 
 `test_song.py` also needs, in its `GAMES`, the address of the game's table of
 samples and the player's literals that give the tables of samples and

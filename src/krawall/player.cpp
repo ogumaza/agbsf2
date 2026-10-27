@@ -11,6 +11,7 @@
 
 #include "xsflib/bytes.h"
 
+#include "krawall/build.h"
 #include "krawall/driver.h"
 #include "rom.h"
 #include "warnings.h"
@@ -19,6 +20,10 @@ namespace agbsf2::krawall
 {
 namespace
 {
+
+// The first 13 bytes of kramPlayExt()'s code. In IWRAM, the code follows the mixer's master volumes, quality and ramp.
+// The bytes are the same in every build from 1.4 to 2005-04-21.
+constexpr uint8_t kPlayExtStart[] = {0xF0, 0x47, 0x2D, 0xE9, 0x02, 0x50, 0xA0, 0xE1, 0xFF, 0x40, 0x05, 0xE2, 0x2C};
 
 // The effects of the effect column, as the module's patterns number them.
 enum EffectNumber : int
@@ -195,6 +200,10 @@ bool SlideLevel(int8_t& level, uint8_t slide)
 // Returns the mode of krapPlay() that plays a piece that the conversion numbers.
 int PlayMode(const ModuleSong& song)
 {
+    if (song.mode >= 0)
+    {
+        return song.mode;
+    }
     if (song.jingle)
     {
         return kModeJingle;
@@ -218,7 +227,7 @@ int LinearPeriod(uint32_t note, int fine_tune)
 
 Player::Player(const Rom& rom, const DriverInfo& info, uint32_t module, int mode, int song) : rom_(rom), info_(info)
 {
-    if (!ReadModule(rom, module, module_))
+    if (!ReadModule(rom, info.build, module, module_))
     {
         Warn("the module at " + Hex(module) + " can't be read");
         return;
@@ -230,9 +239,26 @@ Player::Player(const Rom& rom, const DriverInfo& info, uint32_t module, int mode
         return;
     }
 
-    // The mixer as the game's call to kramQualityMode() leaves it.
-    hq_ramp_ = (info.quality & 0x10) ? uint8_t(1) : uint8_t(0);
+    // The mixer as the game's call to kramQualityMode() leaves it. Up to 2003/09/01, flag 16 turns the ramp at a stop
+    // on. From 2004/09/17 on, the ramp is on, and flag 32 turns it off.
+    if (Since2004())
+    {
+        hq_ramp_ = (info.quality & 0x20) ? uint8_t(0) : uint8_t(1);
+    }
+    else
+    {
+        hq_ramp_ = (info.quality & 0x10) ? uint8_t(1) : uint8_t(0);
+    }
     hq_mode_ = (info.quality & 0xF) > 2 ? uint8_t(0) : uint8_t(info.quality & 0xF);
+    if (info.build < Build::kV1_4)
+    {
+        // The builds before 1.4 have no ramping, and take the whole argument as the mode.
+        hq_ramp_ = 0;
+        hq_mode_ = info.quality > 2 ? uint8_t(0) : info.quality;
+    }
+
+    // The music volume, from 0 in a game that fades the music in.
+    music_volume_ = info.music_fade_in ? 0 : int32_t(info.music_volume);
 
     // krapPlay(), with the player stopped: a jingle then plays as a module of its own. The first tick plays the first
     // row, at the module's volume and tempo.
@@ -302,7 +328,13 @@ void Player::Warn(const std::string& text)
 double Player::OutputScale() const
 {
     // The mix adds each point times the side's volume, shifted down 3 bits, and its output shifts that down by the
-    // master volume's shift and scales it by the master volume's level over 128.
+    // master volume's shift and scales it by the master volume's level over 128. The builds before 1.4 take the whole
+    // master volume as the level, and shift by 5.
+    if (info_.build < Build::kV1_4)
+    {
+        return double(info_.master_volume) / double(1u << (3 + 5));
+    }
+
     const uint32_t shift = (info_.master_volume >> 16) ? (info_.master_volume >> 16) : 5;
     return double(info_.master_volume & 0xFF) / double(1u << (3 + shift));
 }
@@ -325,29 +357,38 @@ uint32_t Player::Play(uint32_t sample, int sample_index, int sfx, uint32_t handl
     if (!Plays(*m, handle))
     {
         channel = 0;
-        while (channel < uint32_t(kMixChannels) && mixer_[channel].status != 0)
+        while (channel < uint32_t(MixChannels()) && mixer_[channel].status != 0)
         {
             channel++;
         }
-        if (channel >= uint32_t(kMixChannels))
+        if (channel >= uint32_t(MixChannels()))
         {
             return 0;
         }
         m = &mixer_[channel];
     }
 
+    // The modified build's kramPlayExt() turns interpolation off. Its note on then sets it from the instrument.
+    const bool modified = info_.build == Build::kModified;
     plays_++;
     m->sfx = uint8_t(sfx & 1);
-    m->hq = hq_mode_ == 2 ? uint8_t(8) : uint8_t((m->hq_sample & hq_mode_) << 3);
+    if (modified)
+    {
+        m->hq = 0;
+    }
+    else
+    {
+        m->hq = hq_mode_ == 2 ? uint8_t(8) : uint8_t((m->hq_sample & hq_mode_) << 3);
+    }
     m->handle = channel | (plays_ << 8);
     SetPanning(*m, pan);
     m->volume = uint8_t(volume);
     m->inc = int32_t(freq << 2);
     SetSides(*m);
-    m->hq_sample = rom_.U8(sample + kSampleInterpolate);
+    m->hq_sample = modified ? uint8_t(0) : rom_.U8(sample + kSampleInterpolate);
     m->pos = m->start = sample + kSamplePoints;
     m->loop_length = rom_.U32(sample + kSampleLoopLength);
-    m->end = rom_.U32(sample + kSampleEnd);
+    m->end = SampleEnd(rom_, info_.build, sample);
     m->loop = rom_.U8(sample + kSampleLoop);
     m->status = 1;
     m->loop_from = m->end - m->loop_length;
@@ -359,9 +400,9 @@ uint32_t Player::Play(uint32_t sample, int sample_index, int sfx, uint32_t handl
     return m->handle;
 }
 
-bool Player::Plays(const MixChannel& m, uint32_t handle)
+bool Player::Plays(const MixChannel& m, uint32_t handle) const
 {
-    return (handle & 0xFF) < uint32_t(kMixChannels) && m.handle == handle;
+    return (handle & 0xFF) < uint32_t(MixChannels()) && m.handle == handle;
 }
 
 bool Player::Stop(uint32_t handle)
@@ -452,8 +493,27 @@ bool Player::SetPos(uint32_t handle, uint32_t pos)
 
 void Player::SetSides(MixChannel& m) const
 {
-    // The master volume of a ramping channel's count is past the two that the mixer keeps, so it reads as 0.
-    const uint32_t master = size_t(m.sfx) < master_.size() ? master_[m.sfx] : 0;
+    // A ramping channel keeps its count of samples to ramp (4 to 16) where the mixer keeps the choice of master volume.
+    // The two master volumes are followed by the quality and the ramp, then by the code of kramPlayExt(). The mixer
+    // reads the master volume of such a channel from those bytes.
+    uint32_t master = 0;
+    if (m.sfx < master_.size())
+    {
+        master = master_[m.sfx];
+    }
+    else if (m.sfx == 2)
+    {
+        master = hq_mode_;
+    }
+    else if (m.sfx == 3)
+    {
+        master = hq_ramp_;
+    }
+    else if (size_t(m.sfx - 4) < std::size(kPlayExtStart))
+    {
+        master = kPlayExtStart[m.sfx - 4];
+    }
+
     const uint32_t level = master * m.volume;
     m.left = uint8_t((level * uint32_t(64 - m.pan)) >> 13);
     m.right = uint8_t((level * uint32_t(64 + m.pan)) >> 13);
@@ -461,26 +521,44 @@ void Player::SetSides(MixChannel& m) const
 
 void Player::SetPanning(MixChannel& m, int32_t pan) const
 {
-    // In mono, every channel mixes to the left buffer alone.
+    // In mono, every channel mixes to the left buffer alone, at the level of a pan to the left. From 2005-04-21 on, and
+    // in the unsigned and modified builds, it mixes at the level of the centre. A channel in the centre then has a
+    // mixing routine of its own.
+    const bool centre = info_.build >= Build::k2005_04_21;
     if (!info_.stereo)
     {
         m.mix = 1;
-        m.pan = -64;
+        m.pan = centre ? int8_t(0) : int8_t(-64);
         return;
     }
 
-    m.mix = pan == 0 ? uint8_t(0) : uint8_t(pan > 0 ? (pan >> 6) + 2 : (-pan) >> 6);
+    if (pan == 0)
+    {
+        m.mix = centre ? uint8_t(4) : uint8_t(0);
+    }
+    else
+    {
+        m.mix = uint8_t(pan > 0 ? (pan >> 6) + 2 : (-pan) >> 6);
+    }
     m.pan = int8_t(pan);
 }
 
 void Player::ResetChannels()
 {
+    // Up to 2003/09/01, every channel that plays takes the new master volume. From 2004/09/17 on, only the music's
+    // channels do, and from 2004/11/14 on, they set their mixing routines again too.
     for (MixChannel& m : mixer_)
     {
-        if (m.status != 0)
+        if (m.status == 0 || (Since2004() && m.sfx != 0))
         {
-            SetSides(m);
+            continue;
         }
+
+        if (info_.build >= Build::k2004_11_14)
+        {
+            SetPanning(m, m.pan);
+        }
+        SetSides(m);
     }
 }
 
@@ -499,6 +577,13 @@ void Player::SetTimerBpm(int bpm)
 void Player::SetTimer(bool on)
 {
     timer_on_ = on;
+
+    // The builds before 1.4 keep the timer's count as it is.
+    if (info_.build < Build::kV1_4)
+    {
+        return;
+    }
+
     if (on)
     {
         timer_count_ = timer_backup_;
@@ -552,10 +637,23 @@ void Player::Mix(uint32_t amount)
     elapsed_ += amount;
 }
 
-void Player::SkipSilent(MixChannel& m, uint32_t amount)
+uint32_t Player::GuessPoints(const MixChannel& m, uint32_t samples, bool margin) const
+{
+    // From the build of 2003/09/01 on, the guess takes the whole points of the step. The builds before it take the step
+    // in 256ths.
+    if (info_.build >= Build::k2003_09_01)
+    {
+        return uint32_t(m.inc >> 16) * samples + (margin ? samples : 0);
+    }
+
+    const int32_t points = int32_t(uint32_t(m.inc >> 8) * samples) >> 8;
+    return uint32_t(points) + (margin ? 1 : 0);
+}
+
+void Player::SkipSilent(MixChannel& m, uint32_t amount) const
 {
     // A silent channel moves on by a guess at the points that its samples take, without mixing them.
-    const uint32_t guess = uint32_t(m.inc >> 16) * amount + amount;
+    const uint32_t guess = GuessPoints(m, amount, true);
     if (m.loop == 0)
     {
         if (m.pos + guess >= m.end)
@@ -608,7 +706,7 @@ void Player::SkipSilent(MixChannel& m, uint32_t amount)
     }
 }
 
-void Player::MixPlaying(MixChannel& m, uint32_t todo)
+void Player::MixPlaying(MixChannel& m, uint32_t todo) const
 {
     // A playing channel mixes until its sample or loop ends, then loops or stops, and goes on with what's left.
     for (;;)
@@ -617,15 +715,13 @@ void Player::MixPlaying(MixChannel& m, uint32_t todo)
         int32_t num = 0, den = 0;
         if (m.inc >= 0)
         {
-            const uint32_t guess = uint32_t(m.inc >> 16) * todo + todo;
-            fits = m.pos + guess < m.end;
+            fits = m.pos + GuessPoints(m, todo, true) < m.end;
             num = int32_t(((m.end - m.pos) << 14) - (uint32_t(m.frac) >> 2));
             den = m.inc >> 2;
         }
         else
         {
-            const uint32_t guess = uint32_t(m.inc >> 16) * todo;
-            fits = m.pos + guess > m.loop_from;
+            fits = m.pos + GuessPoints(m, todo, false) > m.loop_from;
             num = int32_t(((m.pos - m.loop_from) << 14) + (uint32_t(m.frac) >> 2));
             den = int32_t(0u - uint32_t(m.inc)) >> 2;
         }
@@ -691,6 +787,19 @@ void Player::MixPlaying(MixChannel& m, uint32_t todo)
 
 void Player::Frame()
 {
+    // A game that fades the music in sets the music volume with krapSetMusicVol() before the worker in every frame.
+    if (info_.music_fade_in && status_ != 0)
+    {
+        music_volume_ = std::min(music_volume_ + int32_t(info_.music_fade_in), int32_t(info_.music_volume));
+        SetGlobalVolume();
+    }
+
+    if (info_.build < Build::kV1_4)
+    {
+        OldFrame();
+        return;
+    }
+
     // The worker mixes up to each tick that falls in the frame, runs it, and mixes the rest.
     uint32_t amount = uint32_t(info_.frame_samples);
     while (amount)
@@ -714,20 +823,33 @@ void Player::Frame()
     }
 }
 
-std::array<uint8_t, kPlayerRecordSize> Player::PlayerRecord() const
+std::vector<uint8_t> Player::PlayerRecord() const
 {
-    std::array<uint8_t, kPlayerRecordSize> r = {};
+    // From 2004/09/17 on, the row and the row of a break are halfwords. They move the bytes between them.
+    std::vector<uint8_t> r(0x34);
     xsflib::StoreLe32(&r[0x00], mode_);
     xsflib::StoreLe32(&r[0x04], status_);
     xsflib::StoreLe32(&r[0x08], valid_ ? module_.address : 0);
     xsflib::StoreLe16(&r[0x0C], tempo_);
-    r[0x0E] = speed_;
-    r[0x0F] = tick_;
-    r[0x10] = row_;
-    r[0x11] = order_;
+    if (info_.build < Build::k2004_09_17)
+    {
+        r[0x0E] = speed_;
+        r[0x0F] = tick_;
+        r[0x10] = uint8_t(row_);
+        r[0x11] = order_;
+        r[0x18] = uint8_t(goto_order_);
+        r[0x19] = uint8_t(goto_row_);
+    }
+    else
+    {
+        xsflib::StoreLe16(&r[0x0E], row_);
+        r[0x10] = speed_;
+        r[0x11] = tick_;
+        r[0x12] = order_;
+        r[0x13] = uint8_t(goto_order_);
+        xsflib::StoreLe16(&r[0x18], uint16_t(goto_row_));
+    }
     xsflib::StoreLe32(&r[0x14], data_);
-    r[0x18] = uint8_t(goto_order_);
-    r[0x19] = uint8_t(goto_row_);
     r[0x1A] = uint8_t(loop_row_);
     r[0x1B] = uint8_t(loop_count_);
     r[0x1C] = uint8_t(loop_active_);
@@ -742,40 +864,52 @@ std::array<uint8_t, kPlayerRecordSize> Player::PlayerRecord() const
     return r;
 }
 
-std::array<uint8_t, kChannelRecordSize> Player::ChannelRecord(const Channel& c)
+std::vector<uint8_t> Player::ChannelRecord(const Channel& c) const
 {
-    std::array<uint8_t, kChannelRecordSize> r = {};
+    // From 2004/09/17 on, the played volume and pan follow the start point. They move the effect and the periods by 2
+    // bytes, and with the alignment of the words, the rest of the record by 4.
+    const bool later = info_.build >= Build::k2004_09_17;
+    std::vector<uint8_t> r(later ? 0x64 : 0x60);
     xsflib::StoreLe32(&r[0x00], c.handle);
     r[0x04] = uint8_t(c.volume);
     r[0x05] = uint8_t(c.channel_volume);
     r[0x06] = uint8_t(c.panning);
     r[0x07] = c.start_point;
-    r[0x08] = c.effect;
-    xsflib::StoreLe16(&r[0x0A], uint16_t(c.note));
-    xsflib::StoreLe16(&r[0x0C], uint16_t(c.period));
-    xsflib::StoreLe16(&r[0x0E], uint16_t(c.played_period));
-    xsflib::StoreLe32(&r[0x10], c.sample);
-    xsflib::StoreLe32(&r[0x14], c.instrument);
-    r[0x18] = c.last_effect;
-    r[0x19] = c.effect_op;
-    xsflib::StoreLe16(&r[0x1A], c.porta_step);
-    xsflib::StoreLe16(&r[0x1C], uint16_t(c.porta_goal));
-    xsflib::StoreLe16(&r[0x1E], uint16_t(c.gliss_note));
-    r[0x20] = c.vibrato_pos;
-    r[0x21] = c.vibrato_speed;
-    r[0x22] = c.vibrato_depth;
-    r[0x23] = c.vibrato_reset;
-    xsflib::StoreLe32(&r[0x24], c.vibrato_wave);
-    r[0x28] = c.tremolo_pos;
-    r[0x29] = c.tremolo_speed;
-    r[0x2A] = c.tremolo_depth;
-    r[0x2B] = c.tremolo_reset;
-    xsflib::StoreLe32(&r[0x2C], c.tremolo_wave);
-    r[0x30] = c.panbrello_pos;
-    r[0x31] = c.panbrello_speed;
-    r[0x32] = c.panbrello_depth;
-    r[0x33] = c.panbrello_reset;
-    xsflib::StoreLe32(&r[0x34], c.panbrello_wave);
+    if (later)
+    {
+        r[0x08] = uint8_t(c.played_volume);
+        r[0x09] = uint8_t(c.played_panning);
+    }
+
+    uint8_t* const periods = r.data() + (later ? 2 : 0);
+    periods[0x08] = c.effect;
+    xsflib::StoreLe16(&periods[0x0A], uint16_t(c.note));
+    xsflib::StoreLe16(&periods[0x0C], uint16_t(c.period));
+    xsflib::StoreLe16(&periods[0x0E], uint16_t(c.played_period));
+
+    uint8_t* const rest = r.data() + (later ? 4 : 0);
+    xsflib::StoreLe32(&rest[0x10], c.sample);
+    xsflib::StoreLe32(&rest[0x14], c.instrument);
+    rest[0x18] = c.last_effect;
+    rest[0x19] = c.effect_op;
+    xsflib::StoreLe16(&rest[0x1A], c.porta_step);
+    xsflib::StoreLe16(&rest[0x1C], uint16_t(c.porta_goal));
+    xsflib::StoreLe16(&rest[0x1E], uint16_t(c.gliss_note));
+    rest[0x20] = c.vibrato_pos;
+    rest[0x21] = c.vibrato_speed;
+    rest[0x22] = c.vibrato_depth;
+    rest[0x23] = c.vibrato_reset;
+    xsflib::StoreLe32(&rest[0x24], c.vibrato_wave);
+    rest[0x28] = c.tremolo_pos;
+    rest[0x29] = c.tremolo_speed;
+    rest[0x2A] = c.tremolo_depth;
+    rest[0x2B] = c.tremolo_reset;
+    xsflib::StoreLe32(&rest[0x2C], c.tremolo_wave);
+    rest[0x30] = c.panbrello_pos;
+    rest[0x31] = c.panbrello_speed;
+    rest[0x32] = c.panbrello_depth;
+    rest[0x33] = c.panbrello_reset;
+    xsflib::StoreLe32(&rest[0x34], c.panbrello_wave);
     const uint8_t bytes[] = {c.glissando,
                              c.tremor_count,
                              c.tremor_on,
@@ -797,29 +931,34 @@ std::array<uint8_t, kChannelRecordSize> Player::ChannelRecord(const Channel& c)
                              c.in_row,
                              c.envelopes_on,
                              c.volume_env_state};
-    std::copy(std::begin(bytes), std::end(bytes), r.begin() + 0x38);
-    r[0x4D] = uint8_t(c.envelope_volume);
-    xsflib::StoreLe16(&r[0x4E], c.volume_env_level);
-    r[0x50] = c.volume_env_point;
-    r[0x51] = c.volume_env_tick;
-    r[0x52] = c.volume_env_target;
-    r[0x53] = c.fading;
-    xsflib::StoreLe16(&r[0x54], uint16_t(c.fade));
-    r[0x56] = c.pan_env_state;
-    r[0x57] = uint8_t(c.envelope_pan);
-    xsflib::StoreLe16(&r[0x58], c.pan_env_level);
-    r[0x5A] = c.pan_env_point;
-    r[0x5B] = c.pan_env_tick;
-    r[0x5C] = c.pan_env_target;
-    r[0x5D] = c.column_effect;
-    r[0x5E] = c.instrument_vibrato_pos;
+    std::copy(std::begin(bytes), std::end(bytes), rest + 0x38);
+    rest[0x4D] = uint8_t(c.envelope_volume);
+    xsflib::StoreLe16(&rest[0x4E], c.volume_env_level);
+    rest[0x50] = c.volume_env_point;
+    rest[0x51] = c.volume_env_tick;
+    rest[0x52] = c.volume_env_target;
+    rest[0x53] = c.fading;
+    xsflib::StoreLe16(&rest[0x54], uint16_t(c.fade));
+    rest[0x56] = c.pan_env_state;
+    rest[0x57] = uint8_t(c.envelope_pan);
+    xsflib::StoreLe16(&rest[0x58], c.pan_env_level);
+    rest[0x5A] = c.pan_env_point;
+    rest[0x5B] = c.pan_env_tick;
+    rest[0x5C] = c.pan_env_target;
+    rest[0x5D] = c.column_effect;
+    rest[0x5E] = c.instrument_vibrato_pos;
 
-    return r;
+    return info_.build < Build::kV1_2_2_17 ? OldChannelRecord(r) : r;
 }
 
-std::array<uint8_t, kMixRecordSize> Player::MixRecord(const MixChannel& m)
+std::vector<uint8_t> Player::MixRecord(const MixChannel& m) const
 {
-    std::array<uint8_t, kMixRecordSize> r = {};
+    if (info_.build < Build::kV1_4)
+    {
+        return OldMixRecord(m);
+    }
+
+    std::vector<uint8_t> r(0x2C);
     r[0x00] = m.volume;
     r[0x01] = uint8_t(m.pan);
     r[0x02] = m.status;
@@ -842,9 +981,9 @@ std::array<uint8_t, kMixRecordSize> Player::MixRecord(const MixChannel& m)
     return r;
 }
 
-std::array<uint8_t, 16> Player::Globals() const
+std::vector<uint8_t> Player::Globals() const
 {
-    std::array<uint8_t, 16> r = {};
+    std::vector<uint8_t> r(16);
     r[0] = master_[0];
     r[1] = master_[1];
     r[2] = hq_mode_;
@@ -882,9 +1021,9 @@ void Player::Timer()
 void Player::FindRow()
 {
     // The order's pattern, from the module's table of patterns.
-    pattern_ = rom_.U32(module_.address + kModulePatterns + 4 * uint32_t(module_.orders[order_]));
-    data_ = pattern_ + kPatternData;
-    if (!rom_.Contains(pattern_, kPatternData))
+    pattern_ = rom_.U32(module_.address + ModulePatterns(info_.build) + 4 * uint32_t(module_.orders[order_]));
+    data_ = PatternData(info_.build, pattern_);
+    if (!rom_.Contains(pattern_, data_ - pattern_))
     {
         Warn("order " + std::to_string(order_) + " names a pattern outside the ROM, so the module stops there");
         StopModule();
@@ -906,22 +1045,34 @@ void Player::FindRow()
             continue;
         }
 
-        ReadEntry(rom_, flags, data_);
+        ReadEntry(rom_, info_.build, flags, data_);
     }
 }
 
 void Player::NextRow()
 {
+    if (info_.build < Build::kV1_2_2_15)
+    {
+        OldNextRow();
+        return;
+    }
+    if (info_.build < Build::k2003_09_01)
+    {
+        NextRowPlayer();
+        return;
+    }
+
     // A jump goes to its order's first row, through the order's end.
+    const bool byte_rows = info_.build < Build::k2004_09_17;
     if (goto_order_ >= 0)
     {
         order_ = uint8_t(goto_order_ - 1);
-        row_ = 0xFE;
+        row_ = byte_rows ? 0xFE : 0x2000;
         goto_order_ = -1;
     }
 
-    row_++;
-    if (row_ < rom_.U8(pattern_ + kPatternRows) && goto_row_ < 0)
+    row_ = byte_rows ? uint8_t(row_ + 1) : uint16_t(row_ + 1);
+    if (row_ < PatternRows(rom_, info_.build, pattern_) && goto_row_ < 0)
     {
         return;
     }
@@ -951,7 +1102,7 @@ void Player::NextRow()
     // A break goes to its row of the next order, or the first row if the pattern is shorter.
     if (goto_row_ >= 0)
     {
-        row_ = goto_row_ >= rom_.U8(pattern_ + kPatternRows) ? uint8_t(0) : uint8_t(goto_row_);
+        row_ = uint32_t(goto_row_) >= PatternRows(rom_, info_.build, pattern_) ? uint16_t(0) : uint16_t(goto_row_);
         FindRow();
         goto_row_ = -1;
     }
@@ -973,13 +1124,7 @@ void Player::PlayRow()
         }
 
         // The channel's note and instrument, volume and effect, whichever the row gives.
-        const RowEntry entry = ReadEntry(rom_, flags, data_);
-        if (entry.channel >= kPlayerChannels)
-        {
-            Warn("a pattern names channel " + std::to_string(entry.channel) + ", past the player's channels");
-            continue;
-        }
-
+        const RowEntry entry = ReadEntry(rom_, info_.build, flags, data_);
         Channel& c = channels_[size_t(entry.channel)];
         c.in_row = 1;
         c.last_effect = c.effect;
@@ -994,33 +1139,45 @@ void Player::PlayRow()
             {
                 c.sample = rom_.U32(info_.samples + 4 * index);
                 c.sample_index = int(index);
-                c.volume = int8_t(rom_.U8(c.sample + kSampleVolume));
+                c.volume = c.played_volume = int8_t(rom_.U8(c.sample + kSampleVolume));
                 set_volume = true;
             }
             else if (entry.note)
             {
-                c.instrument = rom_.U32(info_.instruments + 4 * index);
+                c.instrument = module_.instruments_at ? module_.instruments_at + kInstrumentSize * index
+                                                      : rom_.U32(info_.instruments + 4 * index);
                 const uint32_t sample_index = rom_.U16(c.instrument + 2 * uint32_t(entry.note) - 2);
                 c.sample = rom_.U32(info_.samples + 4 * sample_index);
                 c.sample_index = int(sample_index);
-                c.panning = int8_t(rom_.U8(c.sample + kSamplePan));
-                c.volume = int8_t(rom_.U8(c.sample + kSampleVolume));
+                if (info_.build >= Build::k2003_09_01)
+                {
+                    c.panning = c.played_panning = int8_t(rom_.U8(c.sample + kSamplePan));
+                }
+                c.volume = c.played_volume = int8_t(rom_.U8(c.sample + kSampleVolume));
                 set_volume = true;
                 sample_set = true;
             }
         }
 
-        // The volume column: a volume, or from 0x61 on, an effect.
+        // The volume column: a volume, or from 0x61 on, an effect. The builds before 1.4 take a volume up to 0x50, and
+        // an effect from 0x51.
         if (entry.volume)
         {
-            if (entry.volume <= 0x60)
+            if (entry.volume <= (info_.build >= Build::kV1_4 ? 0x60 : 0x50))
             {
                 c.volume = int8_t(entry.volume - 0x10);
                 if (c.volume > 64)
                 {
                     c.volume = 64;
                 }
-                c.column_effect = 0;
+                c.played_volume = c.volume;
+
+                // The builds before 1.2.2.14 keep the column's last effect. It goes on between the rows.
+                if (info_.build >= Build::kV1_2_2_14)
+                {
+                    c.column_effect = 0;
+                }
+
                 set_volume = true;
             }
             else
@@ -1057,7 +1214,17 @@ void Player::PlayRow()
                             c.sample_index = int(sample_index);
                         }
 
-                        RestartEnvelopes(c);
+                        // The builds before 2003/09/01 take the pan of the note's sample when the note starts.
+                        if (info_.build < Build::k2003_09_01)
+                        {
+                            c.panning = int8_t(rom_.U8(c.sample + kSamplePan));
+                        }
+
+                        // Up to 2003/09/01, the row starts the envelopes. Later builds start them with the note.
+                        if (!Since2004())
+                        {
+                            RestartEnvelopes(c);
+                        }
                     }
 
                     c.gliss_note = c.note = n;
@@ -1125,7 +1292,9 @@ void Player::NoteOff(Channel& c)
     {
         c.fading = 1;
         c.volume_env_state = c.volume_env_state == 2 ? uint8_t(3) : uint8_t(4);
-        if (c.pan_env_state)
+
+        // The builds before 2003/09/01 release a pan envelope that's off too. That envelope then runs.
+        if (c.pan_env_state || info_.build < Build::k2003_09_01)
         {
             c.pan_env_state = c.pan_env_state == 2 ? uint8_t(3) : uint8_t(4);
         }
@@ -1145,6 +1314,10 @@ void Player::RestartEnvelopes(Channel& c)
         c.volume_env_state = 3;
         c.volume_env_tick = c.volume_env_point = 0xFF;
         c.volume_env_target = 0;
+        if (info_.build < Build::kV1_2_2_14)
+        {
+            c.volume_env_tick = 0;
+        }
         c.fade = 0x7FFF;
         c.fading = 0;
         c.envelopes_on = 1;
@@ -1159,12 +1332,22 @@ void Player::RestartEnvelopes(Channel& c)
         c.pan_env_state = 3;
         c.pan_env_tick = c.pan_env_point = 0xFF;
         c.pan_env_target = 0;
+        if (info_.build < Build::kV1_2_2_14)
+        {
+            c.pan_env_tick = 0;
+        }
         c.envelopes_on = 1;
     }
     else
     {
         c.envelope_pan = 0;
         c.pan_env_state = 0;
+    }
+
+    // From 2004/09/17 on, an instrument's vibrato runs without envelopes too.
+    if (Since2004() && rom_.U8(c.instrument + kInstrumentVibratoRate))
+    {
+        c.envelopes_on = 1;
     }
 }
 
@@ -1206,11 +1389,12 @@ void Player::RunEnvelopes()
         }
 
         // A note that an envelope stops goes no further.
-        if (c.volume_env_state && !RunVolumeEnvelope(c))
+        const bool old = info_.build < Build::kV1_2_2_14;
+        if (c.volume_env_state && !(old ? OldRunVolumeEnvelope(c) : RunVolumeEnvelope(c)))
         {
             continue;
         }
-        if (c.pan_env_state > 2 && !RunPanEnvelope(c))
+        if (c.pan_env_state > 2 && !(old ? OldRunPanEnvelope(c) : RunPanEnvelope(c)))
         {
             continue;
         }
@@ -1274,7 +1458,7 @@ bool Player::RunVolumeEnvelope(Channel& c)
     if (set_volume)
     {
         c.envelope_volume = int8_t((int32_t(c.volume_env_level) * c.fade) >> 23);
-        if (!SetChannelVolume(c))
+        if (!SetPlayedVolume(c))
         {
             StopChannel(c);
             return false;
@@ -1314,7 +1498,7 @@ bool Player::RunPanEnvelope(Channel& c)
     }
 
     c.envelope_pan = int8_t(((c.pan_env_level >> 8) - 32) << 1);
-    if (!SetChannelPan(c))
+    if (!SetPlayedPan(c))
     {
         StopChannel(c);
         return false;
@@ -1347,9 +1531,21 @@ void Player::PlayNote(Channel& c)
         return;
     }
 
+    // From 2004/09/17 on, a note in a module with instruments starts the envelopes.
+    if (Since2004() && instrument_based_)
+    {
+        RestartEnvelopes(c);
+    }
+
     const uint32_t freq = FrequencyOf(c.period);
     c.handle =
         Play(c.sample, c.sample_index, 0, c.handle, freq, uint32_t((c.volume * c.channel_volume) >> 6), c.panning);
+    if (info_.build == Build::kModified && c.handle)
+    {
+        MixChannel& m = mixer_[c.handle & 0xFF];
+        m.hq_sample = rom_.U8(c.instrument + kInstrumentInterpolate);
+        m.hq = hq_mode_ == 2 ? uint8_t(8) : uint8_t((m.hq_sample & hq_mode_) << 3);
+    }
     if (c.start_point)
     {
         SetPos(c.handle, uint32_t(c.start_point) << 8);
@@ -1378,13 +1574,40 @@ void Player::SetGlobalVolume()
 
 bool Player::SetChannelVolume(Channel& c)
 {
+    c.played_volume = c.volume;
     return SetVol(c.handle, uint32_t((c.channel_volume * c.volume * c.envelope_volume) >> 12));
+}
+
+bool Player::SetPlayedVolume(Channel& c)
+{
+    if (!Since2004())
+    {
+        return SetChannelVolume(c);
+    }
+
+    return SetVol(c.handle, uint32_t((c.channel_volume * c.played_volume * c.envelope_volume) >> 12));
 }
 
 bool Player::SetChannelPan(Channel& c)
 {
+    c.played_panning = c.panning;
     const int pan = int8_t(uint8_t(c.panning + c.envelope_pan));
     return SetPan(c.handle, std::clamp(pan, -64, 64));
+}
+
+bool Player::SetPlayedPan(Channel& c)
+{
+    if (!Since2004())
+    {
+        return SetChannelPan(c);
+    }
+
+    return SetPan(c.handle, std::clamp(c.played_panning + c.envelope_pan, -64, 64));
+}
+
+bool Player::Since2004() const
+{
+    return info_.build >= Build::k2004_09_17;
 }
 
 void Player::SetChannelFreq(Channel& c)
@@ -1438,6 +1661,12 @@ int16_t Player::Wave(uint32_t table, uint32_t index) const
 
 void Player::Effect(Channel& c, int effect, bool on_row)
 {
+    // The builds before 1.2.2.17 have no channel volume. Their table has no routines for its effects.
+    if (info_.build < Build::kV1_2_2_17 && (effect == kChannelVolume || effect == kChannelVolumeSlide))
+    {
+        return;
+    }
+
     const uint8_t op = c.effect_op;
     switch (effect)
     {
@@ -1462,12 +1691,27 @@ void Player::Effect(Channel& c, int effect, bool on_row)
         break;
 
     case kPatternJump:
+        if (info_.build < Build::kV1_2_2_15)
+        {
+            OldPatternJump(op);
+            break;
+        }
         goto_order_ = int8_t(op);
         break;
 
     case kPatternBreak:
-        goto_row_ = int8_t(uint8_t((op >> 4) * 10 + (op & 0xF)));
-        break;
+        {
+            if (info_.build < Build::kV1_2_2_15)
+            {
+                OldPatternBreak(op);
+                break;
+            }
+
+            // Up to 2003/09/01, the row is a signed byte, and a break past row 127 counts as none.
+            const int row = (op >> 4) * 10 + (op & 0xF);
+            goto_row_ = info_.build < Build::k2004_09_17 ? int16_t(int8_t(uint8_t(row))) : int16_t(row);
+            break;
+        }
 
     case kVolumeSlideS3m:
     case kVolumeSlideVibrato:
@@ -1574,7 +1818,7 @@ void Player::Effect(Channel& c, int effect, bool on_row)
         {
             c.channel_volume = 64;
         }
-        SetChannelVolume(c);
+        SetPlayedVolume(c);
         break;
 
     case kChannelVolumeSlide:
@@ -1587,7 +1831,7 @@ void Player::Effect(Channel& c, int effect, bool on_row)
         }
         else if (SlideLevel(c.channel_volume, c.channel_volume_slide))
         {
-            SetChannelVolume(c);
+            SetPlayedVolume(c);
         }
         break;
 
@@ -1685,6 +1929,12 @@ void Player::Effect(Channel& c, int effect, bool on_row)
                 c.play_note = 0;
             }
         }
+        else if (op == tick_ && Since2004())
+        {
+            // From 2004/09/17 on, the cut sets the volume to 0 and leaves the note playing.
+            c.volume = c.played_volume = 0;
+            SetVol(c.handle, 0);
+        }
         else if (op == tick_)
         {
             StopChannel(c);
@@ -1717,6 +1967,14 @@ void Player::Effect(Channel& c, int effect, bool on_row)
 
 void Player::VolumeColumnEffect(Channel& c, bool on_row)
 {
+    // A column from 0x51 to 0x5F in the builds before 1.4 names an entry past the table of the column's effects. The
+    // model leaves the column out.
+    if ((c.column_effect >> 4) > kColumnPortaNote)
+    {
+        Warn("a volume column from 0x51 to 0x5F names no effect in this build of Krawall and is left out");
+        return;
+    }
+
     const int x = c.column_effect & 0xF;
     switch (c.column_effect >> 4)
     {
@@ -2074,7 +2332,13 @@ void Player::Tremor(Channel& c, bool on_row)
         c.tremor_on = uint8_t((op >> 4) + 1);
         c.tremor_cycle = uint8_t(c.tremor_on + (op & 0xF) + 1);
     }
-    if (c.tremor_count == c.tremor_on)
+    if (c.tremor_count == c.tremor_on && Since2004())
+    {
+        c.played_volume = 0;
+        SetPlayedVolume(c);
+        c.restore_note = 1;
+    }
+    else if (c.tremor_count == c.tremor_on)
     {
         SetVol(c.handle, 0);
         c.restore_note = 1;
@@ -2108,11 +2372,21 @@ void Player::Tremolo(Channel& c, bool on_row)
     }
     else
     {
-        // This build shifts the volume down by 6 bits rather than 12, so the mixer gets the bottom byte of a volume
-        // 64 times too loud.
+        // From 1.2.2.17 to 2003/09/01, the volume shifts down by 6 bits rather than 12. The mixer gets the bottom byte
+        // of a volume 64 times too loud. The builds before 1.2.2.17 have no channel volume, and 6 bits is right there.
+        // Later builds keep the volume as the played one.
         const int delta = int8_t((Wave(c.tremolo_wave, c.tremolo_pos) * c.tremolo_depth) >> 6);
         const int volume = std::clamp<int>(int8_t(uint8_t(delta + c.volume)), 0, 64);
-        SetVol(c.handle, uint32_t(volume * c.channel_volume * c.envelope_volume) >> 6);
+        if (Since2004())
+        {
+            c.played_volume = int8_t(volume);
+            SetPlayedVolume(c);
+        }
+        else
+        {
+            const int channel_volume = info_.build < Build::kV1_2_2_17 ? 1 : c.channel_volume;
+            SetVol(c.handle, uint32_t(volume * channel_volume * c.envelope_volume) >> 6);
+        }
         c.tremolo_pos = uint8_t((c.tremolo_pos + c.tremolo_speed) & 0x3F);
         c.restore_note = 1;
     }
@@ -2141,6 +2415,7 @@ void Player::Panbrello(Channel& c, bool on_row)
         const int delta = int8_t((Wave(c.panbrello_wave, c.panbrello_pos >> 2) * c.panbrello_depth) >> 6);
         const int panning = int8_t(uint8_t(delta + c.panning));
         c.panbrello_pos = uint8_t(c.panbrello_pos + c.panbrello_speed);
+        c.played_panning = int8_t(panning);
         SetPan(c.handle, std::clamp(panning + c.envelope_pan, -64, 64));
         c.restore_note = 1;
     }
@@ -2204,7 +2479,8 @@ void Player::Retrig(Channel& c, bool on_row)
         return;
     }
 
-    if (!c.retrig || Div(tick_, c.retrig).second != 0)
+    // Up to 2003/09/01, the whole operand divides the ticks. Later builds take its low digit.
+    if (!c.retrig || Div(tick_, Since2004() ? c.retrig & 0xF : c.retrig).second != 0)
     {
         return;
     }

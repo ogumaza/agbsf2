@@ -25,11 +25,15 @@ namespace agbsf2::krawall
 namespace
 {
 
-// Prints a frame's line for a record that has changed since the last one printed, as driver_emu.py's trace does.
-template <size_t N>
-void PrintChanged(std::FILE* out, long long frame, const char* name, const std::array<uint8_t, N>& record,
-                  std::array<uint8_t, N>& last)
+// Prints a frame's line for a record that has changed since the last one printed, as driver_emu.py's trace does. Before
+// the first line, the record counts as zeros.
+void PrintChanged(std::FILE* out, long long frame, const char* name, const std::vector<uint8_t>& record,
+                  std::vector<uint8_t>& last)
 {
+    if (last.empty())
+    {
+        last.assign(record.size(), 0);
+    }
     if (record == last)
     {
         return;
@@ -49,7 +53,7 @@ class KrawallMusic : public Music
 public:
     // Keeps a reference to `rom`, which has to outlive this.
     KrawallMusic(const Rom& rom, DriverInfo info)
-        : Music("Krawall", info.log, info.warnings), rom_(rom), info_(std::move(info))
+        : Music("Krawall", info.log, info.warnings), rom_(info.unpacked ? *info.unpacked : rom), info_(std::move(info))
     {
     }
 
@@ -117,10 +121,9 @@ public:
             return false;
         }
 
-        std::array<uint8_t, 16> globals = {};
-        std::array<uint8_t, kPlayerRecordSize> record = {};
-        std::array<std::array<uint8_t, kChannelRecordSize>, kPlayerChannels> channels = {};
-        std::array<std::array<uint8_t, kMixRecordSize>, kMixChannels> mixer = {};
+        std::vector<uint8_t> globals, record;
+        std::array<std::vector<uint8_t>, kPlayerChannels> channels;
+        std::array<std::vector<uint8_t>, kMixChannels> mixer;
         for (long long f = 0; f < frames; f++)
         {
             player.Frame();
@@ -129,13 +132,13 @@ public:
             for (int c = 0; c < player.Module().channels; c++)
             {
                 const std::string name = "c" + std::to_string(c);
-                PrintChanged(out, f, name.c_str(), Player::ChannelRecord(player.Channels()[size_t(c)]),
+                PrintChanged(out, f, name.c_str(), player.ChannelRecord(player.Channels()[size_t(c)]),
                              channels[size_t(c)]);
             }
-            for (int m = 0; m < kMixChannels; m++)
+            for (int m = 0; m < player.MixChannels(); m++)
             {
                 const std::string name = "m" + std::to_string(m);
-                PrintChanged(out, f, name.c_str(), Player::MixRecord(player.Mixer()[size_t(m)]), mixer[size_t(m)]);
+                PrintChanged(out, f, name.c_str(), player.MixRecord(player.Mixer()[size_t(m)]), mixer[size_t(m)]);
             }
             if (!player.Playing())
             {
@@ -155,7 +158,7 @@ private:
         return song >= 0 && song < SongCount() ? info_.songs[size_t(song)].module : 0;
     }
 
-    const Rom& rom_;
+    const Rom& rom_; // the ROM, or for the modified build, `info_.unpacked`
     DriverInfo info_;
     std::unique_ptr<InstrumentSet> shared_;
 };

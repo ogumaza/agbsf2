@@ -14,8 +14,8 @@ along with position changes made by kramSetPos() for retriggers or offsets. A no
 a sample or changes its position. It ends when the sample stops or the next note starts. The MIDI file and SoundFont
 must match:
 
-  - each note on the channel's MIDI channel, starting and ending within a millisecond of the driver's ticks, the MIDI
-    file starting on the module's first tick;
+  - each note on the channel's track, starting and ending within a millisecond of the driver's ticks, the MIDI file
+    starting on the module's first tick;
   - its preset's sample: the game's sample, its points (8-bit, unsigned in the game), its loop, with a loop back and
     forth played forwards and then backwards, and the point the note starts from;
   - its pitch at each tick, the rate at which the mixer steps through the sample, to within 5 cents;
@@ -34,7 +34,7 @@ import sys
 from pathlib import Path
 
 from unicorn import UC_HOOK_CODE
-from unicorn.arm_const import UC_ARM_REG_FP, UC_ARM_REG_R0, UC_ARM_REG_R1
+from unicorn.arm_const import UC_ARM_REG_FP, UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_SP
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for conversion.py, gbarom.py and traces.py, in tools/
 import conversion
@@ -44,12 +44,6 @@ from traces import parse_range
 
 TIME_TOLERANCE = 0.001   # seconds that an event can be from the driver's tick, for the MIDI tempos' rounding
 PITCH_TOLERANCE_CENTS = 5
-DRUM_CHANNEL = 9
-
-
-def midi_channel(c):
-    n = c % 15
-    return n if n < DRUM_CHANNEL else n + 1
 
 
 def read_sf2(path):
@@ -108,6 +102,8 @@ def game_sample(rom, header):
     loop_length, end = struct.unpack_from('<II', rom, header - ROM_BASE)
     loop = rom[header + 0x10 - ROM_BASE]
     data = header + 0x12
+    if driver_emu.addresses_for(rom).sample_length:
+        end += data
     points = [(b - 128) * 256 for b in rom[data - ROM_BASE:end - ROM_BASE]]
     length = len(points)
     if not loop or not 0 < loop_length <= length:
@@ -120,18 +116,16 @@ def game_sample(rom, header):
 def driver_ticks(rom, play, frames):
     """Runs the game's code as krapPlay() plays `play`, a (module, mode, song), and returns each tick's time in the
     mixer's samples and the state of each of the module's channels after it."""
-    module, mode, song = play
     emu = driver_emu.KrawallEmulator(rom)
     a = emu.addr
-    channels = rom[module - ROM_BASE]
     moves = collections.Counter()
     ticks = []
     frame = [0]
 
     def mix_record(handle):
-        if (handle & 0xFF) >= driver_emu.MIX_CHANNELS:
+        if (handle & 0xFF) >= a.mix_channels:
             return None
-        return emu.read(a.mixer + driver_emu.MIX_SIZE * (handle & 0xFF), driver_emu.MIX_SIZE)
+        return emu.read(a.mixer + a.mix_size * (handle & 0xFF), a.mix_size)
 
     def on_set_pos(uc, address, size, user):
         handle, pos = uc.reg_read(UC_ARM_REG_R0), uc.reg_read(UC_ARM_REG_R1)
@@ -142,13 +136,17 @@ def driver_ticks(rom, play, frames):
                 moves[handle] += 1
 
     def after_tick(uc, address, size, user):
-        # The worker keeps the left buffer's pointer, moved on past the samples mixed so far, below its frame pointer.
-        left = struct.unpack('<I', emu.read(uc.reg_read(UC_ARM_REG_FP) - 0x1C, 4))[0]
-        time = frame[0] * a.frame_samples + left - driver_emu.LEFT
+        # The worker keeps the left buffer's pointer, moved on past the samples mixed so far, below its frame pointer,
+        # at its stack pointer or in a register.
+        if a.left_reg is not None:
+            left = uc.reg_read(a.left_reg)
+        else:
+            base = uc.reg_read(UC_ARM_REG_SP) if a.left_at_sp else uc.reg_read(UC_ARM_REG_FP) - a.left_slot
+            left = struct.unpack('<I', emu.read(base, 4))[0]
+        time = frame[0] * a.frame_samples + left - a.out_left
         states = []
         for c in range(channels):
-            handle = struct.unpack('<I', emu.read(a.player + driver_emu.PLAYER_SIZE + driver_emu.CHANNEL_SIZE * c,
-                                                  4))[0]
+            handle = struct.unpack('<I', emu.read(a.player + a.player_size + a.channel_size * c, 4))[0]
             m = mix_record(handle)
             if handle == 0 or m is None or struct.unpack_from('<I', m, 0x18)[0] != handle or m[2] != 1:
                 states.append(None)
@@ -161,7 +159,8 @@ def driver_ticks(rom, play, frames):
 
     emu.uc.hook_add(UC_HOOK_CODE, on_set_pos, begin=a.set_pos, end=a.set_pos)
     emu.uc.hook_add(UC_HOOK_CODE, after_tick, begin=a.after_tick, end=a.after_tick)
-    emu.play(module, mode, song)
+    module = emu.play(*play)
+    channels = emu.read(module, 1)[0]
     for f in range(frames):
         frame[0] = f
         emu.frame()
@@ -239,14 +238,14 @@ def value_at(changes, ch, kind, t, default):
 
 
 def check_song(rom, info, song, midi_path, sf2_path, report):
-    module, scale = info['modules'][song], info['scale']
+    scale = info['scale']
     seconds = midi_length(midi_path) if midi_path else info['seconds'][song]
     frames = int(seconds * 16384 / 276) + 3
     ticks = driver_ticks(rom, info['plays'][song], frames)
     first = ticks[0][0]
     times = [(t - first) / 16384 for t, _ in ticks]
     end = min(range(len(times)), key=lambda i: abs(times[i] - seconds))
-    channels = rom[module - ROM_BASE]
+    channels = len(ticks[0][1])
     expected = {c: expected_notes(ticks, c, end) for c in range(channels)}
     if midi_path is None:
         playing = [c for c, notes in expected.items() if notes]
@@ -255,7 +254,7 @@ def check_song(rom, info, song, midi_path, sf2_path, report):
             return False
         return True
 
-    notes, changes = conversion.read_timing(midi_path)
+    notes, changes = conversion.read_timing(midi_path, by_track=True)
     presets = read_sf2(sf2_path)
     headers = {}
     problems = 0
@@ -267,7 +266,8 @@ def check_song(rom, info, song, midi_path, sf2_path, report):
             report('module %d: %s' % (song, text))
 
     for c in range(channels):
-        ch = midi_channel(c)
+        # A channel's notes and controllers are on its track, whose MIDI channel other tracks can share.
+        ch = 'Channel %d' % (c + 1)
         got = notes.get(ch, [])
         want = expected[c]
         if len(got) != len(want):
@@ -300,7 +300,9 @@ def check_song(rom, info, song, midi_path, sf2_path, report):
                 if s['rate'] > 0 and abs(1200 * math.log2(rate / s['rate'])) > PITCH_TOLERANCE_CENTS:
                     problem('channel %d: at %.4f s plays at %.1f Hz, the driver %.1f Hz' % (c, t, rate, s['rate']))
                     break
-                cc10, cc11 = levels_to_controllers(s['left'] * scale, s['right'] * scale)
+                # In mono, FIFO A plays the left buffer on both sides.
+                right = s['right'] if info['stereo'] else s['left']
+                cc10, cc11 = levels_to_controllers(s['left'] * scale, right * scale)
                 got10 = value_at(changes, ch, ('cc', 10), t, 64)
                 got11 = value_at(changes, ch, ('cc', 11), t, 0)
                 if abs(got11 - cc11) > 1 or (cc10 is not None and cc11 > 0 and abs(got10 - cc10) > 1):
@@ -309,8 +311,8 @@ def check_song(rom, info, song, midi_path, sf2_path, report):
                     break
 
     for ch in notes:
-        if ch not in [midi_channel(c) for c in range(channels)]:
-            problem('MIDI channel %d stands for none of the module\'s channels' % ch)
+        if ch not in ['Channel %d' % (c + 1) for c in range(channels)]:
+            problem('track %s stands for none of the module\'s channels' % ch)
     if problems > 10:
         report('module %d: %d more problems' % (song, problems - 10))
     return problems == 0
@@ -329,7 +331,8 @@ def read_info(tool, rom_path):
         raise SystemExit('found no modules in the list of agbsf2 --info')
     master = int(re.search(r'master volume 0x([0-9A-F]+)', text).group(1), 16)
     shift = master >> 16 or 5
-    return {'modules': modules, 'seconds': seconds, 'scale': (master & 0xFF) / (1 << (3 + shift))}
+    return {'modules': modules, 'seconds': seconds, 'scale': (master & 0xFF) / (1 << (3 + shift)),
+            'stereo': ', mono,' not in text}
 
 
 def main():
@@ -342,7 +345,7 @@ def main():
 
     rom = load_rom(a.rom)
     info = read_info(a.agbsf2, a.rom)
-    info['plays'] = driver_emu.song_plays(rom, info['modules'])
+    info['plays'] = driver_emu.song_plays(rom, info['modules'], driver_emu.listed_files(a.agbsf2, a.rom))
     files = dict(conversion.midi_files(a.folder, 'krawall'))
     if not files:
         raise SystemExit('found no MIDI files to check in %s' % a.folder)

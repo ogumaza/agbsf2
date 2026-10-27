@@ -88,10 +88,23 @@ The sound effects of these games are converted with their music.
 
 ### Krawall
 
+* *Racing Fever*, with build 1.2.2.14 of Krawall's `player.c`, dated 2002/09/12
+* *007: Everything or Nothing*, with build 1.4 of `player.c`, dated 2003/03/19
 * *Digimon Racing*, with the build of Krawall dated 2003/09/01
+* *The Sims: Bustin' Out*, with the same build, played with interpolation
+* *Juka and the Monophonic Menace*, with the build dated 2004/09/17
+* *Babar to the Rescue*, with the build dated 2004/11/14
+* *Eragon*, with the build dated 2005-04-21
+* *Puppy Luv: Spa and Resort*, with a build that has no version string
+* *Big Mutha Truckers*, *Street Racing Syndicate*, *M&M's Break 'Em* and
+  *Princess Natasha*, with a changed form of the build dated 2005-04-21 that
+  keeps each module packed in a music file
 
-Krawall's later builds changed its data and code, and a game with one of them
-gets an error that names its build.
+`agbsf2` also reads builds 1.2.2.10, 1.2.2.15 and 1.2.2.17 of `player.c`.
+Homebrew games and a prototype use them.
+
+A game with another build of Krawall that has a version string gets an error
+that gives the string.
 
 ### Ubisoft Milan's driver
 
@@ -199,7 +212,7 @@ Each file's results go in a folder next to it, as above.
 | `-n, --name NAME` | base name of the output files (default: input name) |
 | `-s, --songs LIST` | only these songs, e.g. `0,3,7-9` |
 | `-l, --loops N` | play each song's loop N times (default 2) |
-| `-t, --tracks LIST` | only these tracks, e.g. `4-15`; in Konami's driver, 0-3 are the PSG channels and 4 and up the sample voices, in Quintet's, 0-3 are the PSG channels and 4 and 5 the PCM channels, in Brownie Brown's, 0-3 are the music's PSG channels, 4-7 the sound effects' and 8 and up the sample channels, in Ubisoft Milan's, 0-2 are the PSG channels and 9 the kit, and in Krawall, the module's channels, 0-19 |
+| `-t, --tracks LIST` | only these tracks, e.g. `4-15`; in Konami's driver, 0-3 are the PSG channels and 4 and up the sample voices, in Quintet's, 0-3 are the PSG channels and 4 and 5 the PCM channels, in Brownie Brown's, 0-3 are the music's PSG channels, 4-7 the sound effects' and 8 and up the sample channels, in Ubisoft Milan's, 0-2 are the PSG channels and 9 the kit, and in Krawall, the module's channels, 0-31 |
 | `--single-sf2` | one SoundFont for all songs (see [Output](#output) for its banks) |
 | `--voice-channels` | MP2K only: a MIDI channel for each of the driver's sound channels instead of each track, so that notes stop where the game cuts them off, though a track's notes then move between channels (see [MIDI from MP2K](#midi-from-mp2k)) |
 | `--psg-exclusive` | MP2K only: an exclusive class for each PSG channel in the SoundFont. A track's next note on a PSG channel then ends the slow release of the note before it. The game cuts that note off there too. A note that another track cuts off still fades out (see [SoundFont from MP2K](#soundfont-from-mp2k)) |
@@ -863,8 +876,13 @@ song mode. Each MIDI file
 has a conductor track for tempo and loop markers, plus a track for every
 module channel that plays notes. Tracks are named `Channel 1`, `Channel 2`
 and so on, using MIDI channels 1-9 and 11-16 to avoid the drum channel.
-Modules with more than 15 channels reuse MIDI channels from the 16th module
-channel onwards.
+A module can have up to 32 channels. In a module with more than 15, channels
+share MIDI channels. A MIDI channel's program, controllers and bend act on
+every note it plays. The 15 channels whose notes last longest then take a MIDI
+channel each. Each other channel shares the MIDI channel whose notes it
+overlaps least. On a shared MIDI channel, each note sets its program, pan,
+expression and bend again. Where notes of two channels on one MIDI channel
+sound at once, the converter warns and gives the time they overlap.
 
 A module defines tick lengths and ticks per row, but has no explicit beat. The
 converter chooses 1, 2, 4, 8 or more rows per quarter note, or per eighth note
@@ -893,12 +911,37 @@ to its end and stops, with no loop markers. Krawall plays a jingle that way
 while no other module plays. `--info` lists the jingles. In *Digimon Racing*,
 module 16 is a jingle.
 
+A game can also play its music through a table of what it plays. Each entry
+gives a module, the mode for `krapPlay()` and a song. Detection reads such a
+table through the game's routine that plays its entries, in the form that
+*Eragon* has. Each entry then becomes a song, in the table's order, before
+the modules that no entry plays. An entry that repeats an earlier one is left
+out. The song plays the module in the entry's mode, from the entry's song
+where the module has markers. In a mode without the loop, the song stops at
+the module's end, or in song mode at the next `+++`. Its MIDI file then has no
+loop markers. A module that jumps back to an earlier order still loops, in any
+mode. `--info` lists the table and the songs whose mode doesn't loop.
+
+Some games keep each module packed in a music file. Their changed build of
+Krawall unpacks a file into RAM before it plays the module. `agbsf2` unpacks
+the files in the same way. It finds them through the words in the game's code
+and data that point to them. Each file's module becomes a song. The files that
+the game's tables list come first, in the tables' order. In a game whose code
+and data point to no music file, `agbsf2` searches the ROM for music files
+instead. `--info` lists the files and the module of each one. It also says
+which of the two ways found them. *Princess Natasha* plays modules 8 and 9
+once, as jingles. `agbsf2` finds them through the game's calls that play a file
+once.
+
 | Game | MIDI |
 |---|---|
 | a sample that a note, a note delay, a retrig or an offset starts | note on/off; velocity is always 127 |
 | the sample, and the point that the note starts from | program change: a preset for each |
 | volume, channel volume, global volume, volume and pan envelopes, slides, tremolo, tremor, pan and panbrello | CC11 for loudness and CC10 for pan, a tick at a time, as with Konami's driver |
 | portamentos, the slide to a note, vibratos and arpeggios | pitch bend, with the bend range set per channel by RPN 0 |
+
+In a game whose mixer is mono, such as *Babar to the Rescue*, every channel
+plays in the centre.
 
 Each note uses the MIDI key nearest its playback rate, with the sample's C-4
 on key 60. Pitch differences of 3 cents or more are corrected with a bend.
@@ -1213,10 +1256,31 @@ SoundFonts.
   The file `nointerp.txt` holds the line `interp 0`. The game clips a level
   past the mixer's full scale. The conversion plays it at full scale.
 * **The game's settings.** The conversion plays each module on its own, at the
-  music volume that the library starts with. A game that changes the music's
-  volume, or fades it, does so outside the module.
+  music volume that the game sets before it plays music. *Eragon*, *Puppy
+  Luv: Spa and Resort* and the games with packed music files set it from their
+  options. The conversion plays at the options' default. *The Sims: Bustin'
+  Out* plays its music at 255. There the loudest notes of a few pieces would
+  need more than a MIDI file's full loudness. The conversion plays it at 128,
+  6 dB quieter than the game, with the same balance. *Juka and the
+  Monophonic Menace* fades its music in from silence at each start. The
+  conversion fades in the same way. Its marked loop then starts on the second
+  pass. `agbsf2` contains the volumes that the games set and the fade-in for
+  one release of each game, by its game code. Another release, such as one
+  from another region, plays at 128 without a fade. A game that changes the
+  music's volume at other times does so outside the module.
+* **More than 15 channels.** MIDI has 15 channels besides the drum channel.
+  Channels of a larger module share them (see [MIDI from
+  Krawall](#midi-from-krawall)). Where two channels on one MIDI channel play
+  notes at once, each one's pan, expression and bend act on the other's notes.
+  A note that starts on a MIDI channel can also change the release of the note
+  before it. Some pieces of *Puppy Luv: Spa and Resort* have notes that overlap
+  that way.
 * **Sound effects** that the game plays on the mixer's channels aren't part of
   the modules, so the conversion leaves them out.
+* **Samples in music files.** A music file can list samples that the game
+  loads into RAM with its module. No music file of the supported games lists
+  any.
+  `agbsf2` leaves out a module whose file lists samples, and warns.
 
 ### Ubisoft Milan's driver
 

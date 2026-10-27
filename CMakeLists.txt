@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.20)
-project(agbsf2 VERSION 1.7.1 LANGUAGES CXX)
+project(agbsf2 VERSION 1.8.0 LANGUAGES CXX)
 
 # The name of the macOS droplet app.
 set(AGBSF2_APP_NAME Agbsf2)
@@ -62,8 +62,10 @@ add_library(agbsf2_core STATIC
     src/krawall/driver.cpp
     src/krawall/music.cpp
     src/krawall/player.cpp
+    src/krawall/player_v1.cpp
     src/krawall/song.cpp
     src/krawall/soundfont.cpp
+    src/krawall/unpack.cpp
     src/mp2k/convert.cpp
     src/mp2k/driver.cpp
     src/mp2k/music.cpp

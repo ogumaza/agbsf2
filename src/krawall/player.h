@@ -7,7 +7,6 @@
 #pragma once
 
 #include <array>
-#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -20,9 +19,14 @@
 namespace agbsf2::krawall
 {
 
-// The mixer's channels, and the most channels a module can have.
+// The mixer's channels, those of the builds before 1.4 and of the modified build, and the most channels a module can
+// have. The player's record holds 20 channels. The records of the channels past the 20th lie in the copy of the record
+// that krapPlay() makes for a jingle. A row names a channel with 5 bits.
 constexpr int kMixChannels = 32;
-constexpr int kPlayerChannels = 20;
+constexpr int kOldMixChannels = 24;
+constexpr int kModifiedMixChannels = 14;
+constexpr int kPlayerChannels = 32;
+static_assert(kEntryChannel < kPlayerChannels, "a row can name only the player's channels");
 
 // The frequency that the period of an Amiga module divides: 8363 Hz times 1712, the period of C-4.
 constexpr int32_t kAmigaClock = 14317456;
@@ -31,11 +35,6 @@ constexpr int32_t kAmigaClock = 14317456;
 // entry in the table of periods, scaled by the fine tune. LinearPeriod() gives a linear period, of 64 steps a note.
 uint32_t AmigaPeriod(const Rom& rom, const DriverInfo& info, uint32_t note, int fine_tune);
 int LinearPeriod(uint32_t note, int fine_tune);
-
-// The sizes of the player's record, a player channel's and a mixer channel's, as the game keeps them in RAM.
-constexpr size_t kPlayerRecordSize = 0x34;
-constexpr size_t kChannelRecordSize = 0x60;
-constexpr size_t kMixRecordSize = 0x2C;
 
 // A mixer channel. The handle's low byte identifies the channel; the upper bytes identify the playback instance. This
 // prevents a stale handle from changing a note after the mixer channel has been reassigned.
@@ -55,7 +54,7 @@ struct MixChannel
     uint8_t left = 0;  // the volume of each side
     uint8_t right = 0;
     uint8_t hq = 0;         // 8 if the channel interpolates
-    uint8_t mix = 0;        // the mixing routine: 0 or 2 both sides, 1 left, 3 right, 7 the ramp at a stop
+    uint8_t mix = 0;        // the mixing routine: 0 or 2 both sides, 1 left, 3 right, 4 centre, 7 the ramp at a stop
     uint8_t hq_sample = 0;  // the sample's choice of interpolation
     uint8_t sfx = 0;        // 1 for a sound effect, or while ramping, the samples left of the ramp
     uint32_t loop_from = 0; // the loop's first point; while ramping, the ramp's level and step
@@ -76,6 +75,8 @@ struct Channel
     int8_t channel_volume = 0; // the channel's volume, which the channel volume effect sets
     int8_t panning = 0;        // -64 to 64
     uint8_t start_point = 0;   // where the next note starts, in 256 points
+    int8_t played_volume = 0;  // from 2004/09/17 on: the volume with the tremolo or the tremor
+    int8_t played_panning = 0; // from 2004/09/17 on: the pan with the panbrello
     uint8_t effect = 0;        // the row's effect
     int16_t note = 0;          // the note from C-0, with the sample's relative note
     int16_t period = 0;        // the note's period, with the slides
@@ -195,6 +196,17 @@ public:
         return mixer_;
     }
 
+    // Returns the mixer channels that the build has: 32 from build 1.4 on, 24 before it, and 14 in the modified build.
+    int MixChannels() const
+    {
+        if (info_.build == Build::kModified)
+        {
+            return kModifiedMixChannels;
+        }
+
+        return info_.build >= Build::kV1_4 ? kMixChannels : kOldMixChannels;
+    }
+
     const std::array<Channel, kPlayerChannels>& Channels() const
     {
         return channels_;
@@ -261,13 +273,13 @@ public:
     // volume and the mixer's shift.
     double OutputScale() const;
 
-    // The player's record, a player channel's and a mixer channel's, laid out as the game keeps them, and the mixer's
-    // other variables: the master volumes, the timer's step and count, the music volume and the count of plays. The
-    // player's record leaves out its pointers to the routines that work out periods and frequencies.
-    std::array<uint8_t, kPlayerRecordSize> PlayerRecord() const;
-    static std::array<uint8_t, kChannelRecordSize> ChannelRecord(const Channel& c);
-    static std::array<uint8_t, kMixRecordSize> MixRecord(const MixChannel& m);
-    std::array<uint8_t, 16> Globals() const;
+    // The player's record, a player channel's and a mixer channel's, laid out as the game's build keeps them, and the
+    // mixer's other variables: the master volumes, the timer's step and count, the music volume and the count of plays.
+    // The player's record leaves out its pointers to the routines that work out periods and frequencies.
+    std::vector<uint8_t> PlayerRecord() const;
+    std::vector<uint8_t> ChannelRecord(const Channel& c) const;
+    std::vector<uint8_t> MixRecord(const MixChannel& m) const;
+    std::vector<uint8_t> Globals() const;
 
     // Returns the problems found while playing.
     const std::vector<std::string>& Warnings() const
@@ -286,7 +298,7 @@ private:
                   int32_t pan);
 
     // Returns true if `m` still plays the play that `handle` names.
-    static bool Plays(const MixChannel& m, uint32_t handle);
+    bool Plays(const MixChannel& m, uint32_t handle) const;
 
     bool Stop(uint32_t handle);
     bool SetFreq(uint32_t handle, uint32_t freq);
@@ -300,13 +312,27 @@ private:
     void SetTimerBpm(int bpm);
     void SetTimer(bool on);
 
+    // MixRecord() for the builds before 1.4, and Frame()'s work in them: they keep counting the sound timer's ticks
+    // while it's stopped.
+    std::vector<uint8_t> OldMixRecord(const MixChannel& m) const;
+    void OldFrame();
+
+    // Returns the channel record `r` of build 1.2.2.17 laid out as the builds before it lay it out: without the channel
+    // volume and its slide.
+    static std::vector<uint8_t> OldChannelRecord(const std::vector<uint8_t>& r);
+
     // Mixes `amount` samples, moving each channel's position on, and in the mixing routines, by `samples`.
     void Mix(uint32_t amount);
     static void Advance(MixChannel& m, uint32_t samples);
 
     // Mix()'s work on a channel at volume 0, and on a channel that plays.
-    static void SkipSilent(MixChannel& m, uint32_t amount);
-    static void MixPlaying(MixChannel& m, uint32_t todo);
+    void SkipSilent(MixChannel& m, uint32_t amount) const;
+    void MixPlaying(MixChannel& m, uint32_t todo) const;
+
+    // Returns the mixer's guess at the points that a channel moves in `samples`, to skip a silent channel or to test
+    // whether its sample ends. With `margin`, the guess has the build's margin added: a point a sample from the build
+    // of 2003/09/01 on, one point in the builds before it.
+    uint32_t GuessPoints(const MixChannel& m, uint32_t samples, bool margin) const;
 
     // The player. Timer() runs a tick: a row or the effects between rows, and then the envelopes. FindRow() finds the
     // row's data, NextRow() moves to the next row after a row, and PlayRow() plays a row's notes and effects.
@@ -314,6 +340,19 @@ private:
     void FindRow();
     void NextRow();
     void PlayRow();
+
+    // NextRow() in builds 1.2.2.15 to 1.4: a jump goes straight to its order. EndOfModule() works out what the
+    // module does past its last order or at a marker in song mode, and returns false if it has stopped and the row
+    // goes no further. BreakRow() moves to the row of a break.
+    void NextRowPlayer();
+    bool EndOfModule();
+    void BreakRow();
+
+    // The jump, the break and NextRow() in the builds before 1.2.2.15. A jump also breaks to row 0, and a break also
+    // jumps to the next order. NextRow() moves to their order and row before the next row, past no markers.
+    void OldPatternJump(uint8_t op);
+    void OldPatternBreak(uint8_t op);
+    void OldNextRow();
 
     // The end of a row's data. The channels that the row leaves out lose their effects, and a note that an effect
     // changed goes back to its pitch, volume and pan when the effect changes.
@@ -341,15 +380,29 @@ private:
     bool RunPanEnvelope(Channel& c);
     void RunInstrumentVibrato(Channel& c);
 
+    // The envelopes in the builds before 1.2.2.14. A tick compares the count of ticks with the next point's before it
+    // moves the count on, and takes the level before it adds the step. The volume's level goes to the mixer on every
+    // tick of a running envelope.
+    bool OldRunVolumeEnvelope(Channel& c);
+    bool OldRunPanEnvelope(Channel& c);
+
     // The note on, krapStop(), and the settings that go to the mixer. SetChannelVolume() and SetChannelPan() pass on
-    // the result of SetVol() and SetPan(): false for a handle that's no longer its channel's.
+    // the result of SetVol() and SetPan(): false for a handle that's no longer its channel's. They set the played
+    // volume and pan to the channel's. From 2004/09/17 on, the channel volume, the envelopes and the effects that
+    // change the volume or pan for a while pass on the played ones with SetPlayedVolume() and SetPlayedPan(). Up to
+    // 2003/09/01, those two pass on the channel's.
     void PlayNote(Channel& c);
     void StopModule();
     void SetGlobalVolume();
     bool SetChannelVolume(Channel& c);
+    bool SetPlayedVolume(Channel& c);
     bool SetChannelPan(Channel& c);
+    bool SetPlayedPan(Channel& c);
     void SetChannelFreq(Channel& c);
     void StopChannel(Channel& c);
+
+    // Returns true for the builds from 2004/09/17 on.
+    bool Since2004() const;
 
     // Returns a note's period for a sample, the frequency of a period, a linear period's frequency in any module, and a
     // point of a wave.
@@ -403,11 +456,11 @@ private:
     uint16_t tempo_ = 0;
     uint8_t speed_ = 0;
     uint8_t tick_ = 0;
-    uint8_t row_ = 0;
+    uint16_t row_ = 0; // a byte up to 2003/09/01
     uint8_t order_ = 0;
     uint32_t data_ = 0;     // the next byte of the pattern's data
     int8_t goto_order_ = 0; // the order that a jump goes to after the row, or -1
-    int8_t goto_row_ = 0;   // the row of the next order that a break goes to, or -1
+    int16_t goto_row_ = 0;  // the row of the next order that a break goes to, or -1; a signed byte up to 2003/09/01
     int8_t loop_row_ = 0;   // the pattern loop's row, the times it has left to go back there, and whether it runs
     int8_t loop_count_ = 0;
     int8_t loop_active_ = 0;

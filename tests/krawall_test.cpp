@@ -3,6 +3,7 @@
 // Unit tests for Krawall. They build small synthetic cartridges in memory, so no game ROM is needed.
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -38,8 +39,9 @@ using test::ReadMidi;
 using test::ReadSf2;
 
 // Addresses in a test cartridge: the code patterns that detection reads, the game's calls of the library's settings,
-// the game's routine that plays a jingle and its calls, the version string, the player's tables, the game's tables of
-// samples and modules, the samples and the modules.
+// the game's routine that plays a jingle and its calls, the game's routine that plays an entry of its table of what it
+// plays, the version string, the player's tables, the game's tables of samples and modules, the table of what the game
+// plays, the samples and the modules.
 constexpr uint32_t kPlay = kRomBase + 0x100;
 constexpr uint32_t kTables = kRomBase + 0x140;
 constexpr uint32_t kTimer = kRomBase + 0x180;
@@ -50,6 +52,7 @@ constexpr uint32_t kMaster = kRomBase + 0x280;
 constexpr uint32_t kGameInit = kRomBase + 0x2C0;
 constexpr uint32_t kJingle = kRomBase + 0x300;
 constexpr uint32_t kJingleCalls = kRomBase + 0x340;
+constexpr uint32_t kPlayEntry = kRomBase + 0x380;
 constexpr uint32_t kVersion = kRomBase + 0x400;
 constexpr uint32_t kSineTable = kRomBase + 0x1000;
 constexpr uint32_t kRampTable = kRomBase + 0x1080;
@@ -61,6 +64,7 @@ constexpr uint32_t kLinearTable = kRomBase + 0x1400;
 constexpr uint32_t kSampleTable = kRomBase + 0x2000;
 constexpr uint32_t kInstrumentTable = kRomBase + 0x2100;
 constexpr uint32_t kModuleTable = kRomBase + 0x2200;
+constexpr uint32_t kPlayTable = kRomBase + 0x2800;
 constexpr uint32_t kSampleData = kRomBase + 0x3000;
 constexpr uint32_t kModules = kRomBase + 0x4000;
 
@@ -204,6 +208,26 @@ public:
         PutBl(kJingleCalls + 8, kJingle);
     }
 
+    // Writes the game's routine that plays an entry of its table of what it plays, in the form of Eragon's: ldr r1,
+    // =table; lsls r0, r6, #3; adds r0, r0, r1; ldr r3, [r0]; ldr r4, [r0, #4]; ldrb r1, [r0, #4]; lsrs r2, r4, #8;
+    // lsls r2, r2, #24; lsrs r2, r2, #24; adds r0, r3, #0; bl krapPlay. The table holds `entries`: a module, a mode
+    // and a song each, in 8 bytes.
+    void PlayTable(const std::vector<std::array<uint32_t, 3>>& entries)
+    {
+        PutHalfwords(kPlayEntry, {0x4906, 0x00F0, 0x1840, 0x6803, 0x6844, 0x7901, 0x0A22, 0x0612, 0x0E12, 0x1C18});
+        PutBl(kPlayEntry + 20, kPlay);
+        Put16(kPlayEntry + 24, 0x4770);
+        Put32(kPlayEntry + 28, kPlayTable);
+
+        for (size_t i = 0; i < entries.size(); i++)
+        {
+            const uint32_t entry = kPlayTable + 8 * uint32_t(i);
+            Put32(entry, entries[i][0]);
+            Put8(entry + 4, uint8_t(entries[i][1]));
+            Put8(entry + 5, uint8_t(entries[i][2]));
+        }
+    }
+
 private:
     // Writes pattern `p` at `pattern`: an index of every 4th row's data, the rows and the data. Returns the next word's
     // address after it.
@@ -248,12 +272,13 @@ private:
             Put16(pattern + 2 * uint32_t(i), Get16(pattern + 2 * uint32_t((p.rows - 1) / 4)));
         }
         Put8(pattern + kPatternRows, uint8_t(p.rows));
+        const uint32_t start = PatternData(Build::k2003_09_01, pattern);
         for (size_t i = 0; i < data.size(); i++)
         {
-            Put8(pattern + kPatternData + uint32_t(i), data[i]);
+            Put8(start + uint32_t(i), data[i]);
         }
 
-        return (pattern + kPatternData + uint32_t(data.size()) + 3) & ~3u;
+        return (start + uint32_t(data.size()) + 3) & ~3u;
     }
 
     // Writes the player's tables: the waves of the vibrato, the periods of the notes from C-0, each octave's half the
@@ -416,7 +441,7 @@ void TestDetection()
     SEQLIB_CHECK(counted && counted_info.modules == std::vector<uint32_t>({first}));
     SEQLIB_CHECK(!found_other && other_error ==
                                      "found Krawall, but not a build that agbsf2 supports ($Id: Krawall $Id: "
-                                     "version.h 8 2005-04-21 12:24:45Z seb $): it reads the build of 2003/09/01");
+                                     "version.h 8 2005-04-21 12:24:45Z seb $)");
     SEQLIB_CHECK(!found_blank && blank_error.empty());
 }
 
@@ -719,8 +744,8 @@ void TestLoopStartsAtSecondPass()
     SEQLIB_REQUIRE_EQ(ReadMidi(sum.midi_path).Find(0x90).size(), 3u);
 }
 
-// A module can have up to 20 channels, and --tracks can name each of them. The channels from the 16th on share MIDI
-// channels with the first ones.
+// A module can have up to 32 channels, and --tracks can name each of them. In a module with more than 15, channels
+// share MIDI channels, and channels whose notes sound at once get MIDI channels of their own.
 void TestManyChannels()
 {
     Cart cart;
@@ -748,10 +773,61 @@ void TestManyChannels()
     SEQLIB_CHECK_EQ(last.tracks, 1);
     SEQLIB_CHECK_EQ(sixteen.tracks, 1);
 
-    // The 18th channel's E-4 is on key 64 of MIDI channel 3, after the 15 channels that the first 15 take, in each of
-    // the loop's two passes.
-    const auto notes = ReadMidi(every.midi_path).Find(0x92);
+    // The 18th channel's E-4 sounds at once with the first channel's note. The 18th channel therefore takes a MIDI
+    // channel of its own: channel 16, after those of the first 14 channels. Its note is on key 64 in each of the
+    // loop's two passes.
+    const auto notes = ReadMidi(every.midi_path).Find(0x9F);
     SEQLIB_CHECK(notes.size() == 2 && notes[0].bytes[1] == 64 && notes[1].bytes[1] == 64);
+    SEQLIB_CHECK_EQ(ReadMidi(every.midi_path).Find(0x90).size(), 2u);
+}
+
+// Two channels whose notes never sound at once share a MIDI channel. A MIDI channel's program and controllers act on
+// all its notes. Each note of a shared MIDI channel therefore sets them again, and the tracks don't set them at the
+// start.
+void TestSharedMidiChannel()
+{
+    // 14 channels hold looping notes. Channels 15 and 16 play the sample that doesn't loop, an octave up, at rows 0 and
+    // 3. Each note ends before the other starts.
+    std::vector<Cell> cells;
+    for (int c = 0; c < 14; c++)
+    {
+        cells.push_back({0, c, 49, 1});
+    }
+    cells.push_back({0, 14, 61, 2});
+    cells.push_back({3, 15, 61, 2, -1, kPan, 0x20});
+    Cart cart;
+    cart.Module(16, 6, cells);
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+    ConvertSettings opt;
+    opt.out_dir = test::g_temp.string();
+    opt.base_name = "krawall_shared";
+
+    const SongReport report = ConvertSong(rom, info, 0, opt, nullptr);
+
+    SEQLIB_CHECK(report.ok);
+    SEQLIB_CHECK(report.warnings.empty());
+    const test::MidiEvents midi = ReadMidi(report.midi_path);
+    const std::vector<std::string> names = seqlib::midi::TrackNames(midi);
+    SEQLIB_CHECK_EQ(midi.Find(0x9F).size(), 4u);
+    for (const char* name : {"Channel 15", "Channel 16"})
+    {
+        const size_t t = size_t(std::find(names.begin(), names.end(), name) - names.begin());
+        SEQLIB_REQUIRE(t < midi.tracks.size());
+        uint64_t note = 0;
+        uint64_t program = 0;
+        uint64_t expression = 0;
+        int programs = 0;
+        for (const seqlib::midi::Event& e : midi.tracks[t].events)
+        {
+            note = (e.bytes[0] == 0x9F && !note) ? e.tick : note;
+            programs += e.bytes[0] == 0xCF ? 1 : 0;
+            program = (e.bytes[0] == 0xCF && !program) ? e.tick : program;
+            expression = (e.bytes[0] == 0xBF && e.bytes[1] == 11 && !expression) ? e.tick : expression;
+        }
+        SEQLIB_CHECK(note > 0 && program == note && expression == note);
+        SEQLIB_CHECK_EQ(programs, 2);
+    }
 }
 
 // --dump lists the header, the orders and the rows, --trace gives the records that change each frame, and Music names
@@ -847,6 +923,62 @@ void TestLoopingJingleMode()
                               [](const std::string& line) { return line.find("jingle") != std::string::npos; }));
 }
 
+// The entries of the game's table of what it plays come first, each in its mode, without the entry that repeats one.
+// The module that no entry plays follows. The entry in song mode without the loop bit plays its module once and
+// converts without loop markers. The log names the table and the entry whose mode doesn't loop.
+void TestPlayTable()
+{
+    Cart cart;
+    const uint32_t looped = cart.Module(1, 4, {{0, 0, 49, 1}});
+    const uint32_t once = cart.Module(1, 4, {{0, 0, 49, 1}});
+    const uint32_t unplayed = cart.Module(1, 4, {{0, 0, 49, 1}});
+    cart.PlayTable({{once, kModeSong, 0}, {looped, kModeLoop, 0}, {once, kModeSong, 0}});
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+    ConvertSettings opt;
+    opt.out_dir = test::g_temp.string();
+    opt.base_name = "krawall_play_table";
+
+    const SongReport first = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport second = ConvertSong(rom, info, 1, opt, nullptr);
+
+    SEQLIB_CHECK(
+        info.songs ==
+        (std::vector<ModuleSong>{{once, -1, false, kModeSong}, {looped, -1, false, kModeLoop}, {unplayed, -1, false}}));
+    const auto logged = [&info](const std::string& line)
+    {
+        return std::find(info.log.begin(), info.log.end(), line) != info.log.end();
+    };
+    SEQLIB_CHECK(logged("the game's table of what it plays: 0x08002800 (3 entries)"));
+    SEQLIB_CHECK(logged("songs whose mode doesn't loop: 0"));
+    SEQLIB_REQUIRE(first.ok && second.ok);
+    SEQLIB_CHECK(first.loop_start < 0 && first.loop_end < 0 && second.loop_end > 0);
+    SEQLIB_CHECK_EQ(ReadMidi(first.midi_path).Find(0x90).size(), 1u);
+}
+
+// krapPlay()'s mode 0 plays a module once. An entry in that mode doesn't end the game's table of what it plays.
+void TestPlayTableModeZero()
+{
+    Cart cart;
+    const uint32_t once = cart.Module(1, 4, {{0, 0, 49, 1}});
+    const uint32_t looped = cart.Module(1, 4, {{0, 0, 49, 1}});
+    cart.PlayTable({{once, 0, 0}, {looped, kModeLoop, 0}});
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+    ConvertSettings opt;
+    opt.out_dir = test::g_temp.string();
+    opt.base_name = "krawall_mode_zero";
+
+    const SongReport first = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport second = ConvertSong(rom, info, 1, opt, nullptr);
+
+    SEQLIB_CHECK(info.songs == (std::vector<ModuleSong>{{once, -1, false, 0}, {looped, -1, false, kModeLoop}}));
+    SEQLIB_CHECK(std::find(info.log.begin(), info.log.end(), "songs whose mode doesn't loop: 0") != info.log.end());
+    SEQLIB_REQUIRE(first.ok && second.ok);
+    SEQLIB_CHECK(first.loop_start < 0 && first.loop_end < 0 && second.loop_end > 0);
+    SEQLIB_CHECK_EQ(ReadMidi(first.midi_path).Find(0x90).size(), 1u);
+}
+
 // A sample of 20 points that loops forwards over its last 6 gets its loop repeated 6 times: 36 points, the first length
 // of kMinLoop points or more.
 void TestShortLoop()
@@ -882,9 +1014,12 @@ void RunTests()
     TestBars();
     TestLoopStartsAtSecondPass();
     TestManyChannels();
+    TestSharedMidiChannel();
     TestMusic();
     TestJingles();
     TestLoopingJingleMode();
+    TestPlayTable();
+    TestPlayTableModeZero();
     TestShortLoop();
 }
 

@@ -80,13 +80,19 @@ constexpr BankProgram NumberedPreset(int number)
 // loop's start keeps the settings that the loop's end left. The writer writes each setting again from the first tick
 // that it reaches at or after the loop's start. SetProgram(), SetLevels() and SetBend() call Reach() with their tick
 // first.
+//
+// Tracks can share a MIDI channel. Their settings then act on each other's notes. A writer for such a track starts
+// with the settings that the tracks share alone: the volume, reverb, chorus and bend range. It writes the program, pan,
+// expression and bend again for each note.
 class ChannelWriter
 {
 public:
     // Starts `track` on MIDI channel `channel` with program `program`. `preset` is the bank and program number that the
     // program plays. `range` is the bend range in semitones, or 0 for a track without bends. `loop_start` is the tick
-    // of the loop's start, or 0 if the song doesn't loop or loops from its start.
-    ChannelWriter(MidiTrack& track, int channel, int program, BankProgram preset, int range, uint32_t loop_start);
+    // of the loop's start, or 0 if the song doesn't loop or loops from its start. `shared` is set if other tracks use
+    // the MIDI channel too. They have to have the same bend range.
+    ChannelWriter(MidiTrack& track, int channel, int program, BankProgram preset, int range, uint32_t loop_start,
+                  bool shared = false);
 
     // Reaches tick `at`. On the first call at or after the loop's start, the writer clears its record of the settings.
     void Reach(uint32_t at);
@@ -102,6 +108,7 @@ public:
     void SetBend(uint32_t at, double semitones);
 
     // Writes a note on `key` at full velocity from tick `on` to tick `off`. The expression gives the note's loudness.
+    // For a shared MIDI channel, the writer then clears its record of the settings.
     void Note(uint32_t on, uint32_t off, int key);
 
 private:
@@ -109,6 +116,7 @@ private:
     int channel_;
     int range_;
     uint32_t loop_start_;
+    bool shared_;
     bool before_loop_;
     int program_; // -1 from the loop's start to the next SetProgram()
     int bank_;    // the bank of `program_`'s preset

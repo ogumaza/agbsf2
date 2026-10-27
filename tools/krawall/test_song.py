@@ -40,7 +40,43 @@ class Game:
     instrument_literals = (0x08037CBC,)  # the player's literal that gives the table of instruments, which is empty
 
 
-GAMES = {b'BDGE': Game}
+class EverythingOrNothing:
+    """BJBE (007: Everything or Nothing): build 1.4 of player.c."""
+    samples = 0x08251864
+    sample_literals = (0x0803DB68, 0x0803DDF0, 0x0803E72C)
+    instrument_literals = (0x0803DB64,)
+
+
+class Build1_2_2_17:
+    """A homebrew game with build 1.2.2.17 of player.c, and no game code."""
+    samples = 0x080373B8
+    sample_literals = (0x08004908, 0x08004B90, 0x080054CC)
+    instrument_literals = (0x08004904,)
+
+
+class Build1_2_2_15:
+    """A game with build 1.2.2.15 of player.c."""
+    samples = 0x087BAE54
+    sample_literals = (0x08014A50, 0x08014CC4, 0x080155E0)
+    instrument_literals = (0x08014A4C,)
+
+
+class RacingFever:
+    """BRWP (Racing Fever): build 1.2.2.14 of player.c."""
+    samples = 0x08056C84
+    sample_literals = (0x08004D50, 0x08004FC4, 0x080058E4)
+    instrument_literals = (0x08004D4C,)
+
+
+class Build1_2_2_10:
+    """A homebrew game with build 1.2.2.10 of player.c."""
+    samples = 0x0802DD18
+    sample_literals = (0x08009954, 0x08009BC8, 0x0800A4E8)
+    instrument_literals = (0x08009950,)
+
+
+GAMES = {b'BDGE': Game, b'BJBE': EverythingOrNothing, b'BRWP': RacingFever, b'MGBA': Build1_2_2_10,
+         b'0000': Build1_2_2_15, bytes(4): Build1_2_2_17}
 
 # The effects of the effect column.
 SPEED, BPM, SPEED_BPM, JUMP, BREAK = 1, 2, 3, 4, 5

@@ -10,15 +10,31 @@ namespace agbsf2
 {
 
 ChannelWriter::ChannelWriter(MidiTrack& track, int channel, int program, BankProgram preset, int range,
-                             uint32_t loop_start)
+                             uint32_t loop_start, bool shared)
     : track_(track),
       channel_(channel),
       range_(range),
       loop_start_(loop_start),
+      shared_(shared),
       before_loop_(loop_start > 0),
       program_(program),
       bank_(preset.bank)
 {
+    // A writer on a shared MIDI channel leaves the program, pan, expression and bend to each note.
+    if (shared_)
+    {
+        track_.Control(0, channel_, cc::kVolume, 127);
+        track_.Control(0, channel_, cc::kReverb, 0);
+        track_.Control(0, channel_, cc::kChorus, 0);
+        if (range_)
+        {
+            track_.BendRange(0, channel_, range_);
+        }
+        program_ = -1;
+        pan_ = expression_ = bend_ = -1;
+        return;
+    }
+
     track_.Bank(0, channel_, preset.bank);
     track_.Program(0, channel_, preset.program);
     track_.Control(0, channel_, cc::kVolume, 127);
@@ -95,6 +111,11 @@ void ChannelWriter::Note(uint32_t on, uint32_t off, int key)
 {
     track_.NoteOn(on, channel_, key, 127);
     track_.NoteOff(off, channel_, key);
+    if (shared_)
+    {
+        program_ = -1;
+        pan_ = expression_ = bend_ = -1;
+    }
 }
 
 } // namespace agbsf2

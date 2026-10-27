@@ -42,7 +42,7 @@ Sf2File InstrumentSet::Build(const Rom& rom, const DriverInfo& info) const
             s.original_key = uint8_t(kRootKey);
 
             const uint32_t data = header + kSamplePoints;
-            const uint32_t end = rom.U32(header + kSampleEnd);
+            const uint32_t end = SampleEnd(rom, info.build, header);
             const uint32_t length = end > data && rom.Contains(data, end - data) ? end - data : 0;
             for (uint32_t i = 0; i < length; i++)
             {

@@ -45,7 +45,7 @@ struct Overrides
 struct ConvertSettings
 {
     int loops = 2;                    // times a looping song's loop is played
-    uint32_t track_mask = 0xFFFFFFFF; // tracks to include (bit t = track t; Krawall has 20, the others 16 at most)
+    uint32_t track_mask = 0xFFFFFFFF; // tracks to include (bit t = track t; Krawall has 32, the others 16 at most)
     bool voice_channels = false;      // a MIDI channel for each of the driver's sound channels, where it can
     bool psg_exclusive = false;       // an exclusive class for each PSG channel on the slow releases (MP2K)
     bool frame_timing = false;        // each event on the frame the driver plays it in, rather than on the beat

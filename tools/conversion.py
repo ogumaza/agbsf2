@@ -58,13 +58,14 @@ def frame_timed(tool, rom, driver, folder, songs=None):
     return dict(midi_files(folder, driver))
 
 
-def read_timing(path):
+def read_timing(path, by_track=False):
     """Returns a MIDI file's notes on each channel, as (start, end, key, bank, program), and its changes of each
     controller, pitch bend and program on each channel, as {(channel, what): [(time, value)]}, with times in seconds.
-    Repeated values, such as settings restored at a loop start, do not count as changes."""
+    Repeated values, such as settings restored at a loop start, do not count as changes. With `by_track`, each track's
+    name stands for the channel, for a file whose tracks share MIDI channels."""
     data = Path(path).read_bytes()
     division = struct.unpack('>H', data[12:14])[0]
-    events = []
+    events, names = [], {}
     pos, track = 14, 0
     while pos < len(data):
         size = struct.unpack('>I', data[pos + 4:pos + 8])[0]
@@ -95,6 +96,8 @@ def read_timing(path):
                         break
                 if kind == 0x51:
                     events.append((tick, 0, track, index, 'tempo', 0, int.from_bytes(body[i:i + 3], 'big')))
+                elif kind == 0x03:
+                    names[track] = body[i:i + length].decode('latin-1')
                 i += length
                 continue
             kind, ch = status & 0xF0, status & 0x0F
@@ -126,8 +129,9 @@ def read_timing(path):
         return s + (t - at) * tempo / division / 1e6
 
     notes, changes, sounding, bank, program = {}, {}, {}, {}, {}
-    for tick, _, _, _, kind, ch, value in events:
+    for tick, _, track, _, kind, ch, value in events:
         t = seconds(tick)
+        ch = names.get(track, track) if by_track else ch
         if kind == 'on':
             # Retriggering a sounding key ends the previous note, as it does in MIDI players.
             if (ch, value) in sounding:

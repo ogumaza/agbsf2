@@ -49,13 +49,6 @@ constexpr double kTuningCents = 3;
 // The longest conversion, in seconds.
 constexpr uint64_t kMaxSeconds = 60 * 60;
 
-// Maps module channel `c` to MIDI channels in order, skipping the drum channel, and from the 16th module channel on,
-// reuses them from the beginning.
-int MidiChannel(int c)
-{
-    return MelodicChannel(c % 15);
-}
-
 // A channel's mixer channel after a tick.
 struct Voice
 {
@@ -562,6 +555,99 @@ Timing MakeTiming(const Simulation& sim)
     return t;
 }
 
+// The MIDI channels other than the drum channel.
+constexpr size_t kMelodicChannels = 15;
+
+// Returns the mixer's samples in which the notes of two channels sound at once. A channel plays one note at a time, so
+// each list is in order and its notes don't overlap.
+uint64_t Overlap(const Simulation& sim, const std::vector<Note>& a, const std::vector<Note>& b)
+{
+    uint64_t total = 0;
+    size_t i = 0;
+    size_t j = 0;
+    while (i < a.size() && j < b.size())
+    {
+        const uint64_t start = sim.ticks[std::max(a[i].on, b[j].on)].time;
+        const uint64_t end = sim.ticks[std::min(a[i].off, b[j].off)].time;
+        total += end > start ? end - start : 0;
+        if (a[i].off < b[j].off)
+        {
+            i++;
+        }
+        else
+        {
+            j++;
+        }
+    }
+
+    return total;
+}
+
+// Returns each channel's MIDI channel, from the channels other than the drum channel. In a module with up to 15
+// channels, channel c takes the c-th. In a module with more, channels share them. A MIDI channel's controllers and bend
+// apply to all its notes. The sharing therefore follows the notes. The 15 channels whose notes last longest take one
+// each, in the channels' order. Each other channel then takes, longest first, the one whose notes it overlaps least. A
+// tie goes to the lower channel.
+std::vector<int> MidiChannels(const Simulation& sim, const std::vector<std::vector<Note>>& notes)
+{
+    std::vector<int> midi(notes.size());
+    if (notes.size() <= kMelodicChannels)
+    {
+        for (size_t c = 0; c < notes.size(); c++)
+        {
+            midi[c] = MelodicChannel(int(c));
+        }
+        return midi;
+    }
+
+    std::vector<uint64_t> length(notes.size());
+    for (size_t c = 0; c < notes.size(); c++)
+    {
+        for (const Note& n : notes[c])
+        {
+            length[c] += sim.ticks[n.off].time - sim.ticks[n.on].time;
+        }
+    }
+
+    std::vector<size_t> order(notes.size());
+    std::iota(order.begin(), order.end(), size_t(0));
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return length[a] > length[b]; });
+
+    std::vector<size_t> first(order.begin(), order.begin() + kMelodicChannels);
+    std::sort(first.begin(), first.end());
+    std::vector<std::vector<size_t>> groups;
+    for (size_t c : first)
+    {
+        midi[c] = MelodicChannel(int(groups.size()));
+        groups.push_back({c});
+    }
+
+    for (size_t k = kMelodicChannels; k < order.size(); k++)
+    {
+        const size_t c = order[k];
+        size_t best = 0;
+        uint64_t least = UINT64_MAX;
+        for (size_t g = 0; g < groups.size(); g++)
+        {
+            uint64_t overlap = 0;
+            for (size_t other : groups[g])
+            {
+                overlap += Overlap(sim, notes[c], notes[other]);
+            }
+            if (overlap < least)
+            {
+                best = g;
+                least = overlap;
+            }
+        }
+
+        midi[c] = MelodicChannel(int(best));
+        groups[best].push_back(c);
+    }
+
+    return midi;
+}
+
 // Writes the time signature at `tick` for a bar of `ticks` MIDI ticks. Full bars use 4/4 or 12/8. A shorter bar counts
 // the largest note value that divides it evenly, from quarter notes in 4/4 or eighth notes in 12/8 down to 128th notes.
 void BarSignature(MidiTrack& conductor, uint32_t tick, size_t ticks, const Meter& meter)
@@ -576,9 +662,11 @@ void BarSignature(MidiTrack& conductor, uint32_t tick, size_t ticks, const Meter
     conductor.TimeSignature(tick, int(ticks / note), pow2);
 }
 
-// Writes the MIDI file: a conductor track with the tempo map, then a track for each channel that plays notes.
+// Writes the MIDI file: a conductor track with the tempo map, then a track for each channel that plays notes, on the
+// MIDI channel that `channels` gives it.
 bool WriteMidi(const std::string& path, const std::string& title, const std::string& about, const Simulation& sim,
-               const Timing& timing, const std::vector<std::vector<Note>>& notes, std::string& error)
+               const Timing& timing, const std::vector<std::vector<Note>>& notes, const std::vector<int>& channels,
+               std::string& error)
 {
     const Plan& plan = sim.plan;
     const uint32_t end = timing.ticks[plan.end];
@@ -627,22 +715,32 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
         }
 
         MidiTrack& mt = midi.AddTrack();
-        const int ch = MidiChannel(int(c));
+        const int ch = channels[c];
         mt.Name("Channel " + std::to_string(c + 1));
         mt.SetEnd(end);
 
-        // The pitch bend range covers the channel's largest bend.
+        // The pitch bend range covers the largest bend of the channels on the MIDI channel.
         double widest = 0;
-        for (const Note& n : list)
+        bool shared = false;
+        for (size_t other = 0; other < notes.size(); other++)
         {
-            for (const Sound& s : n.sounds)
+            if (channels[other] != ch || notes[other].empty())
             {
-                widest = std::max(widest, std::fabs(s.bend));
+                continue;
+            }
+
+            shared = shared || other != c;
+            for (const Note& n : notes[other])
+            {
+                for (const Sound& s : n.sounds)
+                {
+                    widest = std::max(widest, std::fabs(s.bend));
+                }
             }
         }
         const int range = BendRangeFor(widest, kSmallBend);
 
-        ChannelWriter writer(mt, ch, list[0].program, NumberedPreset(list[0].program), range, loop_start);
+        ChannelWriter writer(mt, ch, list[0].program, NumberedPreset(list[0].program), range, loop_start, shared);
         for (const Note& n : list)
         {
             const uint32_t on = timing.ticks[n.on];
@@ -708,10 +806,22 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
         }
     }
 
-    if (sim.channels > 15)
+    // In a module with more than 15 channels, channels share MIDI channels. Only notes that sound at once matter.
+    const std::vector<int> midi = MidiChannels(sim, notes);
+    for (size_t a = 0; a < notes.size(); a++)
     {
-        report.warnings.push_back("the module has " + std::to_string(sim.channels) +
-                                  " channels, so the 16th and later share MIDI channels with the first");
+        for (size_t b = a + 1; b < notes.size(); b++)
+        {
+            const uint64_t overlap = midi[a] == midi[b] ? Overlap(sim, notes[a], notes[b]) : 0;
+            if (overlap > 0)
+            {
+                char text[128];
+                std::snprintf(text, sizeof text,
+                              "channels %zu and %zu share a MIDI channel, and their notes overlap for %.1f s", a + 1,
+                              b + 1, double(overlap) / sim.mix_rate);
+                report.warnings.push_back(text);
+            }
+        }
     }
 
     const Timing timing = MakeTiming(sim);
@@ -751,7 +861,7 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
 
     std::string error;
     report.midi_path = stem + ".mid";
-    if (!WriteMidi(report.midi_path, title, about, sim, timing, notes, error))
+    if (!WriteMidi(report.midi_path, title, about, sim, timing, notes, midi, error))
     {
         report.warnings.push_back(error);
         return report;
