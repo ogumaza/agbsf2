@@ -93,6 +93,12 @@ public:
     // Returns the MIDI key for a note on the wave channel using `wave`.
     int WaveKey(int wave, int note) const;
 
+    // Each returns the tuning of the zones of the square channels, or of the wave channel's notes using `wave`: how far
+    // the driver's frequency table puts each note from the equal temperament that the samples play from note 0 on. The
+    // Dungeon Dice Monsters revision bends each note to its frequency setting, and its zones keep equal temperament.
+    KeyTuning SquareTuning() const;
+    KeyTuning WaveTuning(int wave) const;
+
 private:
     // The root key of a DirectSound sample, and whether a clear pitch was found for it.
     struct Pitch
@@ -118,6 +124,9 @@ private:
 
     // Fills `steps` with the 32 steps of the driver's wave table row for `wave` at `volume`.
     void WaveRow(int wave, int volume, int (&steps)[32]) const;
+
+    // Returns the tuning of each key for notes whose note 0 plays on key `note0_key` (see SquareTuning()).
+    KeyTuning NoteTuning(int note0_key) const;
 
     const Rom& rom_;
     const DriverInfo& info_;

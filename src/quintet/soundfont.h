@@ -68,10 +68,10 @@ public:
     int PcmSample(const PcmSound& sound);
 
     // Each returns the name and zones of a square or wave instrument whose notes switch from duty or wave shape
-    // `first` to `second` after `frames` frames (PsgSamples::SquareInstrument() and WaveInstrument()). `shapes` holds
-    // the wave shapes by number.
-    NamedZones SquareInstrument(int first, int frames, int second);
-    NamedZones WaveInstrument(const WaveShapes& shapes, int first, int frames, int second);
+    // `first` to `second` after `frames` frames (PsgSamples::SquareInstrument() and WaveInstrument()). The zones follow
+    // `tuning`. `shapes` holds the wave shapes by number.
+    NamedZones SquareInstrument(int first, int frames, int second, const KeyTuning& tuning);
+    NamedZones WaveInstrument(const WaveShapes& shapes, int first, int frames, int second, const KeyTuning& tuning);
 
     // Adds an instrument with `zones`. Returns its index.
     int AddInstrument(const std::string& name, std::vector<sf2::Zone> zones);

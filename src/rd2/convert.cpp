@@ -54,6 +54,9 @@ constexpr int kMinMidiTempo = 4;
 // A bend that no pitch has, for a note whose bend is unknown when two passes are compared.
 constexpr double kNoBend = 1e9;
 
+// The envelope level at which a sample voice plays at its full volume.
+constexpr double kFullEnvelope = 0x7FFF;
+
 // Returns how far a voice's pitch in the frame is from its note's, in semitones. A square or wave voice's pitch is a
 // frequency setting, whose period is 2048 less the setting. A noise voice has none.
 double Semitones(const Voice& v)
@@ -72,12 +75,14 @@ double Semitones(const Voice& v)
 
 // A frame's results for the conversion. `volume` holds each PSG channel's volume at the frame's start, from 0 to 15, or
 // -1 when the channel is off. The wave channel's volume is 15 times the share of its full level that NR32 sets.
+// `envelope` holds the share of its full level that each sample voice's envelope gives it in the frame.
 struct FrameData
 {
     int tempo = kStartTempo;                // the units the frame lasts
     std::array<double, kPlayerTracks> bend; // semitones from its note of each track's newest voice, or NaN for none
     std::array<double, kPsgVoices> volume;
     uint8_t nr51 = 0; // the PSG channels' sides after the frame
+    std::array<double, kSampleVoices> envelope{};
 };
 
 // The wave voice's PSG channel. The squares come before it, and the noise after it.
@@ -328,12 +333,28 @@ std::vector<std::string> SimulationWarnings(const Sequencer& seq, const std::vec
     return warnings;
 }
 
-// Runs the model's next frame, and records the frame's results, the PSG channels' volumes and the tick after it.
+// Records the share of its full level that each sample voice's envelope gives it in frame `d` (see FrameData). The
+// envelope stops at the release, and a released voice keeps the share it had there. A free voice gets none.
+void RecordEnvelopes(const Sequencer& seq, FrameData& d)
+{
+    for (size_t v = 0; v < size_t(kSampleVoices); v++)
+    {
+        const Voice& x = seq.Voices()[v];
+        if (x.state != kVoiceFree)
+        {
+            d.envelope[v] = std::clamp(x.level / kFullEnvelope, 0.0, 1.0);
+        }
+    }
+}
+
+// Runs the model's next frame, and records the frame's results, the PSG channels' volumes, the sample voices'
+// envelopes and the tick after it.
 void StepFrame(Sequencer& seq, PsgChannels& psg, Simulation& sim)
 {
     seq.Step();
     sim.frames.push_back(RecordFrame(seq));
     psg.Frame(seq, sim.frames.back());
+    RecordEnvelopes(seq, sim.frames.back());
     sim.frame_ticks.push_back(seq.Elapsed());
 }
 
@@ -452,8 +473,8 @@ struct ZoneSound
 {
     bool operator<(const ZoneSound& o) const
     {
-        return std::tie(type, sound, envelope, release, root, coarse, pan, own_pan) <
-               std::tie(o.type, o.sound, o.envelope, o.release, o.root, o.coarse, o.pan, o.own_pan);
+        return std::tie(type, sound, envelope, release, root, coarse, pan, own_pan, legato) <
+               std::tie(o.type, o.sound, o.envelope, o.release, o.root, o.coarse, o.pan, o.own_pan, o.legato);
     }
 
     bool operator==(const ZoneSound& o) const
@@ -469,6 +490,7 @@ struct ZoneSound
     int coarse = 0;       // semitones added to it
     int pan = 0;          // the SoundFont's pan, from -500 to 500
     bool own_pan = false; // a drum's: the track's pan doesn't move it
+    bool legato = false;  // a sample's zone in legato, with only the release (see PlaysLegato())
 };
 
 // Returns the pan of a zone that plays a drum at pan `pan` on a voice of type `type`. The driver holds a sample voice's
@@ -500,6 +522,7 @@ struct Note
     bool open = true;
     int psg = -1;         // a PSG voice's channel, whose volume the note follows, or -1
     uint32_t psg_end = 0; // the frame after the last that the note's CC11 follows (see NoteMaker::EndSound())
+    int legato = -1;      // the sample voice of a note in legato, whose envelope the note's CC11 follows, or -1
 };
 
 // Returns true if a voice of type `type` plays at its PSG channel's volume: a square's, the wave's or the noise's. The
@@ -517,6 +540,13 @@ uint64_t NoteFrameTick(const Simulation& sim, const Note& n, uint32_t f)
     return n.on + (sim.frame_ticks[f] - sim.frame_ticks[n.frame]);
 }
 
+// Returns true if a note is a sample note of a track in legato. The track's voice keeps its envelope from note to note.
+// The note plays on a zone whose envelope has only the release. Its CC11 follows the voice's envelope.
+bool PlaysLegato(const Event& e)
+{
+    return e.legato && e.type == kSampleType;
+}
+
 // Returns a note's velocity in the MIDI file. A PSG voice's note plays at full velocity. Its CC11 follows the channel's
 // volume. The volume holds the velocity. Another note plays its velocity divided by its track's `scale` (see
 // VelocityScales()).
@@ -530,6 +560,7 @@ struct Program
 {
     uint16_t bank = 0;
     uint16_t instrument = 0;
+    bool legato = false;           // the instrument's notes in legato (see PlaysLegato())
     std::map<int, ZoneSound> keys; // the sound of each key its notes play
 };
 
@@ -543,7 +574,8 @@ public:
     }
 
     // Works out the notes, the end of each, and the programs they play. A PSG voice's note holds its channel until
-    // another note takes the channel. The note lasts as long as the channel sounds in that time (see EndSound()).
+    // another note takes the channel. The note lasts as long as the channel sounds in that time (see EndSound()). A
+    // sample note in legato lasts until its voice plays another note, or until the voice's release.
     std::vector<Note> Make()
     {
         std::vector<Note> notes;
@@ -604,6 +636,10 @@ public:
                 {
                     n.psg = channel;
                     holder[size_t(channel)] = int(notes.size());
+                }
+                else if (channel < 0 && PlaysLegato(e))
+                {
+                    n.legato = e.voice;
                 }
                 by_id[e.id] = notes.size();
                 notes.push_back(n);
@@ -722,7 +758,7 @@ private:
         // A sample instrument without drums or a sample for each key gets a zone for every key. A note below the
         // driver's tables replaces the zone that fills its key (see BelowTables()).
         const bool fill = e.type == kSampleType && !lk.drum && !lk.key_sample;
-        const size_t p = FindProgram(e.bank, e.instrument, fill);
+        const size_t p = FindProgram(e.bank, e.instrument, PlaysLegato(e), fill);
         const auto [at, added] = programs_[p].keys.emplace(key, *z);
         if (!added && fill && BelowTables(uint8_t(key), RegionTuning(rom_, lk.region)))
         {
@@ -756,7 +792,7 @@ private:
         if (e.type == kSampleType && !fixed)
         {
             key = e.key;
-            ZoneSound z = SampleZone(e.sample, lk);
+            ZoneSound z = SampleZone(e.sample, lk, PlaysLegato(e));
             if (BelowTables(e.key, RegionTuning(rom_, lk.region)))
             {
                 z.root = key;
@@ -772,10 +808,11 @@ private:
         z.type = e.type;
 
         // The region's envelope and release set a PSG voice's volume. The notes' CC11 follows the volume, and the zone
-        // plays at a constant level.
+        // plays at a constant level. A sample's zone in legato keeps only the release (see PlaysLegato()).
+        z.legato = PlaysLegato(e);
         if (!FollowsVolume(e.type))
         {
-            z.envelope = lk.envelope;
+            z.envelope = z.legato ? 0 : lk.envelope;
             z.release = RegionRelease(rom_, region);
         }
         z.own_pan = lk.drum;
@@ -843,13 +880,15 @@ private:
     }
 
     // Returns the zone of a sample region that plays `sample` at the region's tuning. The regions of drums, and of
-    // instruments with a sample for each key, play at a fixed pitch instead.
-    ZoneSound SampleZone(uint32_t sample, const Lookup& lk) const
+    // instruments with a sample for each key, play at a fixed pitch instead. A zone in legato has only the release (see
+    // PlaysLegato()).
+    ZoneSound SampleZone(uint32_t sample, const Lookup& lk, bool legato) const
     {
         const uint8_t tuning = RegionTuning(rom_, lk.region);
         ZoneSound z;
         z.sound = sample;
-        z.envelope = lk.envelope;
+        z.legato = legato;
+        z.envelope = legato ? 0 : lk.envelope;
         z.release = RegionRelease(rom_, lk.region);
         z.root = std::clamp(int(tuning), 0, 127);
         z.coarse = z.root - tuning;
@@ -857,18 +896,20 @@ private:
         return z;
     }
 
-    // Returns the index of the program for an instrument of a bank, after adding the program if it's new. The programs
-    // come in the order the sequence first plays them. A new program gets a zone for every key if `fill` is set.
-    size_t FindProgram(uint16_t bank, uint16_t instrument, bool fill)
+    // Returns the index of the program for an instrument of a bank, after adding the program if it's new. The notes
+    // in legato get a separate program (see PlaysLegato()). The programs come in the order the sequence first plays
+    // them. A new program gets a zone for every key if `fill` is set.
+    size_t FindProgram(uint16_t bank, uint16_t instrument, bool legato, bool fill)
     {
         size_t p = 0;
-        while (p < programs_.size() && (programs_[p].bank != bank || programs_[p].instrument != instrument))
+        while (p < programs_.size() &&
+               (programs_[p].bank != bank || programs_[p].instrument != instrument || programs_[p].legato != legato))
         {
             p++;
         }
         if (p == programs_.size())
         {
-            programs_.push_back({bank, instrument, {}});
+            programs_.push_back({bank, instrument, legato, {}});
             if (fill)
             {
                 FillKeys(programs_.back());
@@ -892,7 +933,7 @@ private:
             }
 
             const uint32_t sample = SampleAddress(rom_, info_, program.bank, rom_.U16(lk.region + 2));
-            program.keys.emplace(key, SampleZone(sample, lk));
+            program.keys.emplace(key, SampleZone(sample, lk, program.legato));
         }
     }
 
@@ -977,9 +1018,14 @@ std::vector<std::string> AddPresets(const Rom& rom, SoundfontBuilder& sf, const 
             zone.generators.push_back(sf2::Generator::Value(sf2::kSampleId, sample));
 
             // A sample's release takes a share of its level off each frame. A PSG voice plays at a constant level, and
-            // its notes' CC11 follows the channel's volume.
+            // its notes' CC11 follows the channel's volume. A sample in legato plays at a constant level until the
+            // release. Its notes' CC11 follows its voice's envelope.
             Sf2Envelope env;
-            if (z.type == kSampleType)
+            if (z.type == kSampleType && z.legato)
+            {
+                env.release = SampleRelease(z.release);
+            }
+            else if (z.type == kSampleType)
             {
                 env = EnvelopeFor(rom, z.envelope, SampleRelease(z.release));
             }
@@ -987,8 +1033,11 @@ std::vector<std::string> AddPresets(const Rom& rom, SoundfontBuilder& sf, const 
             zones.push_back(zone);
         }
 
+        // A SoundFont name holds 20 characters. The name of the preset of an instrument's notes in legato has "legato"
+        // in place of "instrument".
         char name[48];
-        std::snprintf(name, sizeof name, "Bank %u instrument %u", unsigned(program.bank), unsigned(program.instrument));
+        std::snprintf(name, sizeof name, "Bank %u %s %u", unsigned(program.bank),
+                      program.legato ? "legato" : "instrument", unsigned(program.instrument));
         sf.AddPreset(name, slots[p].bank, slots[p].program, sf.AddInstrument(name, std::move(zones)));
     }
 
@@ -1210,13 +1259,15 @@ std::array<double, kPlayerTracks> VelocityScales(Revision revision, const Levels
 }
 
 // A note's stretch of its track's CC11, from its note on until `end`. A PSG voice's note sets CC11 to the value of each
-// of its steps from the step's tick on. The steps follow the channel's volume (see PsgExpression()). Any other note has
-// no steps. It plays at its track's levels until its note off.
+// of its steps from the step's tick on. The steps follow the channel's volume (see PsgExpression()). A sample note in
+// legato sets CC11 to the track's levels times each of its shares, from the share's tick on. The shares follow its
+// voice's envelope (see PlaysLegato()). Any other note has neither. It plays at its track's levels until its note off.
 struct ExpressionSpan
 {
     uint64_t on = 0;
     uint64_t end = 0;
-    std::vector<std::pair<uint64_t, int>> steps; // (tick, CC11)
+    std::vector<std::pair<uint64_t, int>> steps;     // (tick, CC11)
+    std::vector<std::pair<uint64_t, double>> shares; // (tick, share of the track's levels)
 };
 
 // Returns the ticks at which a track's CC10 or CC11 can change: each of `records`, and each note on, step and end of
@@ -1236,6 +1287,10 @@ std::map<uint64_t, bool> LevelTicks(const std::vector<LevelChange>& records, con
         {
             ticks[step.first] = true;
         }
+        for (const auto& share : span.shares)
+        {
+            ticks[share.first] = true;
+        }
         ticks.emplace(span.end, false);
     }
 
@@ -1249,10 +1304,10 @@ std::map<uint64_t, bool> LevelTicks(const std::vector<LevelChange>& records, con
 // levels before the track's first change. With `psg`, the controllers follow the PSG's rule (see TrackControllers()).
 // CC11 plays the track's levels times `scale` (see VelocityScales()).
 //
-// If any of the track's notes is a PSG voice's, `spans` holds each of the notes' stretches of CC11, in the order of
-// their note ons. Otherwise it's empty, and CC11 follows the track's levels. At each tick, of the spans that hold the
-// tick, the one with the latest note on sets CC11. Where no span holds a tick, CC11 follows the track's levels. It
-// returns to them at the next level change, note on or step after a span's end.
+// If any of the track's notes is a PSG voice's or in legato, `spans` holds each of the notes' stretches of CC11, in the
+// order of their note ons. Otherwise it's empty, and CC11 follows the track's levels. At each tick, of the spans that
+// hold the tick, the one with the latest note on sets CC11. Where no span holds a tick, CC11 follows the track's
+// levels. It returns to them at the next level change, note on or step after a span's end.
 void WriteLevels(MidiTrack& mt, int c, Revision revision, bool psg, double scale, const Levels& start,
                  const std::vector<LevelChange>& changes, const std::vector<ExpressionSpan>& spans,
                  std::optional<uint64_t> loop)
@@ -1261,6 +1316,7 @@ void WriteLevels(MidiTrack& mt, int c, Revision revision, bool psg, double scale
 
     int cc10 = -1, cc11 = -1;
     int level11 = 0; // CC11 for the track's levels
+    Levels levels = start;
     bool again10 = loop.has_value(), again11 = loop.has_value();
     size_t next_record = 0, next_span = 0;
     std::vector<size_t> held;                     // the spans that hold the tick, in the order of their note ons
@@ -1272,6 +1328,7 @@ void WriteLevels(MidiTrack& mt, int c, Revision revision, bool psg, double scale
         if (next_record < records.size() && records[next_record].tick == tick)
         {
             const LevelChange& change = records[next_record++];
+            levels = change.levels;
             const bool write10 = looped && again10 && change.pan;
             again10 = again10 && !write10;
             int n10 = cc10 < 0 ? 64 : cc10;
@@ -1298,6 +1355,17 @@ void WriteLevels(MidiTrack& mt, int c, Revision revision, bool psg, double scale
                 k++;
             }
             n11 = steps[k].second;
+        }
+        else if (!held.empty() && !spans[held.back()].shares.empty())
+        {
+            const auto& shares = spans[held.back()].shares;
+            size_t& k = step_at[held.back()];
+            while (k + 1 < shares.size() && shares[k + 1].first <= tick)
+            {
+                k++;
+            }
+            int unused10 = 64;
+            TrackControllers(revision, levels, psg, scale * shares[k].second, unused10, n11);
         }
         else if (held.empty() && !returns)
         {
@@ -1437,10 +1505,15 @@ bool FirstPassRepeats(const Rom& rom, const DriverInfo& info, const Simulation& 
         int cc10 = 64, cc11 = 0;
         TrackControllers(info.revision, levels, psg[size_t(n.track)], scales[size_t(n.track)], cc10, cc11);
 
-        // A PSG voice's note starts at its channel's volume.
+        // A PSG voice's note starts at its channel's volume, and a sample note in legato at its voice's envelope.
         if (n.psg >= 0)
         {
             cc11 = NoteExpression(sim, info.revision, n, n.frame);
+        }
+        else if (n.legato >= 0)
+        {
+            const double share = sim.frames[n.frame].envelope[size_t(n.legato)];
+            TrackControllers(info.revision, levels, psg[size_t(n.track)], scales[size_t(n.track)] * share, cc10, cc11);
         }
 
         // A note's bend is its track's newest voice's in the frame it starts, which a voice that the note didn't take
@@ -1457,7 +1530,8 @@ bool FirstPassRepeats(const Rom& rom, const DriverInfo& info, const Simulation& 
 
 // Returns the stretches of CC11 of a track's notes (see ExpressionSpan) before `end`, in the order of their note ons. A
 // PSG voice's note gets a step at each frame in which its channel's volume changes, from its first frame to the one
-// after its sound ends (see NoteMaker::EndSound()). Returns none if no note is a PSG voice's.
+// after its sound ends (see NoteMaker::EndSound()). A sample note in legato gets a share at each frame in which its
+// voice's envelope changes, up to its note off. Returns none if no note is a PSG voice's or in legato.
 std::vector<ExpressionSpan> TrackSpans(const Simulation& sim, Revision revision, const std::vector<const Note*>& notes,
                                        uint64_t end)
 {
@@ -1480,6 +1554,18 @@ std::vector<ExpressionSpan> TrackSpans(const Simulation& sim, Revision revision,
                 }
             }
             steps = steps || !span.steps.empty();
+        }
+        else if (n->legato >= 0)
+        {
+            for (uint32_t f = n->frame; f < sim.frames.size() && NoteFrameTick(sim, *n, f) < span.end; f++)
+            {
+                const double share = sim.frames[f].envelope[size_t(n->legato)];
+                if (span.shares.empty() || span.shares.back().second != share)
+                {
+                    span.shares.emplace_back(NoteFrameTick(sim, *n, f), share);
+                }
+            }
+            steps = steps || !span.shares.empty();
         }
         spans.push_back(std::move(span));
     }

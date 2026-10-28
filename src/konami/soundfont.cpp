@@ -23,6 +23,10 @@ namespace agbsf2::konami
 namespace
 {
 
+// The notes of the driver's PSG frequency table, C2 to B8, and its entries for each note: one every 1/32 semitone.
+constexpr int kTableNotes = 84;
+constexpr int kEntriesPerNote = 32;
+
 // Returns the frequency of GB square note 0, from the first entry of the driver's frequency table, or C2 if there's no
 // usable entry.
 double SquareNoteZeroHz(const Rom& rom, const DriverInfo& info)
@@ -259,6 +263,37 @@ int SoundfontBuilder::WaveKey(int wave, int note) const
 
     // The wave channel plays its 32 steps at half the square channel's rate.
     return square_base_ - 12 + 12 * octaves + note;
+}
+
+KeyTuning SoundfontBuilder::SquareTuning() const
+{
+    return NoteTuning(square_base_);
+}
+
+KeyTuning SoundfontBuilder::WaveTuning(int wave) const
+{
+    return NoteTuning(WaveKey(wave, 0));
+}
+
+KeyTuning SoundfontBuilder::NoteTuning(int note0_key) const
+{
+    KeyTuning tuning{};
+    const uint32_t table = info_.psg_freq_table;
+    if (!table || info_.revision == Revision::kDungeonDiceMonsters ||
+        !rom_.Contains(table, 2 * kTableNotes * kEntriesPerNote))
+    {
+        return tuning;
+    }
+
+    // A note plays its table entry. The keys outside the table take the tuning of its nearest note.
+    for (int key = 0; key < int(tuning.size()); key++)
+    {
+        const int note = std::clamp(key - note0_key, 0, kTableNotes - 1);
+        const int setting = rom_.U16(table + 2 * uint32_t(note * kEntriesPerNote)) & 0x7FF;
+        tuning[size_t(key)] = SettingCents(setting, square_note0_hz_ * std::pow(2.0, note / 12.0));
+    }
+
+    return tuning;
 }
 
 void SoundfontBuilder::WaveRow(int wave, int volume, int (&steps)[32]) const

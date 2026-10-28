@@ -6,6 +6,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -49,6 +50,24 @@ inline double PsgSemitones(int from, int to)
 {
     return 12 * std::log2(double(2048 - from) / double(2048 - to));
 }
+
+// The tuning of a square or wave instrument's zones on each MIDI key, in cents: how far the game's frequency table puts
+// the key's pitch from the pitch that the zone's sample plays the key at.
+using KeyTuning = std::array<int, 128>;
+
+// Returns a tuning of `cents` on every key.
+KeyTuning UniformTuning(int cents);
+
+// Returns the runs of keys that `tuning` tunes alike, from key 0 to key 127, as the first and last key of each.
+std::vector<std::pair<int, int>> TuningRuns(const KeyTuning& tuning);
+
+// Returns the cents from `hz` up to the pitch of a square channel at frequency setting `setting` (0-2047), to the
+// nearest cent.
+int SettingCents(int setting, double hz);
+
+// Returns a copy of `zone` for each run of keys that `tuning` tunes alike, with the run's key range and the run's cents
+// (AddTuning()). The first of `zone`'s generators is its key range, and it has no tuning.
+std::vector<sf2::Zone> TunedZones(const sf2::Zone& zone, const KeyTuning& tuning);
 
 // The rate in Hz of a sample of the noise generator's whole sequence. The sample has a point for each of the
 // generator's steps. A zone tunes the sample to the generator's clock.
@@ -252,11 +271,12 @@ public:
     int Noise(Sf2File& file, const NoiseSound& sound);
 
     // Each returns the name and zones of an instrument whose notes switch from duty or wave shape `first` to `second`
-    // after `frames` frames (SwitchZones()). If `frames` is 0, the notes play `first` alone. The zones are tuned by
-    // `cents`. Both samples are added to `file` on first use. `shapes` holds the wave shapes by number.
-    NamedZones SquareInstrument(Sf2File& file, int first, int frames, int second, int cents = 0);
+    // after `frames` frames (SwitchZones()). If `frames` is 0, the notes play `first` alone. Each run of keys that
+    // `tuning` tunes alike gets separate zones with the run's cents. Both samples are added to `file` on first use.
+    // `shapes` holds the wave shapes by number.
+    NamedZones SquareInstrument(Sf2File& file, int first, int frames, int second, const KeyTuning& tuning);
     NamedZones WaveInstrument(Sf2File& file, const WaveShapes& shapes, int first, int frames, int second,
-                              int cents = 0);
+                              const KeyTuning& tuning);
 
 private:
     uint32_t noise_rate_;

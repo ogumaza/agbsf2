@@ -115,20 +115,20 @@ sf2::Zone RootKeyZone(int sample, bool loop, int lo, int hi, int root)
     return z;
 }
 
-std::vector<sf2::Zone> SwitchZones(int first, int frames, int second, int cents)
+std::vector<sf2::Zone> SwitchZones(int first, int frames, int second, int cents, int lo, int hi)
 {
     if (frames == 0)
     {
-        return {SampleZone(first, true, 0, 127, cents)};
+        return {SampleZone(first, true, lo, hi, cents)};
     }
 
     // The first sample holds for the frames and then falls silent. The second waits for them.
     const int time = sf2::ToTimecents(FrameSeconds(frames) * 1000.0);
-    sf2::Zone a = SampleZone(first, true, 0, 127, cents);
+    sf2::Zone a = SampleZone(first, true, lo, hi, cents);
     a.generators.insert(a.generators.begin() + 1, {sf2::Generator::Value(sf2::kHoldVolEnv, time),
                                                    sf2::Generator::Value(sf2::kDecayVolEnv, kInstant),
                                                    sf2::Generator::Value(sf2::kSustainVolEnv, kSilent)});
-    sf2::Zone b = SampleZone(second, true, 0, 127, cents);
+    sf2::Zone b = SampleZone(second, true, lo, hi, cents);
     b.generators.insert(b.generators.begin() + 1, sf2::Generator::Value(sf2::kDelayVolEnv, time));
 
     return {a, b};

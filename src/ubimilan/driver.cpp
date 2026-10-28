@@ -56,7 +56,7 @@ constexpr const char* kSoundInitCode =
     "49xx 200A Fxxx Fxxx 48xx";
 
 // Timer 0's reload in the one game known to have the driver, for a game whose sound init detection doesn't find.
-constexpr uint32_t kDefaultReload = 0xFDFF;
+constexpr uint32_t kDefaultReload = 0xFBFF;
 
 // Returns the only match of `code`, or 0 if it has none or more than one.
 uint32_t FindOnly(const Rom& rom, const char* code)
@@ -102,7 +102,8 @@ std::optional<uint32_t> FindBank(const Rom& rom)
     return std::nullopt;
 }
 
-// Returns Timer 0's reload as the sound init works it out: 0xFFFF less half the literal, rounded toward 0.
+// Returns Timer 0's reload as the sound init works it out: 0xFFFF less the whole part of the literal plus 0.5. The
+// init adds the double 0.5 to the literal with the game's floating-point library.
 std::optional<uint32_t> FindReload(const Rom& rom)
 {
     const uint32_t init = FindOnly(rom, kSoundInitCode);
@@ -114,13 +115,13 @@ std::optional<uint32_t> FindReload(const Rom& rom)
     const uint32_t bits = ThumbLiteral(rom, init + 0x44);
     float value = 0;
     std::memcpy(&value, &bits, sizeof value);
-    const double half = double(value) * 0.5;
-    if (!(half >= 1 && half < 0xFFFF))
+    const double sum = double(value) + 0.5;
+    if (!(sum >= 1 && sum < 0xFFFF))
     {
         return std::nullopt;
     }
 
-    return uint32_t(0xFFFF - uint32_t(half));
+    return uint32_t(0xFFFF - uint32_t(sum));
 }
 
 // Finds the PSG's tables from the code that reads them, and logs them.

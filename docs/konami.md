@@ -347,6 +347,13 @@ and a playing one goes on with the new setting. The older revisions read the
 table at the noise track's pitch, the note × 32, so vibrato and bends move the
 place they read, and a pitch below 0 reads the words before the table.
 
+**Pan changes in the Ultimate Masters revision.** The output that a pan change
+writes has pitch 0 unless vibrato is on. A square or wave note without vibrato
+drops to note 0 (C2) and stays there until the track's next note. On the noise
+track, a pan change writes entry 0 of the noise table. Entry 0 has the restart
+bit in each game checked. The channel therefore restarts with entry 0's
+setting. `agbsf2` does the same.
+
 ### Level of PSG against samples
 
 The hardware mixes a PSG channel at volume *v* (0-15) at the same level as a

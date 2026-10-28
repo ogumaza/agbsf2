@@ -22,6 +22,7 @@
 #include "gba.h"
 #include "midi.h"
 #include "music.h"
+#include "psg.h"
 #include "quintet/convert.h"
 #include "quintet/driver.h"
 #include "quintet/sequencer.h"
@@ -655,7 +656,7 @@ void TestWaveSwitch()
 {
     // A wave note that switches from a wave whose halves match (wave 0, made a 16-step saw played twice) to one whose
     // halves don't (wave 1, a square) plays both zones from the same root key, so the second sounds at the note's pitch
-    // and not an octave higher.
+    // and not an octave higher. Each run of keys that the frequency table tunes alike has a pair of zones.
     Cart cart(Revision::kA);
     for (uint32_t i = 0; i < 16; i++)
     {
@@ -682,12 +683,65 @@ void TestWaveSwitch()
     };
 
     SEQLIB_CHECK(HasGlobalZoneModulators(sf2));
-    SEQLIB_CHECK(sum.ok && zones == 2);
-    if (zones == 2)
+    SEQLIB_CHECK(sum.ok && zones >= 2 && zones % 2 == 0);
+    for (size_t z = first; z < first + zones; z++)
     {
-        SEQLIB_CHECK_EQ(root(first), 72);
-        SEQLIB_CHECK_EQ(root(first + 1), 72);
+        SEQLIB_CHECK_EQ(root(z), 72);
     }
+}
+
+void TestPsgTuning()
+{
+    // A square note plays its entry of the frequency table. The entries can depart from equal temperament. Entry 24,
+    // key 60's, is set about 19 cents flat. The zone that plays key 60 has the entry's tuning against middle C. The
+    // zone of key 72 has the tuning of entry 36. The cart works that entry out from equal temperament. A wave note on
+    // entry 24 with a wave of 32 steps plays an octave lower, on key 48. Its zone has the entry's tuning too.
+    Cart cart(Revision::kA);
+    const int flat = int(std::lround(2048 - 131072 / (kMiddleC * std::pow(2.0, -19 / 1200.0))));
+    const int octave = cart.ToRom().U16(kFrequencyTable + 72);
+    cart.Put16(kFrequencyTable + 48, uint16_t(flat));
+    cart.Songs({Song({Channel().Bytes({0x5E, 12, 0x2F, 1}).Note(0, 3).End()}),
+                Song({{0xFF}, {0xFF}, Channel().Bytes({0xDA, 0x01, 0x5E, 12}).Note(0, 3).End()})});
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+
+    const SongReport square = ConvertSong(rom, info, 0, TempSettings("psg_tuning"), nullptr);
+    const SongReport wave = ConvertSong(rom, info, 1, TempSettings("psg_tuning_wave"), nullptr);
+
+    // The fine tune of the zone of the first instrument of `sf2` that plays `key`, or -1000 if no zone does.
+    const auto fine = [](const Sf2Records& sf2, int key)
+    {
+        const size_t first = Le16(sf2.Record("inst", 22, 0) + 20) + 1;
+        const size_t end = Le16(sf2.Record("inst", 22, 1) + 20);
+        for (size_t z = first; z < end; z++)
+        {
+            const std::map<uint16_t, uint16_t> gens = sf2.ZoneGens(z);
+            const int range = gens.at(sf2::kKeyRange);
+            if (key >= (range & 0xFF) && key <= range >> 8)
+            {
+                const auto tune = gens.find(sf2::kFineTune);
+                return tune != gens.end() ? int(int16_t(tune->second)) : 0;
+            }
+        }
+
+        return -1000;
+    };
+    const auto cents = [](int setting, int key)
+    {
+        return int(std::lround(1200 * std::log2(131072.0 / (2048 - setting) / kMiddleC) - 100 * (key - 60)));
+    };
+
+    SEQLIB_CHECK(square.ok && wave.ok);
+    const Sf2Records square_sf2 = ReadSf2(square.sf2_path);
+    SEQLIB_CHECK_EQ(fine(square_sf2, 60), cents(flat, 60));
+    SEQLIB_CHECK(cents(flat, 60) >= -21 && cents(flat, 60) <= -17);
+    SEQLIB_CHECK_EQ(fine(square_sf2, 72), cents(octave, 72));
+
+    // The wave plays on MIDI channel 3.
+    const auto ons = ReadMidi(wave.midi_path).Find(0x92);
+    SEQLIB_REQUIRE_EQ(ons.size(), size_t(1));
+    SEQLIB_CHECK_EQ(int(ons[0].bytes[1]), 48);
+    SEQLIB_CHECK_EQ(fine(ReadSf2(wave.sf2_path), 48), cents(flat, 60));
 }
 
 void TestLoopStarts()
@@ -1294,6 +1348,7 @@ void RunTests()
     TestHold();
     TestCommandGuard();
     TestWaveSwitch();
+    TestPsgTuning();
     TestLoopStarts();
     TestLoopAfterTempoChange();
     TestLoopLengths();

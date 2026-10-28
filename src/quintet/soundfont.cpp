@@ -93,14 +93,15 @@ int SoundfontBuilder::PcmSample(const PcmSound& sound)
     return pcms_[sound] = int(file_.samples.size()) - 1;
 }
 
-NamedZones SoundfontBuilder::SquareInstrument(int first, int frames, int second)
+NamedZones SoundfontBuilder::SquareInstrument(int first, int frames, int second, const KeyTuning& tuning)
 {
-    return psg_.SquareInstrument(file_, first, frames, second);
+    return psg_.SquareInstrument(file_, first, frames, second, tuning);
 }
 
-NamedZones SoundfontBuilder::WaveInstrument(const WaveShapes& shapes, int first, int frames, int second)
+NamedZones SoundfontBuilder::WaveInstrument(const WaveShapes& shapes, int first, int frames, int second,
+                                            const KeyTuning& tuning)
 {
-    return psg_.WaveInstrument(file_, shapes, first, frames, second);
+    return psg_.WaveInstrument(file_, shapes, first, frames, second, tuning);
 }
 
 int SoundfontBuilder::AddInstrument(const std::string& name, std::vector<sf2::Zone> zones)

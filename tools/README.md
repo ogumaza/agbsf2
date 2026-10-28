@@ -876,7 +876,7 @@ note on MIDI channel 10 on its frame, at the velocity that its volume gives,
 ending where the voice stops, with a zone that plays the sample's points at the
 mixer's rate. The PSG's notes that sound have to match the MIDI file's.
 
-`driver_emu.py render` writes the mixer's 8-bit output at its rate, 32704 Hz,
+`driver_emu.py render` writes the mixer's 8-bit output at its rate, 16368 Hz,
 on both sides.
 
 ### Working out Ubisoft Milan's driver

@@ -89,12 +89,12 @@ int SoundfontBuilder::GameSampleIndex(const GameSample& sample)
 
 NamedZones SoundfontBuilder::SquareInstrument(int first, int frames, int second, int cents)
 {
-    return psg_.SquareInstrument(file_, first, frames, second, cents);
+    return psg_.SquareInstrument(file_, first, frames, second, UniformTuning(cents));
 }
 
 NamedZones SoundfontBuilder::WaveInstrument(const WaveShapes& shapes, int first, int frames, int second, int cents)
 {
-    return psg_.WaveInstrument(file_, shapes, first, frames, second, cents);
+    return psg_.WaveInstrument(file_, shapes, first, frames, second, UniformTuning(cents));
 }
 
 int SoundfontBuilder::AddInstrument(const std::string& name, std::vector<sf2::Zone> zones)

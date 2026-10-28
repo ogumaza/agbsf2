@@ -921,6 +921,29 @@ void TestEnvelopeHold()
     SEQLIB_CHECK_EQ(psg.hold, kInstant);
 }
 
+void TestPsgEnvelopeBytes()
+{
+    // The driver counts a PSG voice's whole attack, decay and release bytes. An attack of 10 takes 10 counts a step, 16
+    // counts every 15 frames. A sustain above 15 never falls below the full level. The zone holds it.
+    const DriverInfo info;
+    Voice slow;
+    slow.type = 2;
+    slow.attack = 10;
+    slow.decay = 10;
+    slow.sustain = 18;
+    slow.release = 10;
+    Voice fast = slow;
+    fast.release = 2;
+
+    const VolumeEnvelope env = EnvelopeFor(info, slow);
+    const VolumeEnvelope fast_env = EnvelopeFor(info, fast);
+
+    SEQLIB_CHECK_EQ(env.attack, Timecents(15.0 * 10 / (kFrameRate * 16 / 15)));
+    SEQLIB_CHECK_EQ(env.decay, kInstant);
+    SEQLIB_CHECK_EQ(env.sustain, 0);
+    SEQLIB_CHECK(env.release > fast_env.release);
+}
+
 void TestPitch()
 {
     // A sample's rate for a key: its rate at key 60, in 1/1024 Hz, times 2^(n/12), with a fine tune that runs in a
@@ -1437,9 +1460,30 @@ void TestConversion()
     // The key split's zones split after key 59, and its square's sample is 6.3 dB quieter than a full-scale sample.
     const auto square_zone = zone_of(presets[{0, 2}], 2);
     SEQLIB_CHECK_EQ(zone_of(presets[{0, 2}], 1).at(sf2::kKeyRange), 0x3B00);
-    SEQLIB_CHECK_EQ(square_zone.at(sf2::kKeyRange), 0x7F3C);
+    SEQLIB_CHECK_EQ(square_zone.at(sf2::kKeyRange) & 0xFF, 60);
     SEQLIB_CHECK(!square_zone.count(sf2::kInitialAttenuation));
     SEQLIB_CHECK(std::fabs(20 * std::log10(sf.SamplePeak(square_zone.at(sf2::kSampleId)) / 32767.0) + 6.3) < 0.01);
+
+    // The square's zones follow one another up to key 127. Each tunes its keys to the driver's frequency settings. On
+    // key 96, the driver shifts C's entry of -2004 right 5 times and adds 2048. The setting of 1985 plays 2080.5 Hz, 10
+    // cents below C7 in equal temperament.
+    const size_t split_zones = Le16(sf.Record("inst", 22, size_t(presets[{0, 2}]) + 1) + 20) -
+                               Le16(sf.Record("inst", 22, size_t(presets[{0, 2}])) + 20);
+    int next_key = 60, key_96_cents = 0;
+    for (size_t z = 2; z < split_zones; z++)
+    {
+        const auto zone = zone_of(presets[{0, 2}], int(z));
+        const int lo = zone.at(sf2::kKeyRange) & 0xFF, hi = zone.at(sf2::kKeyRange) >> 8;
+        SEQLIB_CHECK_EQ(lo, next_key);
+        next_key = hi + 1;
+        if (lo <= 96 && hi >= 96)
+        {
+            SEQLIB_CHECK(!zone.count(sf2::kCoarseTune));
+            key_96_cents = zone.count(sf2::kFineTune) ? int16_t(zone.at(sf2::kFineTune)) : 0;
+        }
+    }
+    SEQLIB_CHECK_EQ(next_key, 128);
+    SEQLIB_CHECK_EQ(key_96_cents, -10);
 
     // The drum kit's fixed-pitch sample plays at the mixer's rate whatever the key or the bend. Its pan of 0xA0 gives
     // it 191/127 of the left level of a note with no pan and 64/128 of the right level. Pan -296 gives the sides that
@@ -2118,10 +2162,22 @@ void TestPsgExclusive()
     SEQLIB_CHECK(AllOfClass(with.at(7), 0));
 
     // The drum kit's slow noise on key 36 has the class, and its quick noise and its sample don't. The key split's
-    // square 2 has class 2 on the keys up to 59, and its sample has none.
+    // square 2 has class 2 on the keys up to 59, and its sample has none. The square's zones from key 36 tune runs of
+    // keys to the driver's frequency settings.
     using Zones = std::vector<std::pair<int, int>>;
     SEQLIB_CHECK((with.at(8) == Zones{{0x2424, 4}, {0x2626, 0}, {0x2828, 0}}));
-    SEQLIB_CHECK((with.at(9) == Zones{{0x2300, 2}, {0x3B24, 2}, {0x7F3C, 0}}));
+    const Zones& split = with.at(9);
+    SEQLIB_REQUIRE(split.size() >= 3);
+    SEQLIB_CHECK((split.front() == std::pair{0x2300, 2}));
+    SEQLIB_CHECK((split.back() == std::pair{0x7F3C, 0}));
+    int next_key = 36;
+    for (size_t z = 1; z + 1 < split.size(); z++)
+    {
+        SEQLIB_CHECK_EQ(split[z].first & 0xFF, next_key);
+        SEQLIB_CHECK_EQ(split[z].second, 2);
+        next_key = (split[z].first >> 8) + 1;
+    }
+    SEQLIB_CHECK_EQ(next_key, 60);
 }
 
 // The exclusive classes go in a shared SoundFont too. They also go in the SoundFont of a conversion with a MIDI channel
@@ -2205,10 +2261,12 @@ void TestPsgNoReverb()
     }
     SEQLIB_CHECK(!dry.at(7).empty() && std::none_of(dry.at(7).begin(), dry.at(7).end(), [](bool d) { return d; }));
 
-    // In the drum kit, the zones of both noises are dry. The sample's zone isn't. In the key split, the two zones of
+    // In the drum kit, the zones of both noises are dry. The sample's zone isn't. In the key split, the zones of
     // square 2 cover the keys up to 59 and are dry. The sample's zone isn't.
     SEQLIB_CHECK((dry.at(8) == std::vector<bool>{true, true, false}));
-    SEQLIB_CHECK((dry.at(9) == std::vector<bool>{true, true, false}));
+    const std::vector<bool>& split = dry.at(9);
+    SEQLIB_CHECK(split.size() >= 3 && std::all_of(split.begin(), split.end() - 1, [](bool d) { return d; }) &&
+                 !split.back());
 }
 
 // A compressed sample decodes to its first point and then a step from the table for each of the others: from the low
@@ -2811,6 +2869,7 @@ void RunTests()
     TestChannels();
     TestEnvelope();
     TestEnvelopeHold();
+    TestPsgEnvelopeBytes();
     TestPitch();
     TestLevelReports();
     TestLoops();

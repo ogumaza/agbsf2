@@ -993,6 +993,94 @@ void TestPsgPastTable()
     fs::remove_all(dir, ec);
 }
 
+// Returns the key range and the tuning in cents, {lo, hi, cents}, of each instrument zone of the SoundFont at `path`,
+// in the file's order. Each zone starts with its key range.
+std::vector<std::array<int, 3>> ReadZoneTuning(const std::string& path)
+{
+    const std::vector<uint8_t> igen = ReadSf2(path).chunks["igen"];
+    std::vector<std::array<int, 3>> zones;
+    for (size_t g = 0; g + 4 <= igen.size(); g += 4)
+    {
+        const int op = igen[g] | (igen[g + 1] << 8);
+        const int amount = int16_t(igen[g + 2] | (igen[g + 3] << 8));
+        if (op == sf2::kKeyRange)
+        {
+            zones.push_back({igen[g + 2], igen[g + 3], 0});
+        }
+        else if (op == sf2::kCoarseTune && !zones.empty())
+        {
+            zones.back()[2] += 100 * amount;
+        }
+        else if (op == sf2::kFineTune && !zones.empty())
+        {
+            zones.back()[2] += amount;
+        }
+    }
+
+    return zones;
+}
+
+void TestPsgTuning()
+{
+    // Square 1 plays note 0 and then note 12, 5 frames apart. The PSG frequency table gives note 0 setting 44. That
+    // setting plays C2 at 65.4 Hz. Note 12 gets setting 1060. That one plays 132.7 Hz, 24 cents above C3. The table's
+    // other entries are 0.
+    Image m = SyntheticImage();
+    m.Resize(0x6000);
+    constexpr uint32_t kBase = kRomBase + 0x1000;
+    constexpr uint32_t kFreqCode = kRomBase + 0x1100;
+    constexpr uint32_t kFreqTable = kRomBase + 0x1200;
+    m.Song(kSongTable, 2, kBase, 0x80, {{0, 0}});
+    m.PutBytes(kBase, {0x00, 0x82, 0x00, 0xD5, 0x00, 0x05, 0xD5, 0x0C, 0x05, 0xFD});
+    m.PutBytes(kBase + 0x80, {0x00, 0xFD});
+    m.PutHalfwords(kFreqCode, {0x4803, 0x2700, 0x5FE9, 0x0049, 0x1809, 0x880D});
+    m.Put32(kFreqCode + 0x10, kFreqTable);
+    m.Put16(kFreqTable, 0x802C);
+    m.Put16(kFreqTable + 2 * 12 * 32, 0x8424);
+    const Rom rom = m.ToRom();
+    DriverInfo info;
+    SEQLIB_REQUIRE(DetectGiven(rom, kSongTable, 3, info) && info.psg_freq_table == kFreqTable);
+
+    const fs::path dir = TempPath("psg_tuning");
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    ConvertSettings opt;
+    opt.out_dir = Utf8(dir);
+    const SongReport sum = ConvertSong(rom, info, 2, opt, nullptr);
+    SEQLIB_CHECK(sum.ok);
+
+    // The notes play on keys 36 and 48. The square's zones tune key 48 up by 24 cents, and key 36 not at all. The keys
+    // below the table take note 0's tuning.
+    std::vector<int> keys;
+    for (const MidiEvent& e : ReadEvents(sum.midi_path))
+    {
+        if (e.track == "Square 1" && (e.status & 0xF0) == 0x90 && e.data2 > 0)
+        {
+            keys.push_back(e.data1);
+        }
+    }
+    SEQLIB_CHECK((keys == std::vector<int>{36, 48}));
+
+    const std::vector<std::array<int, 3>> zones = ReadZoneTuning(sum.sf2_path);
+    auto cents_of = [&](int key)
+    {
+        for (const auto& [lo, hi, cents] : zones)
+        {
+            if (lo <= key && key <= hi)
+            {
+                return cents;
+            }
+        }
+
+        return -9999;
+    };
+    SEQLIB_CHECK_EQ(cents_of(36), 0);
+    SEQLIB_CHECK_EQ(cents_of(48), 24);
+    SEQLIB_CHECK_EQ(cents_of(0), 0);
+
+    fs::remove_all(dir, ec);
+}
+
 void TestSampleKeys()
 {
     // Voice 0 plays samples 5 and 6 (the same data) at two pitches each, so each gets a zone that spans them. Voices 1
@@ -2689,6 +2777,7 @@ void RunTests()
     TestLoopStartsAtSecondPass();
     TestNoiseKeys();
     TestPsgPastTable();
+    TestPsgTuning();
     TestSampleKeys();
     TestLoopWithoutDelay();
     TestFrameLimit();

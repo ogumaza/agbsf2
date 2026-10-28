@@ -246,11 +246,13 @@ VolumeEnvelope EnvelopeFor(const DriverInfo& info, const Voice& voice)
     VolumeEnvelope env;
 
     // A PSG voice's envelope moves through its 16 levels in steps, one every `attack`, `decay` or `release` counts of
-    // its counter, with the sustain level from 0 to 15. The full volume goes with the full level of 15.
+    // its counter, with the sustain level from 0 to 15. The full volume goes with the full level of 15. The driver
+    // counts each value's whole byte. A sustain above 15 gives a sustain level at or above the full level, and the
+    // zone holds the full level.
     if (voice.PsgChannel())
     {
-        const int attack = voice.attack & 7, decay = voice.decay & 7, release = voice.release & 7;
-        const int sustain = voice.sustain & 15;
+        const int attack = voice.attack, decay = voice.decay, release = voice.release;
+        const int sustain = std::min(int(voice.sustain), 15);
         if (attack)
         {
             env.attack = Timecents(15.0 * attack / kPsgStepsPerSecond);
@@ -856,10 +858,15 @@ bool SoundfontBuilder::AddZone(sf2::Instrument& instrument, const Voice& voice, 
     else
     {
         // The square and wave channels play the keys below 36 at the pitch of key 36. The others follow the driver's
-        // frequency settings, which are within a few cents of equal temperament.
+        // frequency settings. The settings stray further from equal temperament on higher keys. Each run of keys whose
+        // settings lie the same whole cents from equal temperament shares a part.
         auto cents_for = [](int key)
         {
             return 1200.0 * std::log2(SquareFrequency(key) / kMiddleC);
+        };
+        auto tuning_for = [&cents_for](int key)
+        {
+            return cents_for(key) - 100.0 * (key - 60);
         };
 
         if (fixed_key >= 0)
@@ -872,10 +879,16 @@ bool SoundfontBuilder::AddZone(sf2::Instrument& instrument, const Voice& voice, 
             {
                 parts.push_back({low, std::min(high, 35), cents_for(36), true});
             }
-            if (high >= 36)
+            for (int key = std::max(low, 36); key <= high;)
             {
-                const int first = std::max(low, 36);
-                parts.push_back({first, high, cents_for(first) - 100.0 * (first - 60), false});
+                int last = key;
+                while (last < high && std::lround(tuning_for(last + 1)) == std::lround(tuning_for(key)))
+                {
+                    last++;
+                }
+
+                parts.push_back({key, last, tuning_for(key), false});
+                key = last + 1;
             }
         }
     }

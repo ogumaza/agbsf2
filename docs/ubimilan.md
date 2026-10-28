@@ -124,8 +124,9 @@ If no voice is free, the engine writes the note before the voices' records.
 
 The game sets SOUNDCNT_H to `0xA90E`: the PSG and both FIFOs at full volume,
 FIFO A on the right and FIFO B on the left, both clocked by Timer 0. The sound
-init works out Timer 0's reload in floating point: `0xFFFF` less half of
-`1024.17`. That gives `0xFDFF`, 513 cycles a point, or 32704 Hz. Each FIFO's
+init works out Timer 0's reload in floating point. It adds the double 0.5 to
+`1024.17` and takes the whole part of the sum from `0xFFFF`. That gives
+`0xFBFF`, 1025 cycles a point, or 16368 Hz. Each FIFO's
 DMA interrupts the CPU at every 16 points. Whichever interrupt comes second
 runs the mixer, and the mixer makes the next 16 points. Both FIFOs play them,
 and the music is mono.
@@ -138,7 +139,7 @@ of 8 points from its start, and the points after the loop's end, up to the
 next 8, come from beyond it. A sample without a loop leaves the voice's loop
 points as the last sample that looped set them. The mixer multiplies each
 point by its voice's volume and adds the voices. That gives 8 points at
-16352 Hz. It puts a point halfway between each pair, averages each point with
+8184 Hz. It puts a point halfway between each pair, averages each point with
 the one before, shifts the sums right by 6, and clips them to 8 bits. A
 full-scale sample at volume 64 fills the scale.
 

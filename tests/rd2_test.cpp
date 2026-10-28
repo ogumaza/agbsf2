@@ -1435,6 +1435,69 @@ void TestPsgVolume()
     SEQLIB_CHECK_EQ(ConstantZones(ReadSf2(sum.sf2_path)), size_t(2));
 }
 
+void TestSampleLegato()
+{
+    // A track in legato plays its notes on one voice. The voice keeps its envelope from note to note. The envelope
+    // rises to its peak in 4 frames and falls to half of it over the next 8. Both notes play on a zone whose envelope
+    // has only the release, in a preset of the instrument's notes in legato. The track's CC11 follows the voice's
+    // envelope frame by frame. The second note starts in frame 6, where the envelope falls. The first note ends there.
+    // C6 releases the voice in frame 12, and the second note ends there.
+    Cart cart;
+    cart.Sequences({{TrackData()
+                         .Bytes({0xC2, kLooped, 0xC5})
+                         .Note(60, 6, 127)
+                         .Wait(6)
+                         .Note(64, 6, 127)
+                         .Wait(6)
+                         .Bytes({0xC6})
+                         .Wait(40)
+                         .End()}});
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+
+    const SongReport sum = ConvertSong(rom, info, 0, TempSettings("rd2_legato"), nullptr);
+
+    SEQLIB_CHECK(sum.ok);
+    const MidiEvents midi = ReadMidi(sum.midi_path);
+    const auto ons = midi.Find(0x90), offs = midi.Find(0x80);
+    SEQLIB_REQUIRE(ons.size() == 2 && offs.size() == 2);
+    SEQLIB_CHECK_EQ(ons[1].tick, 6 * 150);
+    SEQLIB_CHECK_EQ(offs[0].tick, ons[1].tick);
+    SEQLIB_CHECK_EQ(offs[1].tick, 12 * 150);
+
+    // CC11 starts at a quarter of the peak's, rises to the peak's, and falls from there. The second note doesn't start
+    // it again. The release keeps the last value.
+    const std::vector<std::pair<uint32_t, int>> loudness = ControllerValues(midi, 0, cc::kExpression);
+    SEQLIB_REQUIRE(loudness.size() >= 4);
+    int peak = 0;
+    for (const auto& value : loudness)
+    {
+        peak = std::max(peak, value.second);
+    }
+    const int first = ValueAt(loudness, uint32_t(ons[0].tick));
+    const int second = ValueAt(loudness, uint32_t(ons[1].tick));
+    SEQLIB_CHECK(first > 0 && first < peak && second > first && second < peak);
+    SEQLIB_CHECK(loudness.back().second > first && loudness.back().second < second);
+
+    // The SoundFont holds the one preset. Its zones play at a constant level until the release.
+    const Sf2Records sf = ReadSf2(sum.sf2_path);
+    SEQLIB_REQUIRE_EQ(sf.Count("phdr", 38), 2);
+    SEQLIB_CHECK(std::string(reinterpret_cast<const char*>(sf.Record("phdr", 38, 0))) == "Bank 0 legato 0");
+    size_t zones = 0;
+    for (size_t z = Le16(sf.Record("inst", 22, 0) + 20) + 1; z < Le16(sf.Record("inst", 22, 1) + 20); z++)
+    {
+        const auto gens = sf.ZoneGens(z);
+        for (uint16_t op :
+             {sf2::kInitialAttenuation, sf2::kAttackVolEnv, sf2::kHoldVolEnv, sf2::kDecayVolEnv, sf2::kSustainVolEnv})
+        {
+            SEQLIB_CHECK(!gens.count(op));
+        }
+        SEQLIB_CHECK(gens.count(sf2::kReleaseVolEnv));
+        zones++;
+    }
+    SEQLIB_CHECK(zones > 0);
+}
+
 void TestWaveVolume()
 {
     // The wave voice's note plays at full velocity, and its CC11 follows the wave channel's level, frame by frame. At
@@ -1966,6 +2029,7 @@ void RunTests()
     TestDrumPanAndWave();
     TestPsgPan();
     TestPsgVolume();
+    TestSampleLegato();
     TestWaveVolume();
     TestPsgRunOut();
     TestPsgPanPasses();

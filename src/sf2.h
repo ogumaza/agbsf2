@@ -77,9 +77,9 @@ sf2::Zone SampleZone(int sample, bool loop, int lo = 0, int hi = 127, int cents 
 sf2::Zone RootKeyZone(int sample, bool loop, int lo, int hi, int root);
 
 // Returns the zones of an instrument that plays sample `first` for `frames` frames of each note, and then sample
-// `second`. Both loop on every key with a fine tune of `cents`. With no frames, the instrument plays `first` alone. The
-// time of the switch isn't held to the range of Timecents().
-std::vector<sf2::Zone> SwitchZones(int first, int frames, int second, int cents = 0);
+// `second`. Both loop on keys `lo` to `hi` with a fine tune of `cents`. With no frames, the instrument plays `first`
+// alone. The time of the switch isn't held to the range of Timecents().
+std::vector<sf2::Zone> SwitchZones(int first, int frames, int second, int cents, int lo, int hi);
 
 // An instrument's name and zones, before a SoundFont builder adds the instrument and its preset.
 struct NamedZones

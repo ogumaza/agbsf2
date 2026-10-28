@@ -63,7 +63,7 @@ class TombRaider:
     track = 0x02003BB0        # the sequencer's track
     voices = 0x03000014       # the mixer's voices
     output = 0x0300022C       # the 16 points of output that each run of the mixer makes
-    timer_reload = 0xFDFF     # Timer 0's reload, which the sound init works out from a float: 0xFFFF less half of it
+    timer_reload = 0xFBFF     # Timer 0's reload: 0xFFFF less the whole part of the sound init's float plus 0.5
 
 
 GAMES = {b'AL9P': TombRaider}

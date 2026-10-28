@@ -167,6 +167,54 @@ std::vector<int16_t> SquareCycle(int duty, int16_t amplitude)
     return cycle;
 }
 
+KeyTuning UniformTuning(int cents)
+{
+    KeyTuning tuning;
+    tuning.fill(cents);
+
+    return tuning;
+}
+
+std::vector<std::pair<int, int>> TuningRuns(const KeyTuning& tuning)
+{
+    std::vector<std::pair<int, int>> runs;
+    for (int key = 0; key < int(tuning.size());)
+    {
+        int last = key;
+        while (last + 1 < int(tuning.size()) && tuning[size_t(last + 1)] == tuning[size_t(key)])
+        {
+            last++;
+        }
+
+        runs.push_back({key, last});
+        key = last + 1;
+    }
+
+    return runs;
+}
+
+int SettingCents(int setting, double hz)
+{
+    return int(std::lround(1200 * std::log2(SquareHz(setting) / hz)));
+}
+
+std::vector<sf2::Zone> TunedZones(const sf2::Zone& zone, const KeyTuning& tuning)
+{
+    std::vector<sf2::Zone> zones;
+    for (const auto& [lo, hi] : TuningRuns(tuning))
+    {
+        // The tuning's generators go right after the key range.
+        sf2::Zone tune;
+        AddTuning(tune, tuning[size_t(lo)]);
+        sf2::Zone z = zone;
+        z.generators[0] = sf2::Generator::Range(sf2::kKeyRange, lo, hi);
+        z.generators.insert(z.generators.begin() + 1, tune.generators.begin(), tune.generators.end());
+        zones.push_back(std::move(z));
+    }
+
+    return zones;
+}
+
 PsgScale PsgScaleOf(uint16_t soundcnt_l, uint16_t soundcnt_h)
 {
     static constexpr double kMix[4] = {0.25, 0.5, 1.0, 1.0};
@@ -497,14 +545,19 @@ int PsgSamples::Noise(Sf2File& file, const NoiseSound& sound)
     return noises_[sound] = int(file.samples.size()) - 1;
 }
 
-NamedZones PsgSamples::SquareInstrument(Sf2File& file, int first, int frames, int second, int cents)
+NamedZones PsgSamples::SquareInstrument(Sf2File& file, int first, int frames, int second, const KeyTuning& tuning)
 {
     // The first sample is made before the second. Their numbers then don't depend on the order in which the compiler
     // evaluates a call's arguments.
     const int first_sample = Square(file, first);
     const int second_sample = Square(file, second);
     NamedZones made;
-    made.zones = SwitchZones(first_sample, frames, second_sample, cents);
+    for (const auto& [lo, hi] : TuningRuns(tuning))
+    {
+        const std::vector<sf2::Zone> run = SwitchZones(first_sample, frames, second_sample, tuning[size_t(lo)], lo, hi);
+        made.zones.insert(made.zones.end(), run.begin(), run.end());
+    }
+
     made.name = SquareName(first & 3);
     if (frames)
     {
@@ -515,22 +568,27 @@ NamedZones PsgSamples::SquareInstrument(Sf2File& file, int first, int frames, in
 }
 
 NamedZones PsgSamples::WaveInstrument(Sf2File& file, const WaveShapes& shapes, int first, int frames, int second,
-                                      int cents)
+                                      const KeyTuning& tuning)
 {
     // As for a square, the first sample is made before the second.
     const int first_sample = Wave(file, shapes[first]);
     const int second_sample = Wave(file, shapes[second]);
-    NamedZones made;
-    made.zones = SwitchZones(first_sample, frames, second_sample, cents);
 
     // The note's key allows for how often the first shape repeats. The second shape plays from the first's root key, at
     // the same rate.
     const int first_offset = WaveKeyOffset(shapes[first]);
     const int second_offset = WaveKeyOffset(shapes[second]);
-    if (made.zones.size() == 2 && first_offset != second_offset)
+    NamedZones made;
+    for (const auto& [lo, hi] : TuningRuns(tuning))
     {
-        made.zones[1].generators.insert(made.zones[1].generators.end() - 1,
-                                        sf2::Generator::Value(sf2::kOverridingRootKey, 60 + first_offset));
+        std::vector<sf2::Zone> run = SwitchZones(first_sample, frames, second_sample, tuning[size_t(lo)], lo, hi);
+        if (run.size() == 2 && first_offset != second_offset)
+        {
+            run[1].generators.insert(run[1].generators.end() - 1,
+                                     sf2::Generator::Value(sf2::kOverridingRootKey, 60 + first_offset));
+        }
+
+        made.zones.insert(made.zones.end(), run.begin(), run.end());
     }
 
     char text[64];

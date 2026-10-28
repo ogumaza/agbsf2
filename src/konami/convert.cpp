@@ -1323,10 +1323,11 @@ Programs AddPresets(const Usage& usage, SoundfontBuilder& sf, const Rom& rom, co
         return BankProgram{p.bank, p.program};
     };
 
+    // The square and wave zones follow the driver's frequency table.
     for (int d : usage.duties)
     {
         const int s = sf.SquareSample(d);
-        programs.duty[d] = add_preset(SquareName(d), {RootKeyZone(s, true, 0, 127, 60)});
+        programs.duty[d] = add_preset(SquareName(d), TunedZones(RootKeyZone(s, true, 0, 127, 60), sf.SquareTuning()));
     }
 
     for (int row : usage.waves)
@@ -1334,7 +1335,8 @@ Programs AddPresets(const Usage& usage, SoundfontBuilder& sf, const Rom& rom, co
         const int w = row >> 4, vol = row & 15;
         const int s = sf.WaveSample(w, vol);
         const int root = std::clamp(sf.WaveKey(w, 36), 0, 127);
-        programs.wave[row] = add_preset(WaveName(w, vol), {RootKeyZone(s, true, 0, 127, root)});
+        programs.wave[row] =
+            add_preset(WaveName(w, vol), TunedZones(RootKeyZone(s, true, 0, 127, root), sf.WaveTuning(w)));
     }
 
     // Each noise note gets a key of its own: the one 36 above its number, or failing that the nearest free key above

@@ -289,7 +289,7 @@ void TestDetection()
     SEQLIB_CHECK_EQ(info.noise_table, kNoiseTable);
     SEQLIB_CHECK_EQ(info.frequency_table, kFrequencyTable);
     SEQLIB_CHECK_EQ(info.wave_table, kWaveTable);
-    SEQLIB_CHECK_EQ(info.timer_reload, 0xFDFF);
+    SEQLIB_CHECK_EQ(info.timer_reload, 0xFBFF);
     SEQLIB_CHECK(info.warnings.empty());
     SEQLIB_CHECK(!found_blank && blank_error.empty());
 
@@ -335,7 +335,7 @@ void TestTiming()
 
 // A note takes the last free voice, so a second note while the first plays takes voice 2. A note-off stops the voice of
 // channel 9's last note, whatever its key, so key 42's note-off ends key 41's note, and key 42 plays on until the mixer
-// reaches the end of its 4000 points, in frame 14. The PSG's note at volume 7 plays until its note-off, the one at
+// reaches the end of its 4000 points, in frame 29. The PSG's note at volume 7 plays until its note-off, the one at
 // volume 0 too, though it's silent, and a key outside the kit plays nothing, with one warning for both its notes.
 void TestVoices()
 {
@@ -349,7 +349,7 @@ void TestVoices()
     SEQLIB_REQUIRE_EQ(notes.size(), 4);
     SEQLIB_CHECK(notes[0].channel == 0 && notes[0].key == 60 && notes[0].program == 1);
     SEQLIB_CHECK(notes[0].envelope == 0x70 && notes[0].duty == 0x80 && notes[0].off == 20);
-    SEQLIB_CHECK(notes[1].key == 42 && notes[1].on == 0 && notes[1].off == 15);
+    SEQLIB_CHECK(notes[1].key == 42 && notes[1].on == 0 && notes[1].off == 30);
     SEQLIB_CHECK(notes[2].key == 41 && notes[2].on == 5 && notes[2].off == 10);
     SEQLIB_CHECK(notes[3].channel == 0 && notes[3].key == 62 && notes[3].envelope == 0);
     SEQLIB_CHECK(notes[3].on == 20 && notes[3].off == 25);
@@ -425,7 +425,7 @@ void TestConversion()
     if (sf.Count("shdr", 46) == 3)
     {
         const uint8_t* looped = sf.Record("shdr", 46, 1);
-        SEQLIB_CHECK_EQ(Le32(looped + 36), 16352);
+        SEQLIB_CHECK_EQ(Le32(looped + 36), 8184);
         SEQLIB_CHECK_EQ(Le32(looped + 28) - Le32(looped + 20), 20);
         SEQLIB_CHECK_EQ(Le32(looped + 32) - Le32(looped + 20), 92);
     }

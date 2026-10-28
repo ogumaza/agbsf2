@@ -492,6 +492,14 @@ WaveShape WaveShapeOf(const Hardware& hw)
     return shape;
 }
 
+// Returns how many keys above a square note on the same entry of the frequency table a wave note plays with `shape`. A
+// wave pattern of 32 steps plays an octave lower than a square, one of 64 two octaves lower, and one that repeats
+// sounds higher.
+int WaveKeyShift(const WaveShape& shape)
+{
+    return WaveKeyOffset(shape) - (shape.steps.size() > 32 ? 24 : 12);
+}
+
 // Converts a song's channels into the MIDI file's notes.
 class NoteMaker
 {
@@ -800,11 +808,9 @@ private:
                 }
             }
 
-            // A wave pattern of 64 steps plays an octave lower than one of 32, and one that repeats sounds higher.
             if (c == kWave)
             {
-                const WaveShape& shape = shapes_[inst.first];
-                note.key += WaveKeyOffset(shape) - (shape.steps.size() > 32 ? 24 : 12);
+                note.key += WaveKeyShift(shapes_[inst.first]);
             }
         }
 
@@ -937,10 +943,30 @@ std::vector<std::pair<uint32_t, int>> TempoMap(const Simulation& sim)
     return tempos;
 }
 
-// Adds the SoundFont presets of a song's instruments, each in the bank and program of `slots` that its program number
-// picks. Returns the warnings for instruments with nothing to play.
-std::vector<std::string> AddPresets(SoundfontBuilder& sf, const NoteMaker& maker, const std::vector<BankProgram>& slots)
+// Returns the tuning of the square zones, or with `shift`, of the zones of a wave whose notes play `shift` keys above
+// a square's (see WaveKeyShift()). A square note on key kSquareBaseKey + i plays entry i of the frequency table. A
+// zone plays the key in equal temperament. The keys outside the table take the tuning of its nearest entry.
+KeyTuning PsgTuning(const Rom& rom, const DriverInfo& info, int shift = 0)
 {
+    KeyTuning tuning;
+    for (int key = 0; key < int(tuning.size()); key++)
+    {
+        const int index = std::clamp(key - shift - kSquareBaseKey, 0, kFrequencyEntries - 1);
+        const int setting = rom.U16(info.frequency_table + uint32_t(index) * 2) & 0x7FF;
+        const double equal = kMiddleC * std::pow(2.0, (kSquareBaseKey + index - 60) / 12.0);
+        tuning[size_t(key)] = SettingCents(setting, equal);
+    }
+
+    return tuning;
+}
+
+// Adds the SoundFont presets of a song's instruments, each in the bank and program of `slots` that its program number
+// picks. The square and wave zones follow the frequency table (see PsgTuning()). Returns the warnings for instruments
+// with nothing to play.
+std::vector<std::string> AddPresets(const Rom& rom, const DriverInfo& info, SoundfontBuilder& sf,
+                                    const NoteMaker& maker, const std::vector<BankProgram>& slots)
+{
+    const KeyTuning tuning = PsgTuning(rom, info);
     std::vector<std::string> warnings;
     for (const auto& [inst, program] : maker.Programs())
     {
@@ -948,11 +974,12 @@ std::vector<std::string> AddPresets(SoundfontBuilder& sf, const NoteMaker& maker
         switch (inst.kind)
         {
         case Instrument::kSquare:
-            made = sf.SquareInstrument(inst.first, inst.frames, inst.second);
+            made = sf.SquareInstrument(inst.first, inst.frames, inst.second, tuning);
             break;
 
         case Instrument::kWave:
-            made = sf.WaveInstrument(maker.Shapes(), inst.first, inst.frames, inst.second);
+            made = sf.WaveInstrument(maker.Shapes(), inst.first, inst.frames, inst.second,
+                                     PsgTuning(rom, info, WaveKeyShift(maker.Shapes()[inst.first])));
             break;
 
         case Instrument::kNoiseKit:
@@ -1156,7 +1183,7 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
                                   (shared ? "; convert the song without --single-sf2" : ""));
         return report;
     }
-    for (const std::string& w : AddPresets(sf, maker, slots))
+    for (const std::string& w : AddPresets(rom, info, sf, maker, slots))
     {
         report.warnings.push_back(w);
     }

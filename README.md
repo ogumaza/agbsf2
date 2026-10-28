@@ -517,7 +517,7 @@ follow it from there.
 
 Square and wave notes are at the key of their pitch: the frequency table
 starts at C2, which is key 36. The bends hold the difference between the pitch
-the channel plays and its table entry, so the keys stay equal-tempered (see
+the channel plays and its table entry. The SoundFont follows the table too (see
 [Accuracy](#accuracy)). The frequency sweep changes square 1's pitch within a
 frame, so its steps become extra bends between the frame boundaries. PCM notes
 play the sample at its own rate on key 60, and each step of the driver's PCM
@@ -749,6 +749,11 @@ The MIDI file follows what the driver plays:
   driver picks one of them from the velocity and the volumes. The note lasts
   until the channel falls silent or another note takes the channel. The
   driver's release fades the volume out. The note lasts through the fade.
+* A track in legato plays its notes on one voice. The voice keeps its
+  envelope from note to note. The track's sample notes then play on a preset
+  whose envelope has only the release (see below). Their CC11 follows the
+  voice's envelope frame by frame. A note lasts until the next note takes the
+  voice, or until the voice's release.
 * A sequence without a loop ends with its last track. A PSG channel can still
   sound then. The driver goes on with a release's fade. The MIDI file then
   ends where the last channel falls silent.
@@ -773,7 +778,8 @@ it as the game does while the player rides Yoshi.
 ### SoundFont from Nintendo R&D2's driver
 
 Each sequence's SoundFont has a preset for each instrument the sequence plays,
-named after its bank and number.
+named after its bank and number. An instrument's sample notes in legato get a
+second preset, named `Bank B legato N`.
 
 * **Samples** are the game's 8-bit samples, widened to 16 bits, with their rate
   and loop, tuned to play at their rate on the note their region gives.
@@ -803,6 +809,8 @@ named after its bank and number.
   The PSG voices' zones play at a constant level, without an envelope. Their
   notes' CC11 follows the channel's volume (see
   [MIDI from Nintendo R&D2's driver](#midi-from-nintendo-rd2s-driver)).
+  The zones of a preset in legato play at a constant level until the
+  release. Their notes' CC11 follows the voice's envelope.
 
 With `--single-sf2`, each sequence's instruments are in the bank numbered after
 the sequence.
@@ -1002,7 +1010,7 @@ Each song's SoundFont holds the instruments its notes play:
 
 * **The kit** gets a preset in bank 9 for each offset that the song uses. Each
   preset has a zone for each key that the song plays. Each zone plays its key's
-  sample unpitched, at the rate at which the mixer moves through it: 16352 Hz.
+  sample unpitched at 8184 Hz. The mixer reads the sample at that rate.
   The SoundFont widens the game's 8-bit points to 16 bits. The mixer moves
   through a sample 8 points at a time, and a loop lasts a whole number of 8
   points. As in the game, a note stops at once at its note-off.
@@ -1051,8 +1059,11 @@ SoundFonts.
   driver's frequency table is within about 3 cents of equal temperament below
   C4, but up to about 7 cents off in the C4 octave, 13 in the C5 octave, 25
   in the C6 octave and 50 in the C7 octave. The wave channel plays an octave
-  lower than the squares from the same table. The MIDI files keep the
-  equal-tempered pitch.
+  lower than the squares from the same table. The SoundFont's square and wave
+  zones play each note at its entry in the table, to the nearest cent. A bend
+  moves the pitch from there in equal temperament. The game plays the table's
+  entry for the bent pitch. In the Dungeon Dice Monsters revision, the bends
+  follow each note's frequency setting instead.
 * **Echo.** The driver's echo is a feedback delay (up to about 190 ms). It's
   approximated with the reverb send; the delay and feedback are written to the
   conductor track as text events.
@@ -1103,7 +1114,9 @@ SoundFonts.
   temperament in the C4 octave, but up to about 27 cents flat in the C2 octave,
   9 cents in the C3 octave, 19 to 34 cents off in the C5 to C7 octaves, and 43
   in the top octave. The PCM pitch table is within 7 cents, apart from its top
-  entry, which is 14 cents flat. The MIDI files keep the keys equal-tempered.
+  entry. That entry is 14 cents flat. The SoundFont's square and wave zones
+  play each key at its entry in the frequency table, to the nearest cent. PCM
+  notes play in equal temperament.
 * **Noise drums.** The noise channel's envelope steps on the sound hardware's
   64 Hz clock, which isn't tied to the frames, so in the game a drum's volume
   steps can come up to 1/128 s earlier or later than in its sample.
@@ -1131,8 +1144,12 @@ SoundFonts.
 * **Envelopes.** A sample's SoundFont envelope approximates the driver's
   straight lines between points.
 * **Legato.** The driver plays a track's notes in legato on one voice. The
-  voice keeps its envelope. A SoundFont player starts each sample note's
-  envelope again. A PSG voice's CC11 continues through legato.
+  voice keeps its envelope. CC11 holds the envelope's level from note to
+  note. The voice also plays the new note's sample on from the point it had
+  reached in the last one. A SoundFont player starts each note's sample again.
+  The MIDI file ends a note in legato where the next one starts. The note's
+  release then sounds for a moment under the next note. The driver changes
+  the voice's note at once.
 * **Echo.** The driver can add an echo to the voices of tracks with an echo
   send, but only the game's code turns it on, so the conversion leaves it out.
   *Super Mario Advance 2* turns it on in some levels. No track of its music has
@@ -1174,7 +1191,9 @@ SoundFonts.
   one for each 150th of a tick, so that each frame starts on a whole tick.
 * **PSG tuning.** As with Konami's driver, the PSG's 11-bit frequency registers
   put the game's high PSG notes slightly out of tune, and the driver's table
-  and its bends round down. The MIDI files keep the equal-tempered pitch.
+  and its bends round down. The SoundFont's square and wave zones play each key
+  at the driver's frequency setting for it, to the nearest cent. A bend moves
+  the pitch from there in equal temperament.
 * **PSG bends.** A track that plays samples and PSG notes at once has one pitch
   bend for both, which bends a noise note smoothly and can take a square or
   wave note below C2. The driver steps through its noise settings and stops at
@@ -1287,7 +1306,7 @@ SoundFonts.
 * **Timing.** The MIDI file puts each note on the beat that `agbsf2` works out.
   A note can be up to a frame and a half from where the game plays it.
   `--frame-timing` keeps each note on its frame instead.
-* **Mixer character.** The mixer moves through each sample at 16352 Hz, makes
+* **Mixer character.** The mixer moves through each sample at 8184 Hz, makes
   twice as many points by putting one halfway between each pair, averages each
   point with the one before, and writes 8-bit output. A SoundFont player plays
   the same samples more cleanly and brighter: the averaging takes up to 3 dB
