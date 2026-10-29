@@ -455,6 +455,11 @@ each kept to 8 bits. After the release, the level is multiplied by
 `(release + 230) / 512` each frame, and the voice stops when `volume` reaches
 0.
 
+A SoundFont's decay falls in a straight line in decibels. It can't follow
+the envelope's straight lines in level. `agbsf2` plays each sample at a
+constant level until its release. The MIDI file's CC11 follows the envelope
+frame by frame.
+
 ## The mixer
 
 For each sample voice of its list, the mixer works out the frame's step from

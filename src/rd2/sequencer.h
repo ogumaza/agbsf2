@@ -267,7 +267,6 @@ struct Event
     uint8_t type = 0;    // the voice's type
     uint32_t sample = 0; // a sample voice's sample
     uint32_t psg = 0;    // a PSG voice's setting, as the voice has it
-    bool legato = false; // the track plays in legato: its voice keeps the envelope from note to note
 };
 
 // A model of the driver that plays a sequence a frame at a time.

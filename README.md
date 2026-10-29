@@ -749,10 +749,14 @@ The MIDI file follows what the driver plays:
   driver picks one of them from the velocity and the volumes. The note lasts
   until the channel falls silent or another note takes the channel. The
   driver's release fades the volume out. The note lasts through the fade.
+* A sample note's CC11 follows its voice's envelope, frame by frame. The
+  note's zone has only the release (see below). A track's notes that sound
+  together share CC11. CC11 then follows the mean of their envelopes,
+  weighted by their power. The track plays as loud as in the game, but each
+  note's level can differ from the game's. During the release, CC11 keeps the
+  envelope's level that the voice had reached.
 * A track in legato plays its notes on one voice. The voice keeps its
-  envelope from note to note. The track's sample notes then play on a preset
-  whose envelope has only the release (see below). Their CC11 follows the
-  voice's envelope frame by frame. A note lasts until the next note takes the
+  envelope from note to note. A note lasts until the next note takes the
   voice, or until the voice's release.
 * A sequence without a loop ends with its last track. A PSG channel can still
   sound then. The driver goes on with a release's fade. The MIDI file then
@@ -778,8 +782,7 @@ it as the game does while the player rides Yoshi.
 ### SoundFont from Nintendo R&D2's driver
 
 Each sequence's SoundFont has a preset for each instrument the sequence plays,
-named after its bank and number. An instrument's sample notes in legato get a
-second preset, named `Bank B legato N`.
+named after its bank and number.
 
 * **Samples** are the game's 8-bit samples, widened to 16 bits, with their rate
   and loop, tuned to play at their rate on the note their region gives.
@@ -798,19 +801,14 @@ second preset, named `Bank B legato N`.
   The driver steps some voices through a table of duties or noise widths, a
   frame each, and holds the last entry. Their zones play that entry.
 * **Envelopes.** The driver's envelopes are straight lines in level between
-  points, and the SoundFont's attack, hold, decay and sustain approximate them.
-  An envelope that peaks below the full level gives its zone the difference
-  as attenuation. FluidSynth, BASSMIDI and most other SoundFont players apply
-  only 0.4 of a zone's attenuation. The zone therefore holds 2.5 times the
-  attenuation. A player that follows the SoundFont specification applies all
-  of it. That player plays the zone too quietly: 6 dB down becomes 15 dB.
+  points. A SoundFont's decay falls in a straight line in decibels instead.
+  A sample's zone therefore plays at a constant level until the release. Its
+  notes' CC11 follows the voice's envelope (see
+  [MIDI from Nintendo R&D2's driver](#midi-from-nintendo-rd2s-driver)).
   A sample's release reduces its level by a fraction each frame, which is a
   straight line in decibels, as in a SoundFont.
   The PSG voices' zones play at a constant level, without an envelope. Their
-  notes' CC11 follows the channel's volume (see
-  [MIDI from Nintendo R&D2's driver](#midi-from-nintendo-rd2s-driver)).
-  The zones of a preset in legato play at a constant level until the
-  release. Their notes' CC11 follows the voice's envelope.
+  notes' CC11 follows the channel's volume.
 
 With `--single-sf2`, each sequence's instruments are in the bank numbered after
 the sequence.
@@ -1141,8 +1139,11 @@ SoundFonts.
 * **Pitch bends.** The driver bends each voice on its own, and its LFO starts
   again with each note. A MIDI channel has one bend, which follows the track's
   newest note, so notes that play together on a track share it.
-* **Envelopes.** A sample's SoundFont envelope approximates the driver's
-  straight lines between points.
+* **Envelopes.** CC11 follows each sample voice's envelope frame by frame.
+  A track's notes that sound together share CC11. Where they stand at
+  different points of their envelopes, the track plays at the game's level.
+  Each note can then play louder or quieter than in the game. That happens
+  most where a note's release sounds under the track's next note.
 * **Legato.** The driver plays a track's notes in legato on one voice. The
   voice keeps its envelope. CC11 holds the envelope's level from note to
   note. The voice also plays the new note's sample on from the point it had
@@ -1325,9 +1326,8 @@ SoundFonts.
 ### FluidSynth
 
 SoundFont output follows the specification, apart from the attenuation of
-Nintendo R&D2's zones and of MP2K's PSG drums on one side alone (see
-[SoundFont from Nintendo R&D2's driver](#soundfont-from-nintendo-rd2s-driver)
-and [SoundFont from MP2K](#soundfont-from-mp2k)).
+MP2K's PSG drums on one side alone (see
+[SoundFont from MP2K](#soundfont-from-mp2k)).
 One of FluidSynth's departures from it affects every driver's conversions:
 
 * **Level.** FluidSynth runs the SoundFont low-pass filter on every note. That

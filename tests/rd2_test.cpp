@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <initializer_list>
 #include <memory>
 #include <sstream>
@@ -1435,13 +1436,62 @@ void TestPsgVolume()
     SEQLIB_CHECK_EQ(ConstantZones(ReadSf2(sum.sf2_path)), size_t(2));
 }
 
+void TestSampleEnvelope()
+{
+    // A sample note's CC11 follows its voice's envelope frame by frame. The envelope rises to its peak in 4 frames and
+    // falls to half of it over the next 8. The zone has only the release. The driver releases the note after 16 frames.
+    // The released voice keeps half of the peak's level. E0 then lowers the track's volume from 0x80 to 0x20 at
+    // tick 24. CC11 keeps the half and follows the volume: it falls to half of what it was, the square root of a
+    // quarter.
+    Cart cart;
+    cart.Sequences(
+        {{TrackData().Bytes({0xC2, kLooped}).Note(60, 16, 127).Wait(24).Bytes({0xE0, 0x20}).Wait(40).End()}});
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+
+    const SongReport sum = ConvertSong(rom, info, 0, TempSettings("rd2_sample_envelope"), nullptr);
+
+    SEQLIB_CHECK(sum.ok);
+    const MidiEvents midi = ReadMidi(sum.midi_path);
+    const auto ons = midi.Find(0x90), offs = midi.Find(0x80);
+    SEQLIB_REQUIRE(ons.size() == 1 && offs.size() == 1);
+    SEQLIB_CHECK(offs[0].tick >= 15 * 150 && offs[0].tick <= 17 * 150);
+
+    // CC11 starts at a quarter of the peak's level and reaches the peak at frame 3. It then falls to half the level.
+    // CC11 holds the square root of the level.
+    const std::vector<std::pair<uint32_t, int>> loudness = ControllerValues(midi, 0, cc::kExpression);
+    const int first = ValueAt(loudness, uint32_t(ons[0].tick));
+    const int peak = ValueAt(loudness, uint32_t(ons[0].tick + 3 * 150));
+    const int held = ValueAt(loudness, uint32_t(offs[0].tick));
+    SEQLIB_CHECK(std::abs(first - int(std::lround(peak * std::sqrt(0.25)))) <= 1);
+    SEQLIB_CHECK(std::abs(held - int(std::lround(peak * std::sqrt(0.5)))) <= 1);
+    const int after = ValueAt(loudness, 24 * 150);
+    SEQLIB_CHECK(std::abs(after - int(std::lround(held * std::sqrt(0.25)))) <= 1);
+
+    // The zones play at a constant level until the release.
+    const Sf2Records sf = ReadSf2(sum.sf2_path);
+    size_t zones = 0;
+    for (size_t z = Le16(sf.Record("inst", 22, 0) + 20) + 1; z < Le16(sf.Record("inst", 22, 1) + 20); z++)
+    {
+        const auto gens = sf.ZoneGens(z);
+        for (uint16_t op :
+             {sf2::kInitialAttenuation, sf2::kAttackVolEnv, sf2::kHoldVolEnv, sf2::kDecayVolEnv, sf2::kSustainVolEnv})
+        {
+            SEQLIB_CHECK(!gens.count(op));
+        }
+        SEQLIB_CHECK(gens.count(sf2::kReleaseVolEnv));
+        zones++;
+    }
+    SEQLIB_CHECK(zones > 0);
+}
+
 void TestSampleLegato()
 {
     // A track in legato plays its notes on one voice. The voice keeps its envelope from note to note. The envelope
     // rises to its peak in 4 frames and falls to half of it over the next 8. Both notes play on a zone whose envelope
-    // has only the release, in a preset of the instrument's notes in legato. The track's CC11 follows the voice's
-    // envelope frame by frame. The second note starts in frame 6, where the envelope falls. The first note ends there.
-    // C6 releases the voice in frame 12, and the second note ends there.
+    // has only the release. The track's CC11 follows the voice's envelope frame by frame. The second note starts in
+    // frame 6, where the envelope falls. The first note ends there. C6 releases the voice in frame 12, and the second
+    // note ends there.
     Cart cart;
     cart.Sequences({{TrackData()
                          .Bytes({0xC2, kLooped, 0xC5})
@@ -1482,7 +1532,7 @@ void TestSampleLegato()
     // The SoundFont holds the one preset. Its zones play at a constant level until the release.
     const Sf2Records sf = ReadSf2(sum.sf2_path);
     SEQLIB_REQUIRE_EQ(sf.Count("phdr", 38), 2);
-    SEQLIB_CHECK(std::string(reinterpret_cast<const char*>(sf.Record("phdr", 38, 0))) == "Bank 0 legato 0");
+    SEQLIB_CHECK(std::string(reinterpret_cast<const char*>(sf.Record("phdr", 38, 0))) == "Bank 0 instrument 0");
     size_t zones = 0;
     for (size_t z = Le16(sf.Record("inst", 22, 0) + 20) + 1; z < Le16(sf.Record("inst", 22, 1) + 20); z++)
     {
@@ -1655,41 +1705,6 @@ void TestPsgPanPasses()
     }
     const std::vector<std::pair<uint32_t, std::string>> kMarkers = {{0, "loopStart"}, {1800, "loopEnd"}};
     SEQLIB_CHECK(markers == kMarkers);
-}
-
-void TestZoneAttenuation()
-{
-    // An envelope that rises at once to half the full level, 0x4000, and holds it plays 6 dB down: 60 cB. The zone
-    // holds 2.5 times that in initialAttenuation: 150 cB. Synthesizers that apply 0.4 of the generator then play 60 cB.
-    // A silent envelope gives the generator's limit of 1440 cB. Those synthesizers play it as 576 cB. A modulator
-    // without a source adds the other 864 cB.
-    test::CartImage image(0x20);
-    image.PutBytes(kRomBase, {1, 0, 0x00, 0x40});
-    image.PutBytes(kRomBase + 0x10, {1, 0, 0, 0});
-    const Rom rom = image.ToRom();
-    const auto attenuation = [](const sf2::Zone& zone)
-    {
-        int value = 0;
-        for (const sf2::Generator& g : zone.generators)
-        {
-            value = g.oper == sf2::kInitialAttenuation ? int(g.amount) : value;
-        }
-
-        return value;
-    };
-
-    sf2::Zone half;
-    AddEnvelope(half, EnvelopeFor(rom, kRomBase, kInstant));
-    SEQLIB_CHECK_EQ(attenuation(half), 150);
-    SEQLIB_CHECK(half.modulators.empty());
-
-    sf2::Zone silent;
-    AddEnvelope(silent, EnvelopeFor(rom, kRomBase + 0x10, kInstant));
-    SEQLIB_CHECK_EQ(attenuation(silent), 1440);
-    SEQLIB_REQUIRE_EQ(silent.modulators.size(), 1);
-    const sf2::Modulator& rest = silent.modulators[0];
-    SEQLIB_CHECK(rest.source == sf2::kNoController && rest.dest == sf2::kInitialAttenuation && rest.amount == 864 &&
-                 rest.amount_source == sf2::kNoController && rest.transform == sf2::kLinear);
 }
 
 void TestLevelOrder()
@@ -2029,11 +2044,11 @@ void RunTests()
     TestDrumPanAndWave();
     TestPsgPan();
     TestPsgVolume();
+    TestSampleEnvelope();
     TestSampleLegato();
     TestWaveVolume();
     TestPsgRunOut();
     TestPsgPanPasses();
-    TestZoneAttenuation();
     TestLevelOrder();
     TestHighVelocities();
     TestLoopLengths();

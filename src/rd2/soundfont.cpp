@@ -2,7 +2,6 @@
 
 #include "rd2/soundfont.h"
 
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -10,8 +9,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-#include "seqlib/sf2/units.h"
 
 #include "gba.h"
 #include "psg.h"
@@ -22,12 +19,6 @@ namespace agbsf2::rd2
 {
 namespace
 {
-
-// The envelope's full level.
-constexpr int kFullLevel = 0x7FFF;
-
-// The most points an envelope is read for.
-constexpr int kMaxPoints = 64;
 
 // The longest sample read, in points.
 constexpr uint32_t kMaxSamplePoints = 1u << 24;
@@ -57,145 +48,10 @@ bool SampleReadable(const Rom& rom, uint32_t address)
            rom.Contains(address + 16, points) && (!loop_end || loop_start < loop_end);
 }
 
-Sf2Envelope EnvelopeFor(const Rom& rom, uint32_t address, int release)
-{
-    Sf2Envelope env;
-
-    // The envelope starts at 0 and moves in a straight line to each point's level over its frames. It holds the last
-    // point's level, and a point of 0 frames holds the level it starts from.
-    std::vector<std::pair<int, int>> points;
-    for (int i = 0; i < kMaxPoints; i++)
-    {
-        const int frames = int16_t(rom.U16(address + 4 * uint32_t(i)));
-        if (frames <= 0)
-        {
-            break;
-        }
-
-        const int level = std::max(0, int(int16_t(rom.U16(address + 4 * uint32_t(i) + 2))));
-        points.emplace_back(frames, level);
-    }
-
-    int peak = 0;
-    for (const auto& p : points)
-    {
-        peak = std::max(peak, p.second);
-    }
-    if (peak == 0)
-    {
-        env.attenuation = kSilent;
-        return env;
-    }
-    env.attenuation = Centibels(double(peak) / kFullLevel);
-
-    // The attack lasts until the first point at the peak. The driver's first frame is already a step up.
-    size_t i = 0;
-    int time = 0;
-    for (; i < points.size(); i++)
-    {
-        time += points[i].first;
-        if (points[i].second == peak)
-        {
-            break;
-        }
-    }
-    if (time > 1)
-    {
-        env.attack = Timecents((time - 1) / kFrameRate);
-    }
-
-    // After the peak, the level holds while it's within 1 dB of it, and then decays to the last point's level.
-    const int final_level = points.back().second;
-    if (final_level < peak)
-    {
-        const double near = peak * std::pow(10.0, -1.0 / 20.0);
-        int hold = 0;
-        int decay = 0;
-        int level = peak;
-        for (size_t k = i + 1; k < points.size(); k++)
-        {
-            const int frames = points[k].first;
-            const int to = points[k].second;
-            if (decay == 0 && to >= near)
-            {
-                hold += frames;
-            }
-            else if (decay == 0 && level >= near)
-            {
-                // The segment crosses the 1 dB mark: hold until it does.
-                const int part = int(std::lround(frames * (level - near) / std::max(1, level - to)));
-                hold += part;
-                decay += frames - part;
-            }
-            else
-            {
-                decay += frames;
-            }
-            level = to;
-        }
-
-        if (hold > 0)
-        {
-            env.hold = Timecents(hold / kFrameRate);
-        }
-        if (final_level == 0)
-        {
-            env.sustain = kSilent;
-            env.decay = decay > 0 ? Timecents(FadeSeconds(decay)) : kInstant;
-        }
-        else
-        {
-            // A SoundFont's decay time is for a fall of 100 dB, so it reaches the sustain level in proportion.
-            env.sustain = Centibels(double(final_level) / peak);
-            env.decay = decay > 0 && env.sustain > 0 ? Timecents(1000.0 / env.sustain * decay / kFrameRate) : kInstant;
-        }
-    }
-
-    env.release = release;
-
-    return env;
-}
-
 int SampleRelease(uint8_t release)
 {
     const double per_frame = -20.0 * std::log10((release + 0xE6) / 512.0);
     return Timecents(100.0 / per_frame / kFrameRate);
-}
-
-void AddEnvelope(sf2::Zone& zone, const Sf2Envelope& envelope)
-{
-    std::vector<sf2::Generator> gens;
-    const sf2::ZoneAttenuation attenuation = sf2::ToZoneAttenuation(envelope.attenuation);
-    if (attenuation.generator)
-    {
-        gens.push_back(sf2::Generator::Value(sf2::kInitialAttenuation, attenuation.generator));
-    }
-    if (attenuation.modulator)
-    {
-        zone.modulators.push_back(*attenuation.modulator);
-    }
-    if (envelope.attack != kInstant)
-    {
-        gens.push_back(sf2::Generator::Value(sf2::kAttackVolEnv, envelope.attack));
-    }
-    if (envelope.hold != kInstant)
-    {
-        gens.push_back(sf2::Generator::Value(sf2::kHoldVolEnv, envelope.hold));
-    }
-    if (envelope.decay != kInstant)
-    {
-        gens.push_back(sf2::Generator::Value(sf2::kDecayVolEnv, envelope.decay));
-    }
-    if (envelope.sustain)
-    {
-        gens.push_back(sf2::Generator::Value(sf2::kSustainVolEnv, envelope.sustain));
-    }
-    if (envelope.release != kInstant)
-    {
-        gens.push_back(sf2::Generator::Value(sf2::kReleaseVolEnv, envelope.release));
-    }
-
-    zone.generators.insert(zone.generators.end() - (zone.generators.empty() ? 0 : 1), gens.begin(), gens.end());
 }
 
 SoundfontBuilder::SoundfontBuilder(const Rom& rom, double psg_share, int songs)

@@ -851,7 +851,6 @@ void Sequencer::NoteOn(int slot, uint8_t note, uint8_t velocity, uint32_t length
 
     const uint32_t region = lk.region;
     const uint32_t frames = NoteFrames(region, length);
-    e.legato = t.legato != 0;
     const int v = TakeVoice(slot, given, lk);
     if (v < 0)
     {

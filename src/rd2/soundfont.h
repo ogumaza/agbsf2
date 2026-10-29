@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
-// Builds SoundFont samples and envelopes from the driver's sounds: the game's 8-bit samples, the Game Boy's square
-// waves, wave patterns and noise, and the driver's envelopes of straight-line segments.
+// Builds SoundFont samples from the driver's sounds: the game's 8-bit samples and the Game Boy's square waves, wave
+// patterns and noise.
 
 #pragma once
 
@@ -26,31 +26,9 @@ constexpr double PsgShare(Revision revision)
     return revision == Revision::kLinkToThePast ? 15.0 / 47.0 : 15.0 / 31.0;
 }
 
-// A voice's envelope in a SoundFont's terms: times in timecents and levels in centibels below the full level.
-struct Sf2Envelope
-{
-    int attack = kInstant;
-    int hold = kInstant;
-    int decay = kInstant;
-    int sustain = 0;
-    int release = kInstant;
-    int attenuation = 0; // the envelope's peak, below the full level
-};
-
-// Returns the SoundFont envelope closest to the driver's envelope at `address`, with `release` in timecents. A silent
-// envelope gets no release.
-Sf2Envelope EnvelopeFor(const Rom& rom, uint32_t address, int release);
-
 // Returns the SoundFont release of a sample voice for a region's release value. The release takes a share of the
 // voice's level off each frame.
 int SampleRelease(uint8_t release);
-
-// Adds an envelope's generators to a zone, before its last generator (the sample). The attenuation takes the form that
-// seqlib's ToZoneAttenuation gives it: 2.5 times the attenuation in the generator, up to 1440 cB. FluidSynth, BASSMIDI
-// and most other SoundFont synthesizers apply 0.4 of the generator. They then play the envelope's peak at its level. A
-// synthesizer that follows the specification plays the zone at 2.5 times the attenuation. An attenuation beyond 576 cB
-// also gives the zone a modulator.
-void AddEnvelope(sf2::Zone& zone, const Sf2Envelope& envelope);
 
 // Returns true if SoundfontBuilder::GameSample() can make a sample from the header at `address`. The sample requires
 // points, a rate and a loop that starts before it ends. Its points have to be inside the ROM.
