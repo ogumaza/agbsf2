@@ -138,6 +138,13 @@ it, and its release takes longer. A level of 0 ends the voice. A voice's volume
 is the channel's level times the velocity times the envelope's level, shifted
 right by 14 bits.
 
+The driver's release falls in a straight line in level. A SoundFont release
+falls 96 dB in a straight line in decibels. A sample zone releases over 7 times
+the driver's frames, whatever their number. The other drivers in agbsf2 stretch
+a fade 3 times up to 5 frames, rising to 6 times from 16 frames on. Most sample
+notes here release in under 16 frames. Against recordings from mGBA 0.11.0, the
+stretch of 7 came closer. A PSG zone keeps the stretch of the other drivers.
+
 Pitches come from a table of each key's frequency in whole hertz: 8 Hz for key
 0, 440 Hz for key 69 and 12544 Hz for key 127. A sample plays at its rate times
 the key's pitch over its root key's pitch. A `0x46` sample plays at the mixer's

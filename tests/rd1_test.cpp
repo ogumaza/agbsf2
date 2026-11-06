@@ -601,8 +601,9 @@ void TestSilentEndAfterLastSound()
 // A note that ends while its decay still falls releases from above the sustain level, and the driver's release then
 // takes longer. The record decays by 0x10000 a frame towards half of the full level and releases by 0x80000 a frame.
 // From the sustain level the release takes 0x3F8000 / 0x80000 = 7.9 frames. A note that ends after 6 frames releases
-// from 0x790000, level 121, and takes 15.1 frames. The set pools a sample program's notes over its keys. Without a note
-// that releases, the zone falls back on the sustain level.
+// from 0x790000, level 121, and takes 15.1 frames. A sample zone releases over kSampleReleaseStretch times as many
+// frames, and a PSG zone over FadeSeconds() of them. The set pools a sample program's notes over its keys. Without a
+// note that releases, the zone falls back on the sustain level.
 void TestReleaseFrom()
 {
     InstrumentRecord r;
@@ -611,9 +612,13 @@ void TestReleaseFrom()
     r.sustain = 0x3F8000;
     r.decay = 0x10000;
     r.release = 0x80000;
-    SEQLIB_CHECK_EQ(ZoneEnvelope(r).release, Timecents(FadeSeconds(0x3F8000 / double(0x80000))));
-    SEQLIB_CHECK_EQ(ZoneEnvelope(r, 121 / 127.0).release, Timecents(FadeSeconds(0x790000 / double(0x80000))));
+    SEQLIB_CHECK_EQ(ZoneEnvelope(r).release, Timecents(kSampleReleaseStretch * 0x3F8000 / 0x80000 / kFrameRate));
+    SEQLIB_CHECK_EQ(ZoneEnvelope(r, 121 / 127.0).release,
+                    Timecents(kSampleReleaseStretch * 0x790000 / 0x80000 / kFrameRate));
     SEQLIB_CHECK(ZoneEnvelope(r, 121 / 127.0).release > ZoneEnvelope(r).release);
+    InstrumentRecord psg = r;
+    psg.kind = InstrumentKind::kPsg;
+    SEQLIB_CHECK_EQ(ZoneEnvelope(psg).release, Timecents(FadeSeconds(0x3F8000 / double(0x80000))));
 
     const Cart cart;
     const Rom rom = cart.ToRom();

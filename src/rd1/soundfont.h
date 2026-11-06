@@ -23,6 +23,12 @@ namespace agbsf2::rd1
 // limit, up to v = 125. Each note's velocity scales the line down to the driver's limit and whole steps.
 constexpr double kPsgFullVolume = 125 * 3 / 16.0;
 
+// A sample zone releases over this many times the frames of the driver release. The driver's level falls in a straight
+// line, and a SoundFont release falls in a straight line in decibels. FadeStretch() stretches a fade of 16 frames or
+// more 6 times and a shorter fade less. Most sample notes release in under 16 frames. Against recordings from mGBA
+// 0.11.0, a stretch of 7 at every length came closest.
+constexpr double kSampleReleaseStretch = 7.0;
+
 // The kinds of instrument record, by their first byte.
 enum class InstrumentKind
 {
@@ -68,7 +74,8 @@ int PsgSetting(int hz);
 bool Sweeps(const InstrumentRecord& r);
 
 // Returns the volume envelope of record `r`'s zones. A note with a sweep keeps its volume to its end (Sweeps()). The
-// release falls from `release_from`, 0 to 1, or from the sustain level when it's negative.
+// release falls from `release_from`, 0 to 1, or from the sustain level when it's negative. A sample zone releases over
+// kSampleReleaseStretch times the frames of the driver release, and a PSG zone over FadeSeconds() of them.
 VolumeEnvelope ZoneEnvelope(const InstrumentRecord& r, double release_from = -1);
 
 // Reads the instrument record at `address`.

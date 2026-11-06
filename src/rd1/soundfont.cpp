@@ -129,9 +129,13 @@ VolumeEnvelope EnvelopeOf(const InstrumentRecord& r, double release_from)
     }
 
     // The driver's release takes longer from a higher level. A note that ends before its decay reaches the sustain
-    // level releases from above it. A release of 0 leaves the level where it is until the voice stops.
+    // level releases from above it. A release of 0 leaves the level where it is until the voice stops. A sample zone's
+    // release keeps one stretch at every length (kSampleReleaseStretch).
     const double from = release_from >= 0 ? release_from : sustain > 0 && !r.fall ? sustain : 1.0;
-    env.release = r.release ? Timecents(FadeSeconds(from * kFullLevel / double(r.release))) : Timecents(100);
+    const double frames = r.release ? from * kFullLevel / double(r.release) : 0;
+    const double seconds =
+        r.kind == InstrumentKind::kPsg ? FadeSeconds(frames) : kSampleReleaseStretch * frames / kFrameRate;
+    env.release = r.release ? Timecents(seconds) : Timecents(100);
     return env;
 }
 
