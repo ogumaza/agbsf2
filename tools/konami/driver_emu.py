@@ -12,18 +12,22 @@ captures what the driver produces:
                 drivers say so)
     render-psg  the PSG, rendered by psg_model.py from the driver's register writes
 
-    driver_emu.py ROM trace SONG FRAMES
-    driver_emu.py ROM render-ds SONG FRAMES OUT.wav [--voices 0,3] [--echo]
-    driver_emu.py ROM render-psg SONG FRAMES OUT.wav [--channel N]
+    driver_emu.py ROM trace SONG FRAMES [--live]
+    driver_emu.py ROM render-ds SONG FRAMES OUT.wav [--voices 0,3] [--echo] [--live]
+    driver_emu.py ROM render-psg SONG FRAMES OUT.wav [--channel N] [--live]
+
+With --live, the game's live stage requests the song, in the two games that have one (BMAJ and B3MJ). The live stage
+sets the setting that FA reads to 0 after its request. A plain request sets it to FF.
 
 The routine and RAM addresses are chosen by the ROM's game code. Those of
 Yu-Gi-Oh! Ultimate Masters Edition: World Championship Tournament 2006 (BY6J,
 BY6E), Shaman King: Master of Spirits 1 and 2 (BSOE, B2ME), Yu-Gi-Oh! Day of
 the Duelist (BY7E), Yu-Gi-Oh! GX: Duel Academy (BYGE), Yu-Gi-Oh! World
 Championship Tournament 2004 (BYWP), Rave Master: Special Attack Force (BRME),
-Yu-Gi-Oh! The Eternal Duelist Soul (AY5E), Yu-Gi-Oh! Worldwide Edition (AYWE)
-and Yu-Gi-Oh! Dungeon Dice Monsters (AYDE) are built in. Another game needs its
-own values; see Addresses and docs/konami.md.
+Yu-Gi-Oh! The Eternal Duelist Soul (AY5E), Yu-Gi-Oh! Worldwide Edition (AYWE),
+Yu-Gi-Oh! Dungeon Dice Monsters (AYDE) and Yu-Gi-Oh! Double Pack 2 (BYVE) are built in. So are those of twenty-one
+Japanese games: AGBJ, AY5J, BAYJ, ARIJ, AHKJ, AKEJ, AY6J, BMAJ, B3MJ, B4GJ, B4SJ, ATIJ, AG2J, AKYJ, ARVJ, A8NJ, A8RJ,
+A9LJ, AVAJ, BGKJ and BMOJ. Another game needs its values in GAMES; see Addresses and docs/konami.md.
 """
 import argparse
 import struct
@@ -33,7 +37,7 @@ from pathlib import Path
 
 import numpy as np
 from unicorn import UC_ARCH_ARM, UC_HOOK_CODE, UC_HOOK_INTR, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE, UC_MODE_ARM, Uc
-from unicorn.arm_const import UC_ARM_REG_CPSR, UC_ARM_REG_LR, UC_ARM_REG_R0, UC_ARM_REG_SP
+from unicorn.arm_const import UC_ARM_REG_CPSR, UC_ARM_REG_LR, UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_SP
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for gbarom.py and psg_model.py, in tools/
 import psg_model
@@ -48,6 +52,7 @@ class Addresses:
     """BY6J (the Japanese release of Yu-Gi-Oh! Ultimate Masters Edition: World Championship Tournament 2006)."""
     init = 0x0810B470           # sound init(irq slot, irq slot 2, work buffer)
     init_args = (0x03000020, 0x03000024, 0x02006F10)
+    init_calls = ()             # the game's calls into the driver after the init, before any song: (address, args)
     request_song = 0x0810CFE4   # r0 = song
     request_args = ()           # the arguments that follow the song
     start_song = 0x0810CE30
@@ -83,6 +88,14 @@ class Addresses:
     echo_mask = 0x03005644      # per-voice bus routing read by the mixer
     echo_bus0_voices = 0xFFF    # bit v: the mixer takes voice v from echo bus 0
     wave_reloads_on_pitch = False  # True if a pitch change reloads the wave RAM, switching banks, as a note does
+    packed_flag = None          # the flag of a voice record that plays a packed sample, or None for a driver without
+                                # packed samples
+    packed_value = None         # the instruction of the mixer's path for packed samples that has the sample to play in
+                                # r1
+    live_request = None         # the game's live stage's request; it sets FA's setting to 0 after it requests a
+                                # song: r0 = an entry of live_table, then live_args
+    live_args = ()
+    live_table = None           # the live stage's songs: (address, bytes of an entry, entries)
 
     @classmethod
     def voice_levels(cls, record):
@@ -296,9 +309,332 @@ class AddressesAYDE(Addresses):
     echo_mask = None
 
 
+class AddressesAGBJ(AddressesAYDE):
+    """AGBJ (GetBackers Dakkanya: Jigoku no Scaramouche): a later build of the Dungeon Dice Monsters revision, with the
+    driver's state 0x17C bytes higher in RAM. Its command reader, note starts and DMA interrupt routines differ from
+    AYDE's."""
+    init = 0x08024DA0
+    request_song = 0x0802672C
+    start_song = 0x08026514
+    frame = 0x08026304
+    output_stage = 0x08025B0E
+    fifo_irqs = (0x08025EB8, 0x08025CD8)
+    fifo_periods = AddressesAYDE.fifo_periods + 0x17C
+    voices = AddressesAYDE.voices + 0x17C
+
+
+class AddressesBYVE(AddressesAYDE):
+    """BYVE (Yu-Gi-Oh! Double Pack 2): the Dungeon Dice Monsters of the pack, with AYDE's songs and a third build of
+    the revision. Its sequencer and output stage were compiled with other registers. The driver's state is at AYDE's
+    address."""
+    init = 0x0802B2D0
+    request_song = 0x0802CCBC
+    start_song = 0x0802CA98
+    frame = 0x0802C888
+    output_stage = 0x0802C032
+    fifo_irqs = (0x0802C3F8, 0x0802C204)
+
+
+class AddressesAY5J(AddressesAGBJ):
+    """AY5J (Yu-Gi-Oh! Duel Monsters 5 Expert 1): the driver of AGBJ, 0x56994 bytes higher in ROM, with the state at
+    0x030053C8."""
+    init = AddressesAGBJ.init + 0x56994
+    request_song = AddressesAGBJ.request_song + 0x56994
+    start_song = AddressesAGBJ.start_song + 0x56994
+    frame = AddressesAGBJ.frame + 0x56994
+    output_stage = AddressesAGBJ.output_stage + 0x56994
+    fifo_irqs = tuple(a + 0x56994 for a in AddressesAGBJ.fifo_irqs)
+    fifo_periods = 0x030053C8 + 0x1A4
+    voices = 0x030053C8 + 4
+
+
+class AddressesBAYJ(AddressesB2ME):
+    """BAYJ (Animal Yokochou): the driver build of BYGE, with its RAM where B2ME has it."""
+    init = 0x0803C59C
+    request_song = 0x0803E108
+    start_song = 0x0803DF54
+    frame = 0x0803DBEC
+    output_stage = 0x0803D85A
+
+
+class AddressesARIJ(AddressesBRME):
+    """ARIJ (Groove Adventure Rave 2): the driver of BRME, 0x2B0 bytes lower in ROM, with the same RAM."""
+    init = 0x0802AC9C
+    init_args = (0x030056A4, 0x030056A8)
+    request_song = 0x0802C13C
+    start_song = 0x0802BFEC
+    frame = 0x0802BD68
+    output_stage = 0x0802B8E8
+
+
+class AddressesB4GJ(AddressesB2ME):
+    """B4GJ (Tennis no Ouji-sama 2004 Glorious Gold): the Prince of Tennis 2004 build of the driver, whose RAM is 0x40
+    bytes smaller than BYGE's from the track records on, after a mixer at 0x03000000."""
+    init = 0x080D71C0
+    init_args = (0x03007000, 0x03007004, 0x0203B000)
+    request_song = 0x080D8C3C
+    start_song = 0x080D8A88
+    frame = 0x080D8720
+    output_stage = 0x080D83C6
+    fifo_buffer = AddressesB2ME.mixer + 0x904
+    voices = AddressesB2ME.mixer + 0x7E0
+    echo_buses = AddressesB2ME.mixer + 0x94C
+    echo_mask = AddressesB2ME.mixer + 0x988
+    packed_flag = 0x04
+    packed_value = AddressesB2ME.mixer + 0x218
+
+
+class AddressesB4SJ(AddressesB4GJ):
+    """B4SJ (Tennis no Ouji-sama 2004 Stylish Silver): the driver of B4GJ, 4 bytes higher in ROM."""
+    init = AddressesB4GJ.init + 4
+    request_song = AddressesB4GJ.request_song + 4
+    start_song = AddressesB4GJ.start_song + 4
+    frame = AddressesB4GJ.frame + 4
+    output_stage = AddressesB4GJ.output_stage + 4
+
+
+class AddressesB3MJ(AddressesB2ME):
+    """B3MJ (Mermaid Melody Pichi Pichitto Live Start!): the driver build of B2ME, with its mixer at 0x03001EB0."""
+    init = 0x08009B4C
+    init_args = (0x03007000, 0x03007004, 0x02000000)
+    request_song = 0x0800B660
+    start_song = 0x0800B4B0
+    frame = 0x0800B148
+    output_stage = 0x0800ADBA
+    mixer = 0x03001EB0
+    fifo_buffer = mixer + 0x944
+    voices = mixer + 0x820
+    echo_buses = mixer + 0x98C
+    echo_mask = mixer + 0x9C8
+    packed_flag = 0x04
+    packed_value = mixer + 0x218
+    live_request = 0x0801E1C8   # r1 = 1 requests the song
+    live_args = (1,)
+    live_table = (0x09D37848, 1, 18)
+
+
+class AddressesBMAJ(AddressesBYWP):
+    """BMAJ (Mermaid Melody Pichi Pichi Pitch): a build of the WCT 2004 revision with 24-byte voice records, and its RAM
+    lower."""
+    init = 0x08013D7C
+    init_args = (0x03000024, 0x03000028, 0x0203BD00)
+    request_song = 0x08015840
+    start_song = 0x08015638
+    frame = 0x080152F4
+    output_stage = 0x08014ECC
+    mixer = 0x03001E10
+    fifo_buffer = 0x03002730
+    voices = 0x0300260C
+    voice_size = 0x18
+    echo_buses = 0x03002778
+    echo_mask = 0x030027B4
+    packed_flag = 0x04          # the live stage's samples; the mixer reads them with the code of B3MJ's mixer
+    packed_value = mixer + 0x2C4
+    live_request = 0x0800C254
+    live_table = (0x08EB7E08, 2, 9)
+
+
+class AddressesAKEJ(AddressesBRME):
+    """AKEJ (Hikaru no Go 2): a build of the Rave Master revision with 20-byte voice records and its RAM lower. Its
+    init's second half copies the mixer to 0x03000AA0."""
+    init = 0x080774E8
+    init_args = (0, 0)          # no interrupt slots to fill in
+    request_song = 0x080788FC
+    start_song = 0x080787AC
+    frame = 0x08078554
+    output_stage = 0x08078118
+    mixer = 0x03000AA0
+    fifo_buffer = 0x03000A60
+    voices = 0x030009C0
+    voice_size = 0x14
+
+
+class AddressesAHKJ(AddressesAY5E):
+    """AHKJ (Hikaru no Go): the driver of AY5E, 0x1FC74 bytes lower in ROM and 0x4A4C bytes lower in RAM."""
+    init = AddressesAY5E.init - 0x1FC74
+    request_song = AddressesAY5E.request_song - 0x1FC74
+    start_song = AddressesAY5E.start_song - 0x1FC74
+    frame = AddressesAY5E.frame - 0x1FC74
+    output_stage = AddressesAY5E.output_stage - 0x1FC74
+    mixer = AddressesAY5E.mixer - 0x1FC74
+    mixer_call = 0x080656AC
+    mixer_tick = AddressesAY5E.mixer_tick - 0x1FC74
+    mixer_position = AddressesAY5E.mixer_position - 0x4A4C
+    fifo_buffer = AddressesAY5E.fifo_buffer - 0x4A4C
+    voices = AddressesAY5E.voices - 0x4A4C
+
+
+class AddressesATIJ(AddressesAY5E):
+    """ATIJ (Tennis no Ouji-sama): a revision between Eternal Duelist and Rave Master, with Eternal Duelist's songs,
+    output records, voices and mixer. Its track records are 28 bytes, and its state is at 0x03000000."""
+    init = 0x08075950
+    request_song = 0x08076B10
+    start_song = 0x080769D4
+    frame = 0x0807682C
+    output_stage = 0x080764DE
+    mixer = 0x08077054          # in ROM
+    mixer_call = 0x080781D0
+    mixer_tick = 0x080767A0
+    mixer_position = 0x03000224
+    fifo_buffer = 0x0300022C
+    voices = 0x030001C4
+
+class AddressesAG2J(AddressesATIJ):
+    """AG2J (Kami no Kijutsu: Illusion of the Evil Eyes): the driver of ATIJ, with its state at 0x030008A0."""
+    init = 0x0804F490
+    request_song = 0x0805064C
+    start_song = 0x08050510
+    frame = 0x0805036C
+    output_stage = 0x0805001E
+    mixer = 0x08050B30
+    mixer_call = 0x080570C8
+    mixer_tick = 0x080502E0
+    mixer_position = 0x03000AC4
+    fifo_buffer = 0x03000ACC
+    voices = 0x03000A64
+
+
+class AddressesAKYJ(AddressesATIJ):
+    """AKYJ (Captain Tsubasa: Eikou no Kiseki): a build of ATIJ's driver whose output stage doesn't write NR51 first,
+    with its state at 0x03001AE4."""
+    init = 0x080333A0
+    request_song = 0x0803454C
+    start_song = 0x08034410
+    frame = 0x0803426C
+    output_stage = 0x08033F2A
+    mixer = 0x08034A30
+    mixer_call = 0x0806B884
+    mixer_tick = 0x080341E0
+    mixer_position = 0x03001D08
+    fifo_buffer = 0x03001D10
+    voices = 0x03001CA8
+
+
+class AddressesARVJ(AddressesAKYJ):
+    """ARVJ (Groove Adventure Rave): the build of AKYJ's driver, with its state at 0x03004074."""
+    init = 0x0802069C
+    request_song = 0x08021848
+    start_song = 0x0802170C
+    frame = 0x08021568
+    output_stage = 0x08021226
+    mixer = 0x08021D24
+    mixer_call = 0x080224A4
+    mixer_tick = 0x080214DC
+    mixer_position = 0x03004298
+    fifo_buffer = 0x030042A0
+    voices = 0x03004238
+
+class AddressesA8RJ(AddressesBRME):
+    """A8RJ (Tennis no Ouji-sama 2003: Passion Red): the Hunter X Hunter revision of the driver. Its songs, output
+    records, voices and mixer follow Rave Master, with the state at 0x03000330 and voice records of 28 bytes."""
+    init = 0x080983B0
+    init_args = (0x03000020,)
+    request_song = 0x080999B4
+    request_args = (0,)         # no fade-in
+    start_song = 0x08099854
+    frame = 0x080995A4
+    output_stage = 0x0809919A
+    mixer = 0x03000000
+    fifo_buffer = 0x030006C4
+    voices = 0x030005E0
+    voice_size = 0x1C
+
+
+class AddressesA9LJ(AddressesA8RJ):
+    """A9LJ (Tennis no Ouji-sama 2003: Cool Blue): the driver of A8RJ, 0xD0 bytes higher in ROM, with the same RAM."""
+    init = AddressesA8RJ.init + 0xD0
+    request_song = AddressesA8RJ.request_song + 0xD0
+    start_song = AddressesA8RJ.start_song + 0xD0
+    frame = AddressesA8RJ.frame + 0xD0
+    output_stage = AddressesA8RJ.output_stage + 0xD0
+
+
+class AddressesA8NJ(AddressesA8RJ):
+    """A8NJ (Hunter X Hunter: Minna Tomodachi Daisakusen!!): a build of A8RJ's driver with its state at 0x03002054."""
+    init = 0x08024CF4
+    request_song = 0x0802644C
+    start_song = 0x080262EC
+    frame = 0x08025FD0
+    output_stage = 0x08025BCA
+    mixer = 0x03001D1C
+    fifo_buffer = 0x030023E8
+    voices = 0x03002304
+
+
+class AddressesAVAJ(AddressesA8RJ):
+    """AVAJ (Tennis no Ouji-sama: Aim at the Victory!): a build of A8RJ's driver with its state at 0x03005184."""
+    init = 0x0803E144
+    request_song = 0x0803F6AC
+    start_song = 0x0803F54C
+    frame = 0x0803F2A8
+    output_stage = 0x0803EEA4
+    mixer = 0x03004E6C
+    fifo_buffer = 0x030054F4
+    voices = 0x03005410
+
+
+class AddressesBGKJ(AddressesBYWP):
+    """BGKJ (Gegege no Kitaro): the Kitaro revision of the driver. Its songs, output records, voices and mixer follow
+    WCT 2004, with the state at 0x03000424 and the echo buses at 0x03000904. The mixer reads each bus's routing from
+    the bus's record. The game gives the echo buses their buffers after the init, at 0x080002E4."""
+    init = 0x08035F70
+    init_args = (0x03004EF4, 0x03004EF8)
+    init_calls = ((0x0803853C, (0x02002304,)),)
+    request_song = 0x080378AC
+    start_song = 0x08037718
+    frame = 0x080373F0
+    output_stage = 0x08036FC8
+    mixer = 0x03000000
+    fifo_buffer = 0x030008BC
+    voices = 0x03000768
+    echo_buses = 0x03000904
+    echo_mask = None
+    echo_bus0_voices = 0xFFF
+
+
+class AddressesBMOJ(AddressesBYWP):
+    """BMOJ (Minna no Ouji-sama): the Minna no Ouji-sama revision of the driver. It is WCT 2004's, with BMAJ's 24-byte
+    voice records and a song volume that FB sets."""
+    init = 0x0808BE34
+    init_args = (0x03007514, 0x03007518, 0x0203B000)
+    request_song = 0x0808D94C
+    start_song = 0x0808D744
+    frame = 0x0808D400
+    output_stage = 0x0808CFCE
+    mixer = 0x03000000
+    fifo_buffer = 0x03000918
+    voices = 0x030007F4
+    voice_size = 0x18
+    echo_buses = 0x03000960
+    echo_mask = 0x0300099C
+
+
+class AddressesAY6J(AddressesAY5E):
+    """AY6J (Yu-Gi-Oh! Duel Monsters 6 Expert 2): the driver of AY5E, 0xC2C4 bytes higher in ROM and 0x100 bytes
+    lower in RAM."""
+    init = AddressesAY5E.init + 0xC2C4
+    request_song = AddressesAY5E.request_song + 0xC2C4
+    start_song = AddressesAY5E.start_song + 0xC2C4
+    frame = AddressesAY5E.frame + 0xC2C4
+    output_stage = AddressesAY5E.output_stage + 0xC2C4
+    mixer = AddressesAY5E.mixer + 0xC2C4
+    mixer_call = 0x0808CCCC
+    mixer_tick = AddressesAY5E.mixer_tick + 0xC2C4
+    mixer_position = AddressesAY5E.mixer_position - 0x100
+    fifo_buffer = AddressesAY5E.fifo_buffer - 0x100
+    voices = AddressesAY5E.voices - 0x100
+
+
 GAMES = {b'BY6J': Addresses, b'BY6E': AddressesBY6E, b'B2ME': AddressesB2ME, b'BSOE': AddressesBSOE,
          b'BY7E': AddressesBY7E, b'BYGE': AddressesBYGE, b'BYWP': AddressesBYWP, b'BRME': AddressesBRME,
-         b'AY5E': AddressesAY5E, b'AYWE': AddressesAYWE, b'AYDE': AddressesAYDE}
+         b'AY5E': AddressesAY5E, b'AYWE': AddressesAYWE, b'AYDE': AddressesAYDE, b'AGBJ': AddressesAGBJ,
+         b'AY5J': AddressesAY5J, b'BAYJ': AddressesBAYJ, b'ARIJ': AddressesARIJ, b'AHKJ': AddressesAHKJ,
+         b'AY6J': AddressesAY6J, b'AKEJ': AddressesAKEJ,
+         b'BMAJ': AddressesBMAJ, b'B4GJ': AddressesB4GJ, b'B4SJ': AddressesB4SJ,
+         b'B3MJ': AddressesB3MJ, b'ATIJ': AddressesATIJ,
+         b'AG2J': AddressesAG2J, b'AKYJ': AddressesAKYJ, b'ARVJ': AddressesARVJ, b'BYVE': AddressesBYVE,
+         b'A8NJ': AddressesA8NJ, b'A8RJ': AddressesA8RJ, b'A9LJ': AddressesA9LJ, b'AVAJ': AddressesAVAJ,
+         b'BGKJ': AddressesBGKJ, b'BMOJ': AddressesBMOJ}
 
 
 def addresses_for(rom):
@@ -333,6 +669,8 @@ class DriverEmulator:
         self._records = None
         uc.hook_add(UC_HOOK_CODE, self._capture, begin=addr.output_stage, end=addr.output_stage)
         self.call(addr.init, addr.init_args)
+        for address, args in addr.init_calls:
+            self.call(address, args)
 
         # The init starts timer 0, which clocks the sound FIFOs and so sets the mixer's output rate.
         self.sample_cycles = None  # CPU cycles per mixer sample
@@ -399,9 +737,25 @@ class DriverEmulator:
             uc.reg_write(UC_ARM_REG_R0 + i, a)
         uc.emu_start(address | (1 if thumb else 0), RETURN_TRAP, count=50_000_000)
 
-    def play(self, song):
-        self.call(self.addr.request_song, (song,) + self.addr.request_args)
-        self.call(self.addr.start_song)
+    def play(self, song, live=False):
+        """Requests and starts a song. With `live`, the game's live stage requests it."""
+        a = self.addr
+        if live:
+            self.call(a.live_request, (self.live_entry(song),) + a.live_args)
+        else:
+            self.call(a.request_song, (song,) + a.request_args)
+        self.call(a.start_song)
+
+    def live_entry(self, song):
+        """Returns the entry of the live stage's table that holds `song`."""
+        a = self.addr
+        if a.live_request is None:
+            raise SystemExit('the game has no live stage')
+        table, size, count = a.live_table
+        for i in range(count):
+            if int.from_bytes(self.uc.mem_read(table + i * size, size), 'little') == song:
+                return i
+        raise SystemExit('the live stage plays no song %d' % song)
 
     def frame(self):
         """Runs one frame; returns the track output records (None if the driver is idle)."""
@@ -443,6 +797,39 @@ class DriverEmulator:
         both = fifo_a[index].astype(np.int16) + fifo_b[index]
         return both, both
 
+    def unpack_sample(self, data, length):
+        """Returns the `length` samples that the mixer plays from the packed sample whose data is at `data`, with no
+        other voice playing, at one sample of the data for each sample of the mix.
+
+        The samples are recorded where the mixer's path for packed samples has the sample to play. At the start of each
+        block of 16 samples, the mixer reads the last sample it reached again. For a pair of samples, it then plays the
+        pair's second sample where the first should be. That depends on where the blocks fall in the mix, which a
+        SoundFont can't follow, so that read is left out."""
+        a = self.addr
+        uc = self.uc
+        for v in range(a.voice_count):
+            uc.mem_write(a.voices + v * a.voice_size + a.voice_flags_at, b'\0')
+        # The voice record of the builds with packed samples: the data pointer, the samples left, the step (4.12 fixed
+        # point) and its fraction, the sample number, the flags and a byte the mixer doesn't read, the right and left
+        # levels (128 plays a sample at full scale), the value and length of a run, and the start of the data.
+        uc.mem_write(a.voices, struct.pack('<IIHHhBBBBbBI', data, length, 0x1000, 0, 0, 0x80 | a.packed_flag, 0, 0x80,
+                                           0x80, 0, 0, data))
+        values, block = [], []
+
+        def on_value(uc, address, size, user):
+            r1 = uc.reg_read(UC_ARM_REG_R1)
+            block.append(r1 - (1 << 32) if r1 & 0x80000000 else r1)
+
+        hook = uc.hook_add(UC_HOOK_CODE, on_value, begin=a.packed_value, end=a.packed_value)
+        while len(values) < length:
+            block.clear()
+            self.call(a.mixer, thumb=False)
+            if not block:
+                break
+            values += block[1:] if values else block
+        uc.hook_del(hook)
+        return values[:length]
+
     def mute_voices_except(self, keep):
         a = self.addr
         for v in range(a.voice_count):
@@ -463,9 +850,9 @@ def write_wav(path, stereo, rate):
         w.writeframes(data.tobytes())
 
 
-def trace(rom, song, frames):
+def trace(rom, song, frames, live=False):
     emu = DriverEmulator(rom)
-    emu.play(song)
+    emu.play(song, live)
     for f in range(frames):
         records = emu.frame()
         if records is None:
@@ -562,15 +949,16 @@ def render_fifos(emu, frames, voices=None):
     return np.stack([both, both], axis=1).astype(np.float32) / 128.0, 32768.0
 
 
-def render_ds(rom, song, frames, voices=None, echo=False):
-    """Returns the driver's DirectSound mix of the first `frames` frames of `song`, and its rate in Hz."""
+def render_ds(rom, song, frames, voices=None, echo=False, live=False):
+    """Returns the driver's DirectSound mix of the first `frames` frames of `song`, and its rate in Hz. With `live`,
+    the game's live stage requests the song."""
     emu = DriverEmulator(rom)
     if emu.addr.fifo_irqs is not None:
-        emu.play(song)
+        emu.play(song, live)
         return render_fifos(emu, frames, voices)
 
     rate = emu.mix_rate()
-    emu.play(song)
+    emu.play(song, live)
 
     # The mixer makes 16 samples at a time. When a frame doesn't hold a whole number of blocks, the fraction left over
     # is carried into the next frame.
@@ -591,11 +979,11 @@ def render_ds(rom, song, frames, voices=None, echo=False):
     return np.concatenate(out).astype(np.float32) / 128.0, rate
 
 
-def render_psg(rom, song, frames, channel=None):
+def render_psg(rom, song, frames, channel=None, live=False):
     emu = DriverEmulator(rom)
     init_writes = [(a, s, v) for _, a, s, v in emu.io_writes]
     emu.io_writes.clear()
-    emu.play(song)
+    emu.play(song, live)
     for _ in range(frames):
         emu.frame()
     return psg_model.render_writes(init_writes, emu.io_writes, frames, channel)
@@ -611,19 +999,20 @@ def main():
     p.add_argument('--voices', help='render-ds: only these voices, such as 0,3')
     p.add_argument('--echo', action='store_true', help='render-ds: keep the echo effect')
     p.add_argument('--channel', type=int, help='render-psg: only this PSG channel (0-3)')
+    p.add_argument('--live', action='store_true', help="the game's live stage requests the song")
     a = p.parse_args()
     rom = load_rom(a.rom)
     if a.command == 'trace':
-        trace(rom, a.song, a.frames)
+        trace(rom, a.song, a.frames, a.live)
         return
     if not a.out:
         p.error('an output file is needed')
     if a.command == 'render-ds':
         voices = [int(v) for v in a.voices.split(',')] if a.voices else None
-        mix, rate = render_ds(rom, a.song, a.frames, voices, a.echo)
+        mix, rate = render_ds(rom, a.song, a.frames, voices, a.echo, a.live)
         write_wav(a.out, mix, rate)
     else:
-        write_wav(a.out, render_psg(rom, a.song, a.frames, a.channel), psg_model.RATE)
+        write_wav(a.out, render_psg(rom, a.song, a.frames, a.channel, a.live), psg_model.RATE)
 
 
 if __name__ == '__main__':

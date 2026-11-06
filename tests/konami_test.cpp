@@ -1535,13 +1535,16 @@ void TestRevisionDetection()
         std::string error;
     };
 
-    // Returns the result of detection with the reader that compares `third` and `fifth`, or with none if they're 0.
-    auto detect = [&](uint16_t third, uint16_t fifth)
+    // Returns the result of detection with the reader that compares `third` and `fifth`, and then runs the halfwords in
+    // `more`, or with none if `third` and `fifth` are 0.
+    auto detect = [&](uint16_t third, uint16_t fifth, const std::vector<uint16_t>& more = {})
     {
         Image m = SyntheticImage();
         if (third)
         {
-            m.PutHalfwords(kCode, CommandReader(third, fifth));
+            std::vector<uint16_t> reader = CommandReader(third, fifth);
+            reader.insert(reader.end(), more.begin(), more.end());
+            m.PutHalfwords(kCode, reader);
         }
 
         Result r;
@@ -1552,10 +1555,16 @@ void TestRevisionDetection()
 
     const Result wct2004 = detect(0x2DFE, 0x2DFA);
     const Result rave_master = detect(0x2DFE, 0x2DF5);
+    const Result rave_master_f1 =
+        detect(0x2DFE, 0x2DF5, {0x2DF4, 0xD100, 0x2DF3, 0xD100, 0x2DF2, 0xD100, 0x2DF1, 0xD100});
+    const Result tsubasa = detect(0x2DFE, 0x2DF5, {0x2DF4, 0xD100, 0x2DF3, 0xD100, 0x2DF2, 0xD100, 0x2DF0, 0xD100});
+    const Result hunter = detect(0x2DFE, 0x2DF6);
+    const Result kitaro = detect(0x2DFE, 0x2DF9);
+    const Result oujisama = detect(0x2DFE, 0x2DFB);
     const Result ultimate_masters = detect(0x2DFD, 0x2DFB);
     const Result eternal_duelist = detect(0x2DFE, 0x2DF3);
     const Result dungeon_dice = detect(0x2DFE, 0x2DFC);
-    const Result older = detect(0x2DFE, 0x2DF9);
+    const Result older = detect(0x2DFE, 0x2DF8);
     const Result none = detect(0, 0);
 
     // A reader that compares FF and then FE is from an older revision than the Ultimate Masters revision's, which
@@ -1568,6 +1577,27 @@ void TestRevisionDetection()
     SEQLIB_CHECK(rave_master.info.log[0] ==
                  "Rave Master revision of the driver (from the command reader at 0x08000800)");
     SEQLIB_CHECK(eternal_duelist.found && eternal_duelist.info.revision == Revision::kEternalDuelist);
+
+    // The Captain Tsubasa revision's reader goes on from F5 as Rave Master's does, with F0 where Rave Master's compares
+    // F1.
+    SEQLIB_CHECK(rave_master_f1.found && rave_master_f1.info.revision == Revision::kRaveMaster);
+    SEQLIB_CHECK(tsubasa.found && tsubasa.info.revision == Revision::kCaptainTsubasa);
+    SEQLIB_CHECK(tsubasa.info.log[0] ==
+                 "Captain Tsubasa revision of the driver (from the command reader at 0x08000800)");
+
+    // The Hunter X Hunter revision's reader compares F6 after EF, and then Rave Master's opcodes from F5.
+    SEQLIB_CHECK(hunter.found && hunter.info.revision == Revision::kHunterXHunter);
+    SEQLIB_CHECK(hunter.info.log[0] ==
+                 "Hunter X Hunter revision of the driver (from the command reader at 0x08000800)");
+
+    // The Kitaro revision's reader compares F9 after EF, and then WCT 2004's opcodes from F8.
+    SEQLIB_CHECK(kitaro.found && kitaro.info.revision == Revision::kKitaro);
+    SEQLIB_CHECK(kitaro.info.log[0] == "Kitaro revision of the driver (from the command reader at 0x08000800)");
+
+    // The Minna no Ouji-sama revision's reader compares FB after EF, and then WCT 2004's opcodes from FA.
+    SEQLIB_CHECK(oujisama.found && oujisama.info.revision == Revision::kMinnaNoOujisama);
+    SEQLIB_CHECK(oujisama.info.log[0] ==
+                 "Minna no Ouji-sama revision of the driver (from the command reader at 0x08000800)");
     SEQLIB_CHECK(!dungeon_dice.found && dungeon_dice.info.revision == Revision::kDungeonDiceMonsters);
     SEQLIB_CHECK(dungeon_dice.error ==
                  "found the command reader of the Dungeon Dice Monsters revision, but not the sample map or the "
@@ -1972,6 +2002,352 @@ void TestEternalDuelistSequencer()
 
     // The driver keeps the call's return position, so the 256th command after the call takes the track back there.
     SEQLIB_CHECK(starts == std::vector<int>({3, 5, 262}));
+}
+
+void TestCaptainTsubasaDecoding()
+{
+    // Delays read as in Eternal Duelist: a byte up to EF, or two bytes that give 12 bits from F0 up.
+    Rom delays;
+    delays.Assign({0xEF, 0xF1, 0x23});
+    uint32_t delay = 0;
+
+    SEQLIB_CHECK_EQ(ReadDelay(delays, kRomBase + 0, Revision::kCaptainTsubasa, delay), 1);
+    SEQLIB_CHECK_EQ(delay, 0xEF);
+    SEQLIB_CHECK_EQ(ReadDelay(delays, kRomBase + 1, Revision::kCaptainTsubasa, delay), 2);
+    SEQLIB_CHECK_EQ(delay, 0x123);
+
+    // F0 5A / F4 20 / F5 10 / F6 06 / FC 06 / F1 08 / F3 / 07 / 82
+    Rom rom;
+    rom.Assign({0xF0, 0x5A, 0xF4, 0x20, 0xF5, 0x10, 0xF6, 0x06, 0xFC, 0x06, 0xF1, 0x08, 0xF3, 0x07, 0x82});
+    auto at = [&](uint32_t offset, int track)
+    {
+        return DecodeCommand(rom, kRomBase + offset, track, Revision::kCaptainTsubasa);
+    };
+
+    // F0 works as in Eternal Duelist. F4 and F5 set the attack and decay rates, and F1 and F6-FC are vibrato.
+    SEQLIB_CHECK(at(0, 3).op == Op::kPsgPan && at(0, 3).value == 0x5A && at(0, 3).length == 2);
+    SEQLIB_CHECK(at(0, 4).op == Op::kPairVolumes && at(0, 4).value == 0x5A && at(0, 4).length == 2);
+    SEQLIB_CHECK(at(2, 0).op == Op::kAttack && at(2, 0).value == 0x20 && at(2, 0).length == 2);
+    SEQLIB_CHECK(at(4, 0).op == Op::kDecay && at(4, 0).value == 0x10 && at(4, 0).length == 2);
+    SEQLIB_CHECK(at(6, 4).op == Op::kVibrato && at(6, 4).value == 0x06 && at(6, 4).length == 2);
+    SEQLIB_CHECK(at(8, 0).op == Op::kVibrato && at(8, 0).value == 0x06 && at(8, 0).length == 2);
+    SEQLIB_CHECK(at(10, 0).op == Op::kVibrato && at(10, 0).value == 0x08);
+
+    // As in the Rave Master revision, F3 takes no extra bytes, 00-7F do nothing, and 80-8F store the duty as it is.
+    SEQLIB_CHECK(at(12, 4).op == Op::kLoopPoint && at(12, 4).length == 1);
+    SEQLIB_CHECK(at(13, 0).op == Op::kNop && at(13, 0).length == 1);
+    SEQLIB_CHECK(at(14, 0).op == Op::kDuty && at(14, 0).value == 2);
+}
+
+void TestCaptainTsubasaSequencer()
+{
+    // Song 0. Square 1: NR51 bits 10, loop point, PSG note (vol 8, note 0x30), wait 4, note 0x24 at the same volume,
+    // wait 4, end. Square 2: attack rate 40, PSG note (vol 15, note 0x30), wait 8, end. Voice 1: note (vol 12, sample
+    // 7), wait 4, volume 10 and 5 for the next voice, wait 4, end. Voice 2: note (vol 8, sample 7), wait 4, vibrato,
+    // wait 4, note (vol 9, sample 11), wait 4, end. Voice 3: rest, wait 32, loop the song.
+    Image m(0x800);
+    constexpr uint32_t kTable = kRomBase + 0x100;
+    constexpr uint32_t kBase = kRomBase + 0x200;
+    m.Song(kTable, 0, kBase, 0x60, {{0, 0x00}, {1, 0x10}, {5, 0x20}, {6, 0x30}, {7, 0x50}}, Revision::kCaptainTsubasa);
+    m.PutBytes(kBase + 0x00, {0x00, 0xF0, 0x10, 0x00, 0xF3, 0x00, 0xD8, 0x30, 0x04, 0xD8, 0x24, 0x04, 0xFD});
+    m.PutBytes(kBase + 0x10, {0x00, 0xF4, 0x40, 0x00, 0xDF, 0x30, 0x08, 0xFD});
+    m.PutBytes(kBase + 0x20, {0x00, 0xAC, 0x07, 0x04, 0xF0, 0x5A, 0x04, 0xFD});
+    m.PutBytes(kBase + 0x30, {0x00, 0xA8, 0x07, 0x04, 0xF1, 0x20, 0x04, 0xA9, 0x0B, 0x04, 0xFD});
+    m.PutBytes(kBase + 0x50, {0x00, 0xE0, 0x20, 0xFE});
+    m.PutBytes(kBase + 0x60, {0x00, 0xFD});
+
+    // Song 1. Voice 0: a call of 1 command from the fragment after the end, wait 2, note (vol 9, sample 7), wait 1,
+    // then 260 commands that do nothing, each followed by a wait of 1, and the end. The fragment: wait 3, note (vol 5,
+    // sample 11), wait 6.
+    constexpr uint32_t kBase1 = kRomBase + 0x280;
+    std::vector<uint8_t> calls = {0x00, 0x9F, 0x00, 0x00, 0x01, 0x02, 0xA9, 0x07, 0x01};
+    for (int i = 0; i < 260; i++)
+    {
+        calls.insert(calls.end(), {0x07, 0x01});
+    }
+    calls.push_back(0xFD);
+    calls[2] = uint8_t(calls.size());
+    calls[3] = uint8_t(calls.size() >> 8);
+    calls.insert(calls.end(), {0x03, 0xA5, 0x0B, 0x06});
+    m.Song(kTable, 1, kBase1, 0x220, {{4, 0x00}}, Revision::kCaptainTsubasa);
+    m.PutBytes(kBase1, calls);
+    m.PutBytes(kBase1 + 0x220, {0x00, 0xFD});
+    const Rom rom = m.ToRom();
+    DriverInfo info = SongsAt(kTable);
+    info.revision = Revision::kCaptainTsubasa;
+    Wct2004Sequencer seq(rom, info, 0);
+    Wct2004Sequencer calling(rom, info, 1);
+
+    std::vector<std::array<TrackOutput, kTracks>> frames;
+    int looped_at = -1;
+    for (int f = 0; f < 34; f++)
+    {
+        frames.push_back(seq.Step());
+        looped_at = looped_at < 0 && seq.LoopedLastFrame() ? f : looped_at;
+    }
+
+    std::vector<int> starts;
+    for (int f = 0; f < 270; f++)
+    {
+        if (calling.Step()[4].flags == kOutNoteOn)
+        {
+            starts.push_back(f);
+        }
+    }
+
+    // Square 1's F0 goes into its record at once. A note at the volume that's playing retriggers the channel too.
+    SEQLIB_CHECK(seq.Valid() && frames[0][9].active);
+    SEQLIB_CHECK(frames[0][0].pan == 0x10 && frames[0][0].trig == 1);
+    SEQLIB_CHECK(frames[4][0].flags == kOutPsgNote && frames[4][0].trig == 1 && frames[4][0].pitch == 0x480);
+
+    // Square 2's note rises from its attack: level ((0x10F - attack) * 15) >> 8 as the countdown falls by 0x40 a frame
+    // from FF.
+    SEQLIB_CHECK(frames[0][1].vol == 4 && frames[1][1].vol == 8 && frames[2][1].vol == 12 && frames[3][1].vol == 15);
+
+    // F0 on voice 1 sets its volume, and voice 2's through the next record.
+    SEQLIB_CHECK(frames[4][5].vol == 10 && frames[4][5].trig == 1);
+    SEQLIB_CHECK(frames[4][6].vol == 5 && frames[4][6].trig == 1);
+
+    // Vibrato adds the pitch flag to voice 2's second note, which still starts.
+    SEQLIB_CHECK(frames[8][6].flags == (kOutNoteOn | kOutPitch) && frames[8][6].key == 11);
+
+    // The loop sets square 1's pan back to the default.
+    SEQLIB_CHECK_EQ(looped_at, 32);
+    SEQLIB_CHECK_EQ(frames[32][0].pan, 0x11);
+
+    // The driver clears the call's return position after the call's last command.
+    SEQLIB_CHECK(starts == std::vector<int>({3, 5}));
+}
+
+void TestHunterXHunterDecoding()
+{
+    // Delays read as in Rave Master: a byte up to DF, or two bytes that give 13 bits from E0 up.
+    Rom delays;
+    delays.Assign({0xDF, 0xE1, 0x23});
+    uint32_t delay = 0;
+
+    SEQLIB_CHECK_EQ(ReadDelay(delays, kRomBase + 0, Revision::kHunterXHunter, delay), 1);
+    SEQLIB_CHECK_EQ(delay, 0xDF);
+    SEQLIB_CHECK_EQ(ReadDelay(delays, kRomBase + 1, Revision::kHunterXHunter, delay), 2);
+    SEQLIB_CHECK_EQ(delay, 0x123);
+
+    // F6 05 / F7 / FA / FC / F5 10 / F3 / 07 / 82
+    Rom rom;
+    rom.Assign({0xF6, 0x05, 0xF7, 0xFA, 0xFC, 0xF5, 0x10, 0xF3, 0x07, 0x82});
+    auto at = [&](uint32_t offset, int track)
+    {
+        return DecodeCommand(rom, kRomBase + offset, track, Revision::kHunterXHunter);
+    };
+
+    // F6 stores the entry of a table of samples that the game gives the driver. F7-FC do nothing and take one byte.
+    SEQLIB_CHECK(at(0, 4).op == Op::kInstrument && at(0, 4).value == 5 && at(0, 4).length == 2);
+    SEQLIB_CHECK(at(2, 4).op == Op::kNop && at(2, 4).length == 1);
+    SEQLIB_CHECK(at(3, 4).op == Op::kNop && at(3, 4).length == 1);
+    SEQLIB_CHECK(at(4, 4).op == Op::kNop && at(4, 4).length == 1);
+
+    // The other commands are Rave Master's.
+    SEQLIB_CHECK(at(5, 0).op == Op::kDecay && at(5, 0).value == 0x10 && at(5, 0).length == 2);
+    SEQLIB_CHECK(at(7, 4).op == Op::kLoopPoint && at(7, 4).length == 1);
+    SEQLIB_CHECK(at(8, 0).op == Op::kNop && at(8, 0).length == 1);
+    SEQLIB_CHECK(at(9, 0).op == Op::kDuty && at(9, 0).value == 2);
+}
+
+void TestKitaroDecoding()
+{
+    // FA / F9 12 / F8 85 / F7 40 / F6 05 / F3 / FB
+    Rom rom;
+    rom.Assign({0xFA, 0xF9, 0x12, 0xF8, 0x85, 0xF7, 0x40, 0xF6, 0x05, 0xF3, 0xFB});
+    auto at = [&](uint32_t offset, int track)
+    {
+        return DecodeCommand(rom, kRomBase + offset, track, Revision::kKitaro);
+    };
+
+    // FA does nothing and takes one byte, as FB does.
+    SEQLIB_CHECK(at(0, 4).op == Op::kNop && at(0, 4).length == 1);
+    SEQLIB_CHECK(at(10, 4).op == Op::kNop && at(10, 4).length == 1);
+
+    // The other commands are WCT 2004's: the echo's routing, delay and feedback, F6 for a table of samples, and an F3
+    // with two more bytes on sample tracks.
+    SEQLIB_CHECK(at(1, 4).op == Op::kEchoRoute && at(1, 4).value == 0x12 && at(1, 4).length == 2);
+    SEQLIB_CHECK(at(3, 4).op == Op::kEchoDelay && at(3, 4).value == 0x85 && at(3, 4).length == 2);
+    SEQLIB_CHECK(at(5, 4).op == Op::kEchoFeedback && at(5, 4).value == 0x40 && at(5, 4).length == 2);
+    SEQLIB_CHECK(at(7, 4).op == Op::kInstrument && at(7, 4).value == 5 && at(7, 4).length == 2);
+    SEQLIB_CHECK(at(9, 0).op == Op::kLoopPoint && at(9, 0).length == 1);
+    SEQLIB_CHECK(at(9, 4).op == Op::kLoopPoint && at(9, 4).length == 3);
+}
+
+void TestKitaroSequencer()
+{
+    // Track 4: FA, wait 0, note (vol 9, sample 7), wait 2, end. The other tracks end at once. FA takes no argument, so
+    // the note follows at once, at its volume, whatever the game's setting.
+    Image m(0x200);
+    constexpr uint32_t kTable = kRomBase + 0x100;
+    constexpr uint32_t kBase = kTable + kSongEntrySize;
+    m.Song(kTable, 0, kBase, 0x40, {{4, 0x00}});
+    m.PutBytes(kBase + 0x00, {0x00, 0xFA, 0x00, 0xA9, 0x07, 0x02, 0xFD});
+    m.PutBytes(kBase + 0x40, {0x00, 0xFD});
+    const Rom rom = m.ToRom();
+    DriverInfo info = SongsAt(kTable);
+    info.revision = Revision::kKitaro;
+
+    Wct2004Sequencer seq(rom, info, 0, Request{0, {}});
+    const std::array<TrackOutput, kTracks> first = seq.Step();
+    SEQLIB_CHECK(first[4].flags == kOutNoteOn && first[4].key == 7 && first[4].vol == 9);
+}
+
+void TestMinnaNoOujisamaDecoding()
+{
+    // FB 08 / FA 01 / F9 12 / 82 / FC
+    Rom rom;
+    rom.Assign({0xFB, 0x08, 0xFA, 0x01, 0xF9, 0x12, 0x82, 0xFC});
+    auto at = [&](uint32_t offset, int track)
+    {
+        return DecodeCommand(rom, kRomBase + offset, track, Revision::kMinnaNoOujisama);
+    };
+
+    // FB sets the song's volume.
+    SEQLIB_CHECK(at(0, 4).op == Op::kSongVolume && at(0, 4).value == 8 && at(0, 4).length == 2);
+
+    // The other commands are WCT 2004's: FA's volume scale, the echo's routing, a duty shifted into bits 6-7, and an FC
+    // that does nothing.
+    SEQLIB_CHECK(at(2, 4).op == Op::kVolumeScale && at(2, 4).value == 1 && at(2, 4).length == 2);
+    SEQLIB_CHECK(at(4, 4).op == Op::kEchoRoute && at(4, 4).value == 0x12 && at(4, 4).length == 2);
+    SEQLIB_CHECK(at(6, 0).op == Op::kDuty && at(6, 0).value == 0x80);
+    SEQLIB_CHECK(at(7, 4).op == Op::kNop && at(7, 4).length == 1);
+}
+
+void TestMinnaNoOujisamaSequencer()
+{
+    // Track 4: note (vol 9, sample 7), wait 2, song volume 8, wait 8, end. Track 5: note (vol 8, sample 11), wait 8,
+    // end. Track 6: rest, wait 6, loop the song. The other tracks end at once.
+    Image m(0x200);
+    constexpr uint32_t kTable = kRomBase + 0x100;
+    constexpr uint32_t kBase = kTable + kSongEntrySize;
+    m.Song(kTable, 0, kBase, 0x30, {{4, 0x00}, {5, 0x10}, {6, 0x20}});
+    m.PutBytes(kBase + 0x00, {0x00, 0xA9, 0x07, 0x02, 0xFB, 0x08, 0x08, 0xFD});
+    m.PutBytes(kBase + 0x10, {0x00, 0xA8, 0x0B, 0x08, 0xFD});
+    m.PutBytes(kBase + 0x20, {0x00, 0xE0, 0x06, 0xFE});
+    m.PutBytes(kBase + 0x30, {0x00, 0xFD});
+    const Rom rom = m.ToRom();
+    DriverInfo info = SongsAt(kTable);
+    info.revision = Revision::kMinnaNoOujisama;
+    Wct2004Sequencer seq(rom, info, 0);
+
+    std::vector<std::array<TrackOutput, kTracks>> frames;
+    for (int f = 0; f < 8; f++)
+    {
+        frames.push_back(seq.Step());
+    }
+
+    // At full song volume, the notes play at their volumes, and the frames after a note's start have no retrigger.
+    SEQLIB_CHECK(frames[0][4].flags == kOutNoteOn && frames[0][4].vol == 9);
+    SEQLIB_CHECK(frames[1][4].vol == 9 && frames[1][4].trig == 0);
+    SEQLIB_CHECK(frames[1][5].vol == 8 && frames[1][5].trig == 0);
+
+    // Track 4's FB halves its volume in the same frame, with a retrigger. Track 5 runs before track 4 and gets the
+    // change a frame later. Each frame then retriggers both tracks.
+    SEQLIB_CHECK(frames[2][4].vol == 4 && frames[2][4].trig == 1);
+    SEQLIB_CHECK(frames[2][5].vol == 8 && frames[2][5].trig == 0);
+    SEQLIB_CHECK(frames[3][5].vol == 4 && frames[3][5].trig == 1);
+    SEQLIB_CHECK(frames[5][4].vol == 4 && frames[5][4].trig == 1);
+
+    // The loop sets the song volume back to full.
+    SEQLIB_CHECK(seq.LoopsDone() == 1);
+    SEQLIB_CHECK(frames[6][4].flags == kOutNoteOn && frames[6][4].vol == 9);
+    SEQLIB_CHECK(frames[6][5].flags == kOutNoteOn && frames[6][5].vol == 8);
+    SEQLIB_CHECK(frames[7][4].vol == 9 && frames[7][4].trig == 0);
+}
+
+void TestHunterXHunterSequencer()
+{
+    // A song of 12 tracks, with 28-byte song table entries. Track 4: F6 05, note (vol 12, sample 7), wait 4, end. Track
+    // 5: F7, note (vol 8, sample 11), wait 4, end. Track 6: pan left 8 right 15, rest, wait 8, loop the song. The other
+    // tracks end at once.
+    Image m(0x200);
+    constexpr uint32_t kTable = kRomBase + 0x100;
+    constexpr uint32_t kBase = kTable + 28;
+    m.Song(kTable, 0, kBase, 0x30, {{4, 0x00}, {5, 0x10}, {6, 0x20}}, Revision::kHunterXHunter);
+    m.PutBytes(kBase + 0x00, {0x00, 0xF6, 0x05, 0x00, 0xAC, 0x07, 0x04, 0xFD});
+    m.PutBytes(kBase + 0x10, {0x00, 0xF7, 0x00, 0xA8, 0x0B, 0x04, 0xFD});
+    m.PutBytes(kBase + 0x20, {0x00, 0xF0, 0x8F, 0x00, 0xE0, 0x08, 0xFE});
+    m.PutBytes(kBase + 0x30, {0x00, 0xFD});
+    const Rom rom = m.ToRom();
+    DriverInfo info = SongsAt(kTable);
+    info.revision = Revision::kHunterXHunter;
+    Wct2004Sequencer seq(rom, info, 0);
+
+    std::vector<std::array<TrackOutput, kTracks>> frames;
+    for (int f = 0; f < 10; f++)
+    {
+        frames.push_back(seq.Step());
+    }
+
+    // Only the song's 12 tracks run. A request without the game's table leaves each note its sample.
+    SEQLIB_CHECK(seq.Valid());
+    SEQLIB_CHECK(frames[0][11].active && !frames[0][12].active);
+    SEQLIB_CHECK(frames[0][4].flags == kOutNoteOn && frames[0][4].key == 7 && frames[0][4].vol == 12);
+    SEQLIB_CHECK(frames[0][5].flags == kOutNoteOn && frames[0][5].key == 11 && frames[0][5].vol == 8);
+
+    // A loop keeps the pan, as in WCT 2004, where Rave Master centres it again.
+    SEQLIB_CHECK(seq.LoopsDone() == 1);
+    SEQLIB_CHECK(frames[8][6].pan_start == 0x8F && frames[8][6].pan == 0x8F);
+}
+
+void TestCaptainTsubasaConversion()
+{
+    // Song 0 of the Captain Tsubasa revision. Voice 0: note (vol 8, sample 6), wait 4, volume 3, wait 4, rest, wait 4,
+    // end. Sample 6 plays at twice the step of sample 0. A Captain Tsubasa command reader is at kCode.
+    Image m = SyntheticImage();
+    constexpr uint32_t kCode = kRomBase + 0x800;
+    std::vector<uint16_t> reader = CommandReader(0x2DFE, 0x2DF5);
+    reader.insert(reader.end(), {0x2DF4, 0xD100, 0x2DF3, 0xD100, 0x2DF2, 0xD100, 0x2DF0, 0xD100});
+    m.PutHalfwords(kCode, reader);
+    m.Song(kSongTable, 0, kSongBase, 0x20, {{4, 0x00}}, Revision::kCaptainTsubasa);
+    m.PutBytes(kSongBase + 0x00, {0x00, 0xA8, 0x06, 0x04, 0xC3, 0x04, 0xE0, 0x04, 0xFD});
+    m.PutBytes(kSongBase + 0x20, {0x00, 0xFD});
+
+    // Sample 0 is sample 5, and sample 6 has sample 5's data at twice its step.
+    constexpr uint32_t kHeader6 = kRomBase + 0x600;
+    m.Put32(kSampleTable, kSampleHeader);
+    m.Put32(kSampleTable + 4 * 6, kHeader6);
+    m.Put32(kHeader6, 0x2000);
+    m.Put32(kHeader6 + 4, 64);
+    m.Put32(kHeader6 + 8, 0xFFFFFFFF);
+    for (uint32_t i = 0; i < 64; i++)
+    {
+        m.Put8(kHeader6 + 12 + i, m.Get8(kSampleHeader + 12 + i));
+    }
+
+    const Rom rom = m.ToRom();
+    DriverInfo info;
+    SEQLIB_CHECK(DetectGiven(rom, kSongTable, 1, info) && info.revision == Revision::kCaptainTsubasa);
+
+    const fs::path dir = TempPath("captain_tsubasa");
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    ConvertSettings opt;
+    opt.frame_timing = true;
+    opt.out_dir = Utf8(dir);
+
+    const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
+    int notes = 0, bends = 0;
+    for (const MidiEvent& e : ReadEvents(sum.midi_path))
+    {
+        if (e.track != "Voice 0")
+        {
+            continue;
+        }
+
+        notes += (e.status & 0xF0) == 0x90 && e.data2 > 0;
+        bends += (e.status & 0xF0) == 0xE0 && e.frame > 0;
+    }
+
+    // The volume command's record has a flag, but not the pitch flag, and its sample is 0. The voice keeps its pitch.
+    SEQLIB_CHECK(sum.ok);
+    SEQLIB_CHECK_EQ(notes, 1);
+    SEQLIB_CHECK_EQ(bends, 0);
+
+    fs::remove_all(dir, ec);
 }
 
 void TestEternalDuelistConversion()
@@ -2661,6 +3037,457 @@ void TestSampleTableChoice()
     SEQLIB_CHECK(info.warnings == std::vector<std::string>{"agbsf2 can't read these samples and skips their notes: 1"});
 }
 
+void TestWaveLoaderForms()
+{
+    // A song that rests, and the wave RAM loader in the form that checks for volume 0 first. Its first table is at
+    // 0x600 and its second at 0x700.
+    Image m(0x1000);
+    constexpr uint32_t kTable = kRomBase + 0x100;
+    constexpr uint32_t kLoader = kRomBase + 0x800;
+    m.Song(kTable, 0, kRomBase + 0x200, 0, {});
+    m.PutBytes(kRomBase + 0x200, {0x00, 0xE0, 0x00, 0xFD});
+    CodeWithLiterals(m, kLoader, {0xB510, 0x1C04, 0x4B00, 0x2A00, 0xD01E, 0x2080, 0x4008, 0x2800, 0xD002, 0x4B00},
+                     {{2, kRomBase + 0x600}, {9, kRomBase + 0x700}});
+
+    DriverOverrides ov;
+    ov.song_table = kTable;
+    ov.song_count = 1;
+    ov.mix_rate = 16000;
+    DriverInfo info;
+    std::string err;
+
+    const bool found = DetectDriver(m.ToRom(), ov, info, err);
+
+    SEQLIB_CHECK(found);
+    SEQLIB_CHECK_EQ(info.wave_table, kRomBase + 0x600);
+    SEQLIB_CHECK_EQ(info.sfx_wave_table, kRomBase + 0x700);
+
+    // The form without the check for volume 0, as in Hikaru no Go 2, gives both tables too.
+    m.PutHalfwords(kLoader, std::vector<uint16_t>(16, 0));
+    CodeWithLiterals(m, kLoader, {0xB510, 0x1C04, 0x4B00, 0x2080, 0x4008, 0x2800, 0xD002, 0x4B00},
+                     {{2, kRomBase + 0x680}, {7, kRomBase + 0x780}});
+
+    const bool found_without_check = DetectDriver(m.ToRom(), ov, info, err);
+
+    SEQLIB_CHECK(found_without_check);
+    SEQLIB_CHECK_EQ(info.wave_table, kRomBase + 0x680);
+    SEQLIB_CHECK_EQ(info.sfx_wave_table, kRomBase + 0x780);
+}
+
+void TestLaterBuildDetection()
+{
+    // A song that rests, in a cartridge of the Ultimate Masters revision without the later builds' duty command.
+    Image m(0x1000);
+    constexpr uint32_t kTable = kRomBase + 0x100;
+    m.Song(kTable, 0, kRomBase + 0x200, 0, {});
+    m.PutBytes(kRomBase + 0x200, {0x00, 0xE0, 0x00, 0xFD});
+
+    DriverOverrides ov;
+    ov.song_table = kTable;
+    ov.song_count = 1;
+    ov.mix_rate = 16000;
+    DriverInfo info;
+    std::string err;
+
+    const bool found = DetectDriver(m.ToRom(), ov, info, err);
+
+    SEQLIB_CHECK(found);
+    SEQLIB_CHECK(info.revision == Revision::kUltimateMasters);
+    SEQLIB_CHECK(info.warnings.empty());
+
+    // The duty command that keeps the opcode's low nibble gives a later build, Prince of Tennis 2004's.
+    // movs r0,#0xf / ands r5,r0 / cmp r5,#3 / ble / subs r5,#4 / b / lsls r5,r5,#6.
+    m.PutHalfwords(kRomBase + 0x800, {0x200F, 0x4005, 0x2D03, 0xDD01, 0x3D04, 0xE000, 0x01AD});
+    DriverInfo tennis;
+
+    const bool found_tennis = DetectDriver(m.ToRom(), ov, tennis, err);
+
+    SEQLIB_CHECK(found_tennis);
+    SEQLIB_CHECK(tennis.revision == Revision::kPrinceOfTennis);
+    SEQLIB_CHECK(!tennis.bend_kept);
+    SEQLIB_CHECK(std::find(tennis.log.begin(), tennis.log.end(),
+                           "command reader not recognised, Prince of Tennis 2004 revision of the driver (from the duty "
+                           "command at 0x08000800)") != tennis.log.end());
+    SEQLIB_CHECK(tennis.warnings.empty());
+
+    // Code that reads a sample byte above EF with the next one gives Live Start's build.
+    // cmp r2,#0xef / ble / adds r7,#1 / adds r3,#1 / movs r0,#0xf / ands r0,r2 / lsls r2,r0,#8.
+    m.PutHalfwords(kRomBase + 0x900, {0x2AEF, 0xDD06, 0x3701, 0x3301, 0x200F, 0x4010, 0x0202});
+    DriverInfo live;
+
+    const bool found_live = DetectDriver(m.ToRom(), ov, live, err);
+
+    SEQLIB_CHECK(found_live);
+    SEQLIB_CHECK(live.revision == Revision::kLiveStart);
+    SEQLIB_CHECK(!live.bend_kept);
+    SEQLIB_CHECK(live.warnings.empty());
+}
+
+void TestLaterBuildDecoding()
+{
+    // Delays read as in WCT 2004: a byte up to DF, or two bytes that give 13 bits from E0 up.
+    Rom delays;
+    delays.Assign({0xDF, 0xE5, 0x10, 0xFF, 0x34});
+    uint32_t delay = 0;
+
+    SEQLIB_CHECK_EQ(ReadDelay(delays, kRomBase + 0, Revision::kPrinceOfTennis, delay), 1);
+    SEQLIB_CHECK_EQ(delay, 0xDF);
+    SEQLIB_CHECK_EQ(ReadDelay(delays, kRomBase + 1, Revision::kPrinceOfTennis, delay), 2);
+    SEQLIB_CHECK_EQ(delay, 0x510);
+    SEQLIB_CHECK_EQ(ReadDelay(delays, kRomBase + 3, Revision::kPrinceOfTennis, delay), 2);
+    SEQLIB_CHECK_EQ(delay, 0x1F34);
+
+    // 13 / 86 / 80 / 95 0A 00 03 / A3 F5 / F4 20 / F5 10 / F6 01 / FA 01
+    Rom rom;
+    rom.Assign({0x13, 0x86, 0x80, 0x95, 0x0A, 0x00, 0x03, 0xA3, 0xF5, 0xF4, 0x20, 0xF5, 0x10, 0xF6, 0x01, 0xFA, 0x01});
+    auto at = [&](uint32_t offset, int track)
+    {
+        return DecodeCommand(rom, kRomBase + offset, track, Revision::kPrinceOfTennis);
+    };
+
+    // A duty command keeps the opcode's low nibble: 0-3 give a duty in bits 6-7, and 4-F the nibble minus 4.
+    SEQLIB_CHECK(at(0, 0).op == Op::kDuty && at(0, 0).value == 0xC0);
+    SEQLIB_CHECK(at(1, 2).op == Op::kDuty && at(1, 2).value == 2);
+    SEQLIB_CHECK(at(2, 0).op == Op::kDuty && at(2, 0).value == 0);
+
+    // 9x lo hi nn calls nn commands at hilo.
+    const Command call = at(3, 4);
+    SEQLIB_CHECK(call.op == Op::kCall && call.value == 0x0A && call.count == 3 && call.length == 4);
+
+    // In Prince of Tennis 2004, a sample byte above EF is a sample. In Live Start, the next byte gives the sample's low
+    // byte, and the first's low nibble its high bits.
+    const Command note = at(7, 4);
+    SEQLIB_CHECK(note.op == Op::kNote && note.vol == 3 && note.sample == 0xF5 && note.length == 2);
+    const Command wide = DecodeCommand(rom, kRomBase + 7, 4, Revision::kLiveStart);
+    SEQLIB_CHECK(wide.op == Op::kNote && wide.sample == 0x5F4 && wide.length == 3);
+    SEQLIB_CHECK(DecodeCommand(rom, kRomBase + 7, 4, Revision::kUltimateMasters).op == Op::kUnknown);
+
+    // F4 and F5 set the attack and decay rates of PSG notes, F6 an instrument, and FA holds the track's output back.
+    SEQLIB_CHECK(at(9, 0).op == Op::kAttack && at(9, 0).value == 0x20 && at(9, 0).length == 2);
+    SEQLIB_CHECK(at(11, 0).op == Op::kDecay && at(11, 0).value == 0x10 && at(11, 0).length == 2);
+    SEQLIB_CHECK(at(13, 4).op == Op::kInstrument && at(13, 4).value == 1 && at(13, 4).length == 2);
+    SEQLIB_CHECK(at(15, 4).op == Op::kHoldOutput && at(15, 4).value == 1 && at(15, 4).length == 2);
+    SEQLIB_CHECK(DecodeCommand(rom, kRomBase + 15, 4, Revision::kUltimateMasters).op == Op::kUnknown);
+}
+
+void TestLaterBuildSequencer()
+{
+    // Track 0: duty 25%, PSG note (vol 3, note 24), wait 1, vibrato of depth 16, wait 2, end. Track 1: attack rate
+    // 0x40, PSG note (vol byte 8, note 0x30), wait 4, end. Track 4: note (sample 5), wait 1, bend by +16/32, wait 1,
+    // note (sample F5), wait 1, end. Track 5: a call of 1 command at +0x0B, whose opcode also sets 75% duty, wait 5,
+    // note (vol byte 9, sample 7), wait 3, end, and then the fragment the call plays: wait 2, note (vol 5, sample 11),
+    // wait 6. Track 6: hold the output, note (vol 1, sample 7), wait 2, let the output go, the note again, wait 2, end.
+    // The other tracks end at once.
+    Image m(0x200);
+    constexpr uint32_t kTable = kRomBase + 0x100;
+    constexpr uint32_t kBase = kTable + kSongEntrySize;
+    m.Song(kTable, 0, kBase, 0x60, {{0, 0x00}, {1, 0x10}, {4, 0x20}, {5, 0x40}, {6, 0x50}});
+    m.PutBytes(kBase + 0x00, {0x00, 0x81, 0x00, 0xD3, 0x18, 0x01, 0xF1, 0x20, 0x02, 0xFD});
+    m.PutBytes(kBase + 0x10, {0x00, 0xF4, 0x40, 0x00, 0xD8, 0x08, 0x30, 0x04, 0xFD});
+    m.PutBytes(kBase + 0x20, {0x00, 0xA8, 0x10, 0x05, 0x01, 0xF2, 0x50, 0x01, 0xA8, 0x10, 0xF5, 0x01, 0xFD});
+    m.PutBytes(kBase + 0x40,
+               {0x00, 0x93, 0x0B, 0x00, 0x01, 0x05, 0xA8, 0x09, 0x07, 0x03, 0xFD, 0x02, 0xA5, 0x0B, 0x06});
+    m.PutBytes(kBase + 0x50, {0x00, 0xFA, 0x01, 0x00, 0xA1, 0x07, 0x02, 0xFA, 0x00, 0x00, 0xA1, 0x07, 0x02, 0xFD});
+    m.PutBytes(kBase + 0x60, {0x00, 0xFD});
+    const Rom rom = m.ToRom();
+    DriverInfo info = SongsAt(kTable);
+    info.revision = Revision::kPrinceOfTennis;
+    UltimateMastersSequencer seq(rom, info, 0);
+
+    std::vector<std::array<TrackOutput, kTracks>> frames;
+    for (int f = 0; f < 12; f++)
+    {
+        frames.push_back(seq.Step());
+    }
+
+    // Vibrato hands on the duty byte as the key, where the Ultimate Masters revision and Live Start hand on the note's
+    // sample.
+    SEQLIB_CHECK(frames[1][0].flags & kOutPitch);
+    SEQLIB_CHECK(frames[1][0].key == 0x40 && frames[1][0].b2 == 0x40);
+
+    // The attack takes the note's volume up from 2 to 8 over four frames, restarting the channel at each level.
+    for (int f = 0; f < 4; f++)
+    {
+        SEQLIB_CHECK_EQ(frames[f][1].vol, 2 * (f + 1));
+        SEQLIB_CHECK_EQ(frames[f][1].trig, 1);
+    }
+
+    // The bend raises the note that's playing, and hands on its duty byte, the sample's low byte. The build never
+    // keeps a bend.
+    SEQLIB_CHECK(frames[1][4].pitch == 16 && frames[1][4].key == 5);
+    SEQLIB_CHECK(frames[2][4].flags == kOutNoteOn && frames[2][4].key == 0xF5 && frames[2][4].pitch == 0);
+
+    // The call sets the duty byte, waits 2, plays the fragment's note, and then waits the 5 after the call instead of
+    // the 6 in the fragment.
+    SEQLIB_CHECK_EQ(frames[0][5].b2, 0xC0);
+    SEQLIB_CHECK(frames[2][5].flags == kOutNoteOn && frames[2][5].key == 11 && frames[2][5].vol == 5);
+    SEQLIB_CHECK(frames[7][5].flags == kOutNoteOn && frames[7][5].key == 7 && frames[7][5].vol == 9);
+    SEQLIB_CHECK_EQ(frames[10][5].flags, kOutStop);
+
+    // FA holds nothing back after a song request, which sets the game's setting to 0xFF.
+    SEQLIB_CHECK(frames[0][6].flags == kOutNoteOn && frames[0][6].key == 7);
+    SEQLIB_CHECK(frames[2][6].flags == kOutNoteOn && frames[2][6].key == 7);
+}
+
+// In the later builds, FA 01 holds a track back if the game's setting is 0. A held track's output record has no flags
+// and no retrigger. Its notes therefore don't start. FA 00 lets the track go.
+void TestLaterBuildHold()
+{
+    // Track 6: hold the output, note (vol 1, sample 7), wait 2, let the output go, the note again, wait 2, end. The
+    // other tracks end at once.
+    Image m(0x200);
+    constexpr uint32_t kTable = kRomBase + 0x100;
+    constexpr uint32_t kBase = kTable + kSongEntrySize;
+    m.Song(kTable, 0, kBase, 0x20, {{6, 0x00}});
+    m.PutBytes(kBase + 0x00, {0x00, 0xFA, 0x01, 0x00, 0xA1, 0x07, 0x02, 0xFA, 0x00, 0x00, 0xA1, 0x07, 0x02, 0xFD});
+    m.PutBytes(kBase + 0x20, {0x00, 0xFD});
+    const Rom rom = m.ToRom();
+    DriverInfo info = SongsAt(kTable);
+    info.revision = Revision::kLiveStart;
+    UltimateMastersSequencer seq(rom, info, 0, Request{kLiveStageSetting, {}});
+
+    std::vector<std::array<TrackOutput, kTracks>> frames;
+    for (int f = 0; f < 4; f++)
+    {
+        frames.push_back(seq.Step());
+    }
+
+    SEQLIB_CHECK(frames[0][6].flags == 0 && frames[0][6].trig == 0);
+    SEQLIB_CHECK(frames[1][6].flags == 0 && frames[1][6].trig == 0);
+    SEQLIB_CHECK(frames[2][6].flags == kOutNoteOn && frames[2][6].key == 7);
+}
+
+// In WCT 2004, FA 01 scales a track's later volumes by the game's setting: volume × setting / 16. A note or a volume
+// command that the scale takes to 0 does nothing. A PSG note plays at the scaled volume. FA 00 stops the scale. A song
+// request sets the setting to 0xFF. That scales nothing.
+void TestWct2004VolumeScale()
+{
+    // Track 0: scale on, PSG note (vol 8, note 0x30), wait 2, end. Track 4: note (vol 9, sample 7), wait 2, scale on,
+    // note (vol 9, sample 8), wait 2, volume 3, wait 2, scale off, note (vol 5, sample 8), wait 2, end. The other
+    // tracks end at once.
+    Image m(0x200);
+    constexpr uint32_t kTable = kRomBase + 0x100;
+    constexpr uint32_t kBase = kTable + kSongEntrySize;
+    m.Song(kTable, 0, kBase, 0x40, {{0, 0x00}, {4, 0x10}});
+    m.PutBytes(kBase + 0x00, {0x00, 0xFA, 0x01, 0x00, 0xD8, 0x30, 0x02, 0xFD});
+    m.PutBytes(kBase + 0x10, {0x00, 0xA9, 0x07, 0x02, 0xFA, 0x01, 0x00, 0xA9, 0x08, 0x02, 0xC3, 0x02, 0xFA, 0x00, 0x00,
+                              0xA5, 0x08, 0x02, 0xFD});
+    m.PutBytes(kBase + 0x40, {0x00, 0xFD});
+    const Rom rom = m.ToRom();
+    DriverInfo info = SongsAt(kTable);
+    info.revision = Revision::kWct2004;
+
+    // Returns the first 8 frames of the song with the game's setting at `setting`.
+    const auto play = [&](uint8_t setting)
+    {
+        Wct2004Sequencer seq(rom, info, 0, Request{setting, {}});
+        std::vector<std::array<TrackOutput, kTracks>> frames;
+        for (int f = 0; f < 8; f++)
+        {
+            frames.push_back(seq.Step());
+        }
+
+        return frames;
+    };
+    const auto request = play(kSettingAfterRequest);
+    const auto silenced = play(0);
+    const auto halved = play(8);
+
+    // After a request, every volume plays as it is.
+    SEQLIB_CHECK_EQ(request[0][0].vol, 8);
+    SEQLIB_CHECK(request[2][4].flags == kOutNoteOn && request[2][4].key == 8 && request[2][4].vol == 9);
+    SEQLIB_CHECK(request[4][4].vol == 3 && request[4][4].trig == 1);
+
+    // At a setting of 0, the PSG note plays at volume 0, and the note and the volume command after FA 01 do nothing.
+    SEQLIB_CHECK(silenced[0][0].flags == kOutPsgNote && silenced[0][0].vol == 0);
+    SEQLIB_CHECK(silenced[0][4].flags == kOutNoteOn && silenced[0][4].key == 7);
+    SEQLIB_CHECK(silenced[2][4].flags == 0 && silenced[2][4].trig == 0);
+    SEQLIB_CHECK(silenced[4][4].flags == 0 && silenced[4][4].trig == 0);
+    SEQLIB_CHECK(silenced[6][4].flags == kOutNoteOn && silenced[6][4].key == 8 && silenced[6][4].vol == 5);
+
+    // At a setting of 8, the volumes after FA 01 are halved and rounded down.
+    SEQLIB_CHECK_EQ(halved[0][0].vol, 4);
+    SEQLIB_CHECK(halved[2][4].flags == kOutNoteOn && halved[2][4].vol == 4);
+    SEQLIB_CHECK(halved[4][4].vol == 1 && halved[4][4].trig == 1);
+    SEQLIB_CHECK_EQ(halved[6][4].vol, 5);
+}
+
+// F6 xx up to 63 picks entry xx of the table of samples that the game's request gives the driver. Each later note of
+// the track plays the entry's sample. Bit 14 of the entry plays it at pitch 0, and in Live Start bit 12 plays it at
+// volume 7F. F6 00, or an entry past the table's end, plays the note's sample. Without a table, F6 does nothing.
+void TestLiveStageSamples()
+{
+    // WCT 2004, track 4: F6 01, note (vol 9, sample 5, semitone +2), wait 2, F6 02, the note again, wait 2, F6 00, the
+    // note again, wait 2, end.
+    Image m(0x200);
+    constexpr uint32_t kTable = kRomBase + 0x100;
+    constexpr uint32_t kBase = kTable + kSongEntrySize;
+    m.Song(kTable, 0, kBase, 0x40, {{4, 0x00}});
+    m.PutBytes(kBase + 0x00, {0x00, 0xF6, 0x01, 0x00, 0xB9, 0x05, 0x02, 0x02, 0xF6, 0x02, 0x00, 0xB9,
+                              0x05, 0x02, 0x02, 0xF6, 0x00, 0x00, 0xB9, 0x05, 0x02, 0x02, 0xFD});
+    m.PutBytes(kBase + 0x40, {0x00, 0xFD});
+    const Rom rom = m.ToRom();
+    DriverInfo info = SongsAt(kTable);
+    info.revision = Revision::kWct2004;
+
+    // Returns the first 6 frames of track 4 after a request that gives `samples`.
+    const auto play = [&](const std::vector<uint16_t>& samples)
+    {
+        Wct2004Sequencer seq(rom, info, 0, Request{kLiveStageSetting, samples});
+        std::vector<TrackOutput> frames;
+        for (int f = 0; f < 6; f++)
+        {
+            frames.push_back(seq.Step()[4]);
+        }
+
+        return frames;
+    };
+    const auto wct = play({0, 0xC503});
+    SEQLIB_CHECK(wct[0].flags == kOutNoteOn && wct[0].key == 0x8503 && wct[0].b2 == 0x03);
+    SEQLIB_CHECK(wct[0].pitch == 0 && wct[0].vol == 9);
+    SEQLIB_CHECK(wct[2].flags == kOutNoteOn && wct[2].key == 5 && wct[2].pitch == 64);
+    SEQLIB_CHECK(wct[4].flags == kOutNoteOn && wct[4].key == 5 && wct[4].pitch == 64);
+    const auto plain = play({});
+    SEQLIB_CHECK(plain[0].flags == kOutNoteOn && plain[0].key == 5 && plain[0].pitch == 64);
+
+    // Live Start, track 4: F6 01, note (vol 3, sample 7), wait 2, end.
+    Image later(0x200);
+    later.Song(kTable, 0, kBase, 0x40, {{4, 0x00}});
+    later.PutBytes(kBase + 0x00, {0x00, 0xF6, 0x01, 0x00, 0xA3, 0x07, 0x02, 0xFD});
+    later.PutBytes(kBase + 0x40, {0x00, 0xFD});
+    const Rom later_rom = later.ToRom();
+    info.revision = Revision::kLiveStart;
+    UltimateMastersSequencer seq(later_rom, info, 0, Request{kLiveStageSetting, {0, 0xD4A7}});
+    const TrackOutput o = seq.Step()[4];
+    SEQLIB_CHECK(o.flags == kOutNoteOn && o.key == 0x84A7 && o.b2 == 0xA7 && o.pitch == 0 && o.vol == 0x7F);
+}
+
+// A sample number with bit 15 set is a sample of the second sample table. The live stages' tables of samples reach it.
+// Its samples can be packed.
+void TestLiveSampleTable()
+{
+    // The main table's sample 1 and the second table's sample 1, both one-shot PCM of 4 samples, the second one at
+    // twice the step.
+    Image m(0x200);
+    constexpr uint32_t kMain = kRomBase + 0x100;
+    constexpr uint32_t kSecond = kRomBase + 0x120;
+    constexpr uint32_t kHeaders = kRomBase + 0x140;
+    m.Put32(kMain + 4, kHeaders);
+    m.Put32(kSecond + 4, kHeaders + 0x20);
+    for (uint32_t h : {kHeaders, kHeaders + 0x20})
+    {
+        m.Put32(h, h == kHeaders ? 0x1000 : 0x2000);
+        m.Put32(h + 4, 4);
+        m.Put32(h + 8, 0xFFFFFFFF);
+        m.PutBytes(h + 12, {1, 2, 3, 4});
+    }
+    const Rom rom = m.ToRom();
+    DriverInfo info;
+    info.revision = Revision::kWct2004;
+    info.sample_table = kMain;
+    SEQLIB_CHECK(info.Sample(rom, 1).valid && info.Sample(rom, 1).step == 0x1000);
+    SEQLIB_CHECK(!info.Sample(rom, 0x8001).valid);
+    info.live_sample_table = kSecond;
+    const SampleInfo s = info.Sample(rom, 0x8001);
+    SEQLIB_CHECK(s.valid && s.step == 0x2000 && s.data == kHeaders + 0x2C && s.length == 4);
+}
+
+// A song that the game's live stage plays with FA's setting at 0 has a second version in that state, in files named
+// with "_live". The first version plays the song as a request leaves it.
+void TestLiveStageVersion()
+{
+    // Song 0 of the WCT 2004 revision. Voice 0: note (vol 9, sample 5), wait 4, scale on, the note again, wait 4, rest,
+    // wait 4, end. A WCT 2004 command reader is at kCode.
+    Image m = SyntheticImage();
+    constexpr uint32_t kCode = kRomBase + 0x800;
+    m.PutHalfwords(kCode, CommandReader(0x2DFE, 0x2DFA));
+    m.Song(kSongTable, 0, kSongBase, 0x20, {{4, 0x00}});
+    m.PutBytes(kSongBase + 0x00, {0x00, 0xA9, 0x05, 0x04, 0xFA, 0x01, 0x00, 0xA9, 0x05, 0x04, 0xE0, 0x04, 0xFD});
+    m.PutBytes(kSongBase + 0x20, {0x00, 0xFD});
+    const Rom rom = m.ToRom();
+    DriverInfo info;
+    SEQLIB_CHECK(DetectGiven(rom, kSongTable, 1, info) && info.revision == Revision::kWct2004);
+    info.live_songs = {0};
+
+    const fs::path dir = TempPath("live_stage");
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    ConvertSettings opt;
+    opt.frame_timing = true;
+    opt.out_dir = Utf8(dir);
+
+    // Returns the notes that the song's version `version` starts on voice 0, and the path of its MIDI file.
+    const auto convert = [&](int version)
+    {
+        opt.version = version;
+        const SongReport sum = ConvertSong(rom, info, 0, opt, nullptr);
+        int notes = 0;
+        for (const MidiEvent& e : ReadEvents(sum.midi_path))
+        {
+            notes += e.track == "Voice 0" && (e.status & 0xF0) == 0x90 && e.data2 > 0;
+        }
+
+        return std::make_pair(notes, PathFromUtf8(sum.midi_path).filename());
+    };
+    const auto [request_notes, request_file] = convert(0);
+    const auto [live_notes, live_file] = convert(1);
+
+    const std::vector<SongVersion> versions = SongVersions(info, 0);
+    SEQLIB_REQUIRE_EQ(versions.size(), 2);
+    SEQLIB_CHECK(versions[0].suffix.empty() && versions[1].suffix == "_live");
+    SEQLIB_CHECK_EQ(SongVersions(info, 1).size(), 1);
+    SEQLIB_CHECK_EQ(request_notes, 2);
+    SEQLIB_CHECK_EQ(live_notes, 1);
+    SEQLIB_CHECK(request_file == "song_00.mid");
+    SEQLIB_CHECK(live_file == "song_00_live.mid");
+
+    fs::remove_all(dir, ec);
+}
+
+void TestPackedSamples()
+{
+    // Sample 7 is packed: bit 31 of its length is set, and a table of 32 pairs of samples comes between its header and
+    // its data. Pair 0 plays 0x10 then 0x20, and pair 1 plays 0xF0 then 0xE0.
+    Image m(0x1000);
+    constexpr uint32_t kHeader = kSampleHeader + 0x100;
+    m.Put32(kSampleTable + 4 * 7, kHeader);
+    m.Put32(kHeader, 0x0C00);
+    m.Put32(kHeader + 4, 0x80000000 | 25);
+    m.Put32(kHeader + 8, 0xFFFFFFFF);
+    m.PutHalfwords(kHeader + 12, {0x1020, 0xF0E0});
+
+    // Two samples, pair 0, three zeros, five samples of 0x7F, two zeros and three samples of 0xC0 (with their counts
+    // in the next byte), pair 1, two samples, one sample of 0x11, and a sample. A zero run whose count is 0 plays one
+    // zero and then skips a sample.
+    m.PutBytes(kHeader + 0x4C, {0x05, 0xFB, 0xA0, 0x93, 0x85, 0x7F, 0x90, 0x02, 0x80, 0x03, 0xC0,
+                                0xA1, 0x7F, 0xC0, 0x81, 0x11, 0x01, 0x90, 0x00, 0x22, 0x33});
+    const Rom rom = m.ToRom();
+    DriverInfo info;
+    info.sample_table = kSampleTable;
+    info.revision = Revision::kLiveStart;
+
+    const SampleInfo s = info.Sample(rom, 7);
+
+    SEQLIB_CHECK(s.valid && s.packed);
+    SEQLIB_CHECK_EQ(s.step, 0x0C00u);
+    SEQLIB_CHECK_EQ(s.length, 25);
+    SEQLIB_CHECK_EQ(s.data, kHeader + 0x4C);
+    SEQLIB_CHECK(!s.Looped());
+    const std::vector<int8_t> pcm = {5, -5,  16,  32,  0,   0,   0,   127, 127, 127, 127, 127, 0,
+                                     0, -64, -64, -64, -16, -32, 127, -64, 17,  1,   0,   51};
+    SEQLIB_CHECK(SamplePcm(rom, s) == pcm);
+
+    // Prince of Tennis 2004 reads packed samples too, and the older build doesn't. Neither later build reads a packed
+    // sample with a loop.
+    info.revision = Revision::kPrinceOfTennis;
+    SEQLIB_CHECK(info.Sample(rom, 7).packed);
+    info.revision = Revision::kUltimateMasters;
+    SEQLIB_CHECK(!info.Sample(rom, 7).valid);
+    m.Put32(kHeader + 8, 0);
+    info.revision = Revision::kLiveStart;
+    SEQLIB_CHECK(!info.Sample(m.ToRom(), 7).valid);
+}
+
 void TestOverrides()
 {
     // A table address given by hand that isn't in the ROM, above it or below it, is reported as such.
@@ -2805,6 +3632,25 @@ void RunTests()
     TestDungeonDiceConversion();
     TestDetectionFromCode();
     TestSampleTableChoice();
+    TestWaveLoaderForms();
+    TestLaterBuildDetection();
+    TestLaterBuildDecoding();
+    TestLaterBuildSequencer();
+    TestLaterBuildHold();
+    TestWct2004VolumeScale();
+    TestLiveStageVersion();
+    TestLiveStageSamples();
+    TestLiveSampleTable();
+    TestPackedSamples();
+    TestCaptainTsubasaDecoding();
+    TestCaptainTsubasaSequencer();
+    TestCaptainTsubasaConversion();
+    TestHunterXHunterDecoding();
+    TestHunterXHunterSequencer();
+    TestKitaroDecoding();
+    TestKitaroSequencer();
+    TestMinnaNoOujisamaDecoding();
+    TestMinnaNoOujisamaSequencer();
     TestOverrides();
     TestMusic();
     TestShortLoop();

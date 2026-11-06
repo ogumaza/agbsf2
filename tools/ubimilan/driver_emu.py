@@ -14,12 +14,14 @@ for each 16 points of output before the next frame, at the rate Timer 0 sets. It
                 it loops), in the format of agbsf2 --trace
     render      the mixer's output, which the game plays on both sides
 
-    driver_emu.py ROM trace SONG FRAMES
-    driver_emu.py ROM render SONG FRAMES OUT.wav
+    driver_emu.py ROM trace SONG FRAMES [--no-kit]
+    driver_emu.py ROM render SONG FRAMES OUT.wav [--no-kit]
 
-SONG numbers the pieces of music in the order of the sound bank's resources. agbsf2 numbers them the same way. The
-routine and RAM addresses are chosen by the ROM's game code. Tomb Raider: The Prophecy's (AL9P) are built in. For
-another game, add its values to GAMES; see docs/ubimilan.md.
+SONG numbers the pieces of music in the order of the sound bank's resources. agbsf2 numbers them the same way. With
+--no-kit, the game's routine that switches channel 9's kit runs with 0 before the piece starts. The Mummy's levels of
+type 1 do that. The kit's notes then don't play. The routine and RAM addresses are chosen by the ROM's game code. Tomb
+Raider: The Prophecy's (AL9P) and The Mummy's (AUME) are built in. For another game, add its values to GAMES; see
+docs/ubimilan.md.
 """
 import argparse
 import struct
@@ -66,7 +68,15 @@ class TombRaider:
     timer_reload = 0xFBFF     # Timer 0's reload: 0xFFFF less the whole part of the sound init's float plus 0.5
 
 
-GAMES = {b'AL9P': TombRaider}
+class TheMummy(TombRaider):
+    """AUME (The Mummy). The routines and RAM that differ from Tomb Raider's."""
+    start = 0x08004440
+    step = 0x08003268
+    track = 0x02003470
+    kit_switch = 0x08003284  # switches channel 9's kit on or off: r0 = 1 or 0
+
+
+GAMES = {b'AL9P': TombRaider, b'AUME': TheMummy}
 
 
 def addresses_for(rom):
@@ -160,7 +170,12 @@ class DriverEmulator:
         addresses = [self.bank + u32(table + 4 * i) for i in range(u16(self.bank + 2))]
         return [a for a in addresses if self.rom[a - ROM_BASE] == 0]
 
-    def play(self, song):
+    def play(self, song, kit=True):
+        """Starts a piece of music. With `kit` false, the game's switch of channel 9's kit is off first."""
+        if not kit:
+            if not hasattr(self.addr, 'kit_switch'):
+                raise SystemExit('no routine that switches the kit is known for this game')
+            self.call(self.addr.kit_switch, (0,))
         self.call(self.addr.start, (self.songs()[song], 1, 0, 0))
 
     def frame(self):
@@ -200,9 +215,9 @@ class DriverEmulator:
         return self.track_state()[3] != 0 or any(self.voice_state(v) for v in range(VOICE_COUNT))
 
 
-def trace(rom, song, frames):
+def trace(rom, song, frames, kit=True):
     emu = DriverEmulator(rom)
-    emu.play(song)
+    emu.play(song, kit)
     start_writes, emu.writes = emu.writes, []
     for f in range(frames):
         writes, _ = emu.frame()
@@ -219,10 +234,10 @@ def trace(rom, song, frames):
             break
 
 
-def render(rom, song, frames):
+def render(rom, song, frames, kit=True):
     """Returns the mixer's output for the first `frames` frames of `song`, as points from -1 to 1 at its rate."""
     emu = DriverEmulator(rom)
-    emu.play(song)
+    emu.play(song, kit)
     chunks = [emu.frame()[1] for _ in range(frames)]
     return np.concatenate(chunks).astype(np.float64) / 128, 16777216 / (0x10000 - emu.addr.timer_reload)
 
@@ -243,14 +258,15 @@ def main():
     p.add_argument('song', type=int)
     p.add_argument('frames', type=int)
     p.add_argument('out', nargs='?')
+    p.add_argument('--no-kit', action='store_true', help="switch channel 9's kit off before the piece starts")
     a = p.parse_args()
     rom = load_rom(a.rom)
     if a.command == 'trace':
-        trace(rom, a.song, a.frames)
+        trace(rom, a.song, a.frames, not a.no_kit)
         return
     if not a.out:
         p.error('render needs an output file')
-    write_wav(a.out, *render(rom, a.song, a.frames))
+    write_wav(a.out, *render(rom, a.song, a.frames, not a.no_kit))
 
 
 if __name__ == '__main__':

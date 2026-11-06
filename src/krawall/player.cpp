@@ -318,6 +318,11 @@ Player::Player(const Rom& rom, const DriverInfo& info, uint32_t module, int mode
 Player::Player(const Rom& rom, const DriverInfo& info, const ModuleSong& song)
     : Player(rom, info, song.module, PlayMode(song), std::max(song.song, 0))
 {
+    if (valid_ && song.music_volume >= 0)
+    {
+        music_volume_ = song.music_volume;
+        SetGlobalVolume();
+    }
 }
 
 void Player::Warn(const std::string& text)
@@ -596,12 +601,8 @@ void Player::SetTimer(bool on)
 
 void Player::Advance(MixChannel& m, uint32_t samples)
 {
-    // A mixing routine steps through the points a sample of the mix at a time, keeping the position's fraction.
-    const int32_t sum = int32_t(uint32_t(m.frac) + uint32_t(m.inc) * samples);
-    m.pos += uint32_t(sum >> 16);
-    m.frac = uint16_t(sum);
-
-    // The ramp at a stop counts down its samples and frees the channel when they're done.
+    // The ramp at a stop counts down its samples and frees the channel when they're done. Its routine leaves the
+    // position alone, even if a change of frequency after the stop has given the channel a step again.
     if (m.mix == 7)
     {
         const uint32_t done = std::min<uint32_t>(m.sfx, samples);
@@ -612,7 +613,13 @@ void Player::Advance(MixChannel& m, uint32_t samples)
         {
             m.status = 0;
         }
+        return;
     }
+
+    // A mixing routine steps through the points a sample of the mix at a time, keeping the position's fraction.
+    const int32_t sum = int32_t(uint32_t(m.frac) + uint32_t(m.inc) * samples);
+    m.pos += uint32_t(sum >> 16);
+    m.frac = uint16_t(sum);
 }
 
 void Player::Mix(uint32_t amount)

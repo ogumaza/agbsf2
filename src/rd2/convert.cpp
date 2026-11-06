@@ -393,6 +393,39 @@ void RunOut(Sequencer& seq, PsgChannels& psg, Simulation& sim)
     sim.plan.end = std::max(sim.plan.end, sim.frame_ticks[silent]);
 }
 
+// Moves the end of a sequence without a loop back to where its last sound dies away, when the end lies more than
+// kMaxSilentEndSeconds later. A frame sounds while a PSG channel plays at a volume above 0 at its start, or while a
+// sample voice that isn't free has a level after it. The sequence then ends two frames after the last frame that
+// sounds. The second frame covers a voice that stops partway through its frame.
+void EndWithLastSound(Simulation& sim)
+{
+    size_t end_frame = 0;
+    while (end_frame < sim.frames.size() && sim.frame_ticks[end_frame] < sim.plan.end)
+    {
+        end_frame++;
+    }
+
+    size_t quiet = 0; // the first frame from which nothing sounds
+    for (size_t f = 0; f < end_frame; f++)
+    {
+        const FrameData& d = sim.frames[f];
+        bool sample = false;
+        for (size_t v = 0; v < size_t(kSampleVoices); v++)
+        {
+            sample = sample || (d.envelope[v] > 0 && d.sample_volume[v] > 0);
+        }
+        if (sample || PsgSounds(d))
+        {
+            quiet = f + 2;
+        }
+    }
+
+    if (quiet > 0 && quiet < end_frame && kMaxSilentEndSeconds < double(end_frame - quiet) / kFrameRate)
+    {
+        sim.plan.end = sim.frame_ticks[quiet];
+    }
+}
+
 // Runs the model until every track has looped or ended and the sequence has played its loop `loops` times. A track's
 // units are the MIDI file's ticks: each frame lasts the tempo's units, and each command comes at its track's time, or
 // with `frame_timing`, at the start of the frame the driver plays it in. From LoopStart::kSecondPass, the loop starts
@@ -446,6 +479,10 @@ Simulation Simulate(const Rom& rom, const DriverInfo& info, int song, int versio
     if (finished && !sim.plan.loops && seq.Ended())
     {
         RunOut(seq, psg, sim);
+    }
+    if (!sim.plan.loops)
+    {
+        EndWithLastSound(sim);
     }
     sim.warnings = SimulationWarnings(seq, sim.frames, finished);
 

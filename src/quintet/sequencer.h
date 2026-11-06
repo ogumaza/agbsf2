@@ -270,12 +270,13 @@ private:
     bool FollowEnd(int c);
 
     // Starts note `note` on channel `c`: the pitch and the level, and on a PCM channel the sample's start or stop. Note
-    // 12 plays again. Note 13 rests. A note after D4 slides from the note before.
+    // 12 plays again. Note 13 rests. A note after D4 slides from the note before. In the S revision, note -1 only
+    // waits.
     void StartNote(int c, int note);
 
-    // Returns the ticks that a note of length index `length` lasts with its dot and the notes that D4 ties to it. Moves
-    // the channel past the dot and the ties.
-    uint16_t NoteTicks(Channel& ch, int note, int length);
+    // Returns the ticks that a note lasts with its dot and the notes that D4 ties to it, where `first` is the note's
+    // first byte and `value` its note value. Moves the channel past the dot and the ties.
+    uint16_t NoteTicks(Channel& ch, uint8_t first, int value);
 
     // Writes a hardware register, as the driver does.
     void Write(uint32_t address, int size, uint32_t value);

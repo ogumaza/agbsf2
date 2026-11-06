@@ -4,3 +4,6 @@
 [submodule "externals/xsflib"]
 	path = externals/xsflib
 	url = ../xsflib.git
+[submodule "externals/ntdlib"]
+	path = externals/ntdlib
+	url = ../ntdlib.git

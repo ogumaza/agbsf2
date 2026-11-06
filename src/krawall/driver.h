@@ -135,15 +135,17 @@ constexpr int kModeSong = 2;
 constexpr int kModeJingle = 4;
 
 // A piece of music that the conversion converts: a module, or one of the songs that its orders separate with +++. A
-// piece from the game's table of what it plays has the entry's mode, and its song is the entry's.
+// piece from the game's table of what it plays has the entry's mode, and its song is the entry's. A game can also give
+// each module of its table a mode and a music volume.
 struct ModuleSong
 {
     auto operator<=>(const ModuleSong&) const = default;
 
     uint32_t module = 0;
-    int song = -1;       // the song's number in its module, or -1 for a whole module without markers
-    bool jingle = false; // a whole module that the game plays once, in krapPlay()'s jingle mode
-    int mode = -1;       // krapPlay()'s mode from the game's table, or -1 for the mode that the song and jingle give
+    int song = -1;         // the song's number in its module, or -1 for a whole module without markers
+    bool jingle = false;   // a whole module that the game plays once, in krapPlay()'s jingle mode
+    int mode = -1;         // krapPlay()'s mode from the game's table, or -1 for the mode that the song and jingle give
+    int music_volume = -1; // krapSetMusicVol()'s volume that the game sets after krapPlay(), or -1 for none
 };
 
 // Krawall's tables, which the player reads, and the settings that the game gives the mixer.
@@ -172,7 +174,7 @@ struct DriverInfo
     uint32_t play_table = 0;       // the game's table of what it plays, 8 bytes an entry, or 0
     int table_count = 0;           // its entries, which come first in `modules`
     std::vector<uint32_t> modules;
-    std::vector<ModuleSong> songs;     // the pieces that the conversion numbers, in the modules' order
+    std::vector<ModuleSong> songs; // the pieces that the conversion numbers, in the modules' order
 
     // The modified build loads each module from a music file. Detection unpacks the modules and maps them after the
     // ROM's end, in `unpacked`, a copy of the ROM with them. Each module's music file is in `files`, in the order of

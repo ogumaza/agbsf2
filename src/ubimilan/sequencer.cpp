@@ -54,6 +54,12 @@ int KeyIndex(int channel, int key)
     return (key - 36) & 0xFF;
 }
 
+// Divides as the game's library does: towards 0, with 0 for a divisor of 0.
+int32_t Divide(int32_t a, int32_t b)
+{
+    return b ? int32_t(int64_t(a) / int64_t(b)) : 0;
+}
+
 // Returns the warning for the unknown status byte `status` at `address`.
 std::string UnknownCommand(int status, uint32_t address)
 {
@@ -66,10 +72,16 @@ std::string UnknownCommand(int status, uint32_t address)
 
 } // namespace
 
-Sequencer::Sequencer(const Rom& rom, const DriverInfo& info, int song) : rom_(rom), info_(info)
+Sequencer::Sequencer(const Rom& rom, const DriverInfo& info, int song, bool kit) : rom_(rom), info_(info), kit_on_(kit)
 {
     if (!ReadMusic(rom, info, song, piece_))
     {
+        return;
+    }
+
+    if (piece_.sample >= 0)
+    {
+        StartSamplePiece(song);
         return;
     }
 
@@ -102,6 +114,54 @@ Sequencer::Sequencer(const Rom& rom, const DriverInfo& info, int song) : rom_(ro
     active_ = true;
     piece_playing_ = true;
     sequence_starts_.push_back(0);
+}
+
+void Sequencer::StartSamplePiece(int song)
+{
+    GameSample sample;
+    if (!ReadSample(rom_, piece_.address, sample))
+    {
+        return;
+    }
+
+    valid_ = true;
+
+    // The game's sound event starts the sample on a voice at full volume, with no sequence.
+    kit_voice_fixed_ = true;
+    kit_voice_ = kVoiceCount - 1;
+    Voice& voice = voices_[size_t(kit_voice_)];
+    voice.busy = true;
+    StartVoice(voice, sample, kFullVolume);
+
+    Note n = NewNote(kKitChannel, kFirstSampleKey + song - info_.piece_count, kFullVolume, 0);
+    n.sample = piece_.address;
+    voice.note = int(notes_.size());
+    notes_.push_back(n);
+    sequence_starts_.push_back(0);
+}
+
+void Sequencer::NextSamplePass(Voice& voice)
+{
+    // The voice goes on looping. A file that loops on its markers needs a note for each pass. Each note starts on the
+    // frame nearest the moment that the pass starts.
+    const uint64_t cycles = (runs_ + 1) * kRunOutput * OutputCycles(info_);
+    const uint32_t frame = uint32_t((cycles + kFrameCycles / 2) / kFrameCycles);
+    EndNote(voice.note, frame);
+
+    // The next pass goes on from the loop's start. In a sample with points before its loop, that's another key.
+    Note n = notes_[size_t(voice.note)];
+    n.on = frame;
+    n.ended = false;
+    n.off = 0;
+    GameSample sample;
+    if (ReadSample(rom_, piece_.address, sample) && sample.loop_start && !n.skip)
+    {
+        n.key += kLoopKeyOffset;
+        n.skip = sample.loop_start;
+    }
+    voice.note = int(notes_.size());
+    notes_.push_back(n);
+    sequence_starts_.push_back(frame);
 }
 
 uint32_t Sequencer::NextSequence(int ahead) const
@@ -162,11 +222,13 @@ void Sequencer::SequencerStep()
     if (wait_)
     {
         wait_--;
+        PsgUpdate();
         return;
     }
 
     // Commands until the countdown isn't 0. An end command makes the track take the next sequence, if there's one, and
-    // the game's callback gives the track the sequence after it, as a resource that the sound update corrects.
+    // the game's callback gives the track the sequence after it, as a resource that the sound update corrects. The
+    // PSG's update follows them, even in the frame in which the piece stops.
     while (active_ && !wait_)
     {
         if (ending_)
@@ -195,6 +257,7 @@ void Sequencer::SequencerStep()
         }
         RunCommand(rom_.U8(pointer_++));
     }
+    PsgUpdate();
 }
 
 void Sequencer::RunCommand(int status)
@@ -238,6 +301,8 @@ void Sequencer::RunCommand(int status)
     pointer_ += 2;
 }
 
+// The kit's notes and note-offs play only while the game's switch of the kit is on. In The Mummy, the channel command
+// tests the switch at 0x08004942 and 0x08004982.
 void Sequencer::NoteOn(int channel, int key, int velocity)
 {
     if (channel < kPsgChannels)
@@ -248,7 +313,7 @@ void Sequencer::NoteOn(int channel, int key, int velocity)
     {
         NoiseNoteOn(key, velocity);
     }
-    else if (PlaysKit(channel, key))
+    else if (PlaysKit(channel, key) && kit_on_)
     {
         KitNoteOn(key, velocity);
     }
@@ -264,7 +329,7 @@ void Sequencer::NoteOff(int channel, int key)
     {
         NoiseNoteOff(key);
     }
-    else if (PlaysKit(channel, key))
+    else if (PlaysKit(channel, key) && kit_on_)
     {
         KitNoteOff();
     }
@@ -347,12 +412,22 @@ void Sequencer::KitNoteOn(int key, int velocity)
         kit_voice_ = v;
     }
 
-    // The voice starts the sample at the note's velocity; a sample that doesn't loop keeps the last loop's points.
     Voice& voice = voices_[size_t(v)];
     if (voice.note >= 0)
     {
         EndNote(voice.note, frame_);
     }
+    StartVoice(voice, sample, velocity);
+
+    Note n = NewNote(kKitChannel, key, velocity, kit_program_);
+    n.sample = address;
+    voice.note = int(notes_.size());
+    notes_.push_back(n);
+}
+
+void Sequencer::StartVoice(Voice& voice, const GameSample& sample, int velocity)
+{
+    // The voice starts the sample at the note's velocity; a sample that doesn't loop keeps the last loop's points.
     voice.position = sample.data;
     voice.end = sample.data + sample.length;
     voice.loop = sample.loop;
@@ -363,11 +438,6 @@ void Sequencer::KitNoteOn(int key, int velocity)
     }
     voice.volume = uint32_t(velocity);
     voice.stopped = false;
-
-    Note n = NewNote(kKitChannel, key, velocity, kit_program_);
-    n.sample = address;
-    voice.note = int(notes_.size());
-    notes_.push_back(n);
 }
 
 void Sequencer::KitNoteOff()
@@ -422,53 +492,179 @@ void Sequencer::PsgNoteOn(int channel, int key, int velocity)
         return;
     }
 
+    // A note continues from the one before if the channel plays and the instrument has legato. Otherwise it starts the
+    // channel. Either way the channel stores the new key, and the next note-off has to match it.
     PsgChannel& psg = psg_[size_t(channel)];
-    const uint32_t inst = info_.instrument_tables[size_t(channel)] + 16 * uint32_t(psg.program);
-    const uint16_t flags = rom_.U16(inst + 12);
-    if (flags & (kModulation | kPitchMode | kLegato))
-    {
-        char text[128];
-        std::snprintf(text, sizeof text,
-                      "PSG instrument %d of channel %d has a modulation, a pitch mode or legato, "
-                      "which the model leaves out",
-                      psg.program, channel);
-        Warn(text);
-    }
-
-    // The instrument's bytes and the velocity, which is ORed into the envelope, then the key's frequency.
-    Note n = NewNote(channel, key, velocity, psg.program);
     const int index = KeyIndex(channel, key);
-    const uint16_t frequency = rom_.U16(info_.frequency_table + 2 * uint32_t(index));
-    if (channel == 0)
+    Note n = NewNote(channel, key, velocity, psg.program);
+    const uint32_t flags = info_.instrument_tables[0] + 16 * uint32_t(psg.program + 30 * channel) + 12;
+    if (psg.playing && (rom_.U16(flags) & kLegato))
     {
-        n.duty = rom_.U8(inst + 1);
-        n.envelope = uint8_t(rom_.U8(inst + 2) | velocity);
-        Write(kNr10, 2, rom_.U8(inst));
-        Write(kNr11, 2, n.duty | (n.envelope << 8));
-        Write(kNr13, 2, (rom_.U8(inst + 3) << 8) | frequency);
-    }
-    else if (channel == 1)
-    {
-        n.duty = rom_.U8(inst);
-        n.envelope = uint8_t(rom_.U8(inst + 1) | velocity);
-        Write(kNr21, 2, n.duty | (n.envelope << 8));
-        Write(kNr23, 2, (rom_.U8(inst + 2) << 8) | frequency);
+        PsgLegato(channel, index);
+        n.legato = true;
+        if (psg.note >= 0)
+        {
+            n.duty = notes_[size_t(psg.note)].duty;
+            n.envelope = notes_[size_t(psg.note)].envelope;
+        }
     }
     else
     {
-        n.envelope = uint8_t(velocity);
-        Write(kNr30, 2, 0xA0);
-        Write(kNr31, 2, rom_.U8(inst) | (velocity << 8));
-        Write(kNr33, 2, (rom_.U8(inst + 1) << 8) | frequency);
+        PsgStart(channel, index, velocity);
+        psg.playing = true;
+        const uint32_t inst = Instrument(channel, psg.program);
+        n.duty = channel == 0 ? rom_.U8(inst + 1) : channel == 1 ? rom_.U8(inst) : 0;
+        n.envelope = uint8_t(velocity | (channel == 0 ? rom_.U8(inst + 2) : channel == 1 ? rom_.U8(inst + 1) : 0));
     }
+    psg.index = index;
 
     if (psg.note >= 0)
     {
         EndNote(psg.note, frame_);
     }
-    psg.index = index;
     psg.note = int(notes_.size());
     notes_.push_back(n);
+}
+
+uint32_t Sequencer::Instrument(int channel, int program) const
+{
+    return info_.instrument_tables[size_t(channel)] + 16 * uint32_t(program & 0xFF);
+}
+
+uint16_t Sequencer::Frequency(int index) const
+{
+    return rom_.U16(info_.frequency_table + 2 * uint32_t(index));
+}
+
+uint16_t Sequencer::FineFrequency(int32_t cents) const
+{
+    return info_.fine_table ? rom_.U16(info_.fine_table + 2 * uint32_t(cents)) : 0;
+}
+
+void Sequencer::PsgStart(int channel, int index, int velocity)
+{
+    // The instrument's bytes and the velocity, which is ORed into the envelope. The wave channel's DAC comes on, and
+    // its velocity is its volume. The last byte for the channel goes above the frequency setting, in NRx4.
+    PsgChannel& psg = psg_[size_t(channel)];
+    const uint32_t inst = Instrument(channel, psg.program);
+    uint32_t frequency_register = 0;
+    uint32_t high = 0;
+    if (channel == 0)
+    {
+        Write(kNr10, 2, rom_.U8(inst));
+        Write(kNr11, 2, rom_.U8(inst + 1) | (uint32_t(velocity | rom_.U8(inst + 2)) << 8));
+        frequency_register = kNr13;
+        high = uint32_t(rom_.U8(inst + 3)) << 8;
+    }
+    else if (channel == 1)
+    {
+        Write(kNr21, 2, rom_.U8(inst) | (uint32_t(velocity | rom_.U8(inst + 1)) << 8));
+        frequency_register = kNr23;
+        high = uint32_t(rom_.U8(inst + 2)) << 8;
+    }
+    else
+    {
+        Write(kNr30, 2, 0xA0);
+        Write(kNr31, 2, rom_.U8(inst) | (uint32_t(velocity) << 8));
+        frequency_register = kNr33;
+        high = uint32_t(rom_.U8(inst + 1)) << 8;
+    }
+
+    // The modulation starts with its delay. Without the fine table, the model leaves out the modulation and the pitch
+    // mode, as detection warns.
+    const uint16_t kept = info_.fine_table ? 0xFFFF : uint16_t(~(kModulation | kPitchMode));
+    const uint16_t flags = rom_.U16(inst + 12) & kept;
+    Modulation& mod = psg.modulation;
+    if (flags & kModulation)
+    {
+        mod.value = rom_.U16(inst + 4);
+        mod.step = Divide(int32_t(uint32_t(rom_.U16(inst + 6)) << 16), int32_t(rom_.U16(inst + 8)) * 2);
+        mod.depth = rom_.U16(inst + 6);
+        mod.state = 1;
+    }
+    else
+    {
+        mod.state = 0;
+    }
+
+    // The pitch mode's first note starts at its key. A later one glides there from the note before, or from where a
+    // glide has reached.
+    PitchMode& pitch = psg.pitch;
+    const int32_t target = 100 * index;
+    if (!(flags & kPitchMode))
+    {
+        Write(frequency_register, 2, (high | Frequency(index)) & 0xFFFF);
+        pitch.state = 0;
+        return;
+    }
+
+    switch (pitch.state)
+    {
+    case 0:
+        Write(frequency_register, 2, (high | Frequency(index)) & 0xFFFF);
+        pitch.frames = rom_.U16(inst + 10);
+        pitch.state = 1;
+        pitch.previous = pitch.current = pitch.target = target;
+        break;
+
+    case 1:
+        Write(frequency_register, 2, (high | Frequency(psg.index)) & 0xFFFF);
+        Glide(pitch, inst, target);
+        break;
+
+    case 2:
+    case 3:
+        Write(frequency_register, 2, (high | FineFrequency(pitch.current)) & 0xFFFF);
+        Glide(pitch, inst, target);
+        break;
+
+    default:
+        break;
+    }
+}
+
+void Sequencer::Glide(PitchMode& pitch, uint32_t inst, int32_t target) const
+{
+    // A glide to the note's place in cents, over the instrument's frames. A glide to the place of the last target
+    // keeps its step at 0. The pitch then stays where it is unless it's below the target.
+    if (pitch.state == 1)
+    {
+        pitch.state = 2;
+    }
+    else
+    {
+        pitch.previous = pitch.target;
+    }
+
+    pitch.target = target;
+    if (target == pitch.previous)
+    {
+        pitch.step = 0;
+        return;
+    }
+
+    pitch.frames = rom_.U16(inst + 10);
+    pitch.step = Divide(target - pitch.current, pitch.frames);
+    pitch.state = 2;
+}
+
+void Sequencer::PsgLegato(int channel, int index)
+{
+    // A legato note writes only the frequency setting of its key, without a restart, or glides there in the pitch
+    // mode. On the wave channel, the pitch-mode check reads all the flags. A wave instrument with legato therefore
+    // always uses the glide code. Without a glide state, the frequency stays.
+    PsgChannel& psg = psg_[size_t(channel)];
+    const uint32_t inst = Instrument(channel, psg.program);
+    const uint16_t flags = rom_.U16(info_.instrument_tables[0] + 16 * uint32_t(psg.program + 30 * channel) + 12);
+    const bool pitch_mode = channel == kWaveChannel ? flags != 0 : (flags & kPitchMode) != 0;
+    if (!pitch_mode)
+    {
+        Write(channel == 0 ? kNr13 : channel == 1 ? kNr23 : kNr33, 2, Frequency(index));
+    }
+    else if (psg.pitch.state >= 1 && psg.pitch.state <= 3)
+    {
+        Glide(psg.pitch, inst, 100 * index);
+    }
 }
 
 void Sequencer::PsgNoteOff(int channel, int key)
@@ -481,11 +677,92 @@ void Sequencer::PsgNoteOff(int channel, int key)
         return;
     }
 
+    psg.playing = false;
     Write(channel == 0 ? kNr11 : channel == 1 ? kNr21 : kNr31, 2, 0);
     if (psg.note >= 0)
     {
         EndNote(psg.note, frame_);
         psg.note = -1;
+    }
+}
+
+void Sequencer::PsgUpdate()
+{
+    // Each frame after the commands, the sequencer moves the modulation and the glide of each PSG channel on. If
+    // either sets a place in cents, the channel gets the frequency setting at that place in the fine table, without a
+    // restart. The modulation alone moves the place of the channel key. The modulation and the glide continue after a
+    // note-off.
+    static constexpr uint32_t kFrequencyRegisters[kPsgChannels] = {kNr13, kNr23, kNr33};
+    for (int c = 0; c < kPsgChannels; c++)
+    {
+        PsgChannel& psg = psg_[size_t(c)];
+        int32_t mod = 0;
+        int32_t glide = 0;
+        Modulation& m = psg.modulation;
+        if (m.state)
+        {
+            switch (m.state)
+            {
+            case 1:
+                if (m.value == 0)
+                {
+                    m.state = 2;
+                }
+                else
+                {
+                    m.value--;
+                }
+                break;
+
+            case 2:
+            case 3:
+                m.value = int32_t(uint32_t(m.value) + uint32_t(m.step));
+                if ((m.value >> 16) > m.depth)
+                {
+                    m.state = 4;
+                }
+                break;
+
+            case 4:
+                m.value = int32_t(uint32_t(m.value) - uint32_t(m.step));
+                if (int64_t(m.value >> 16) + m.depth < 0)
+                {
+                    m.state = 3;
+                }
+                break;
+
+            default:
+                break;
+            }
+            mod = m.state == 1 ? 0 : int16_t(uint32_t(m.value) >> 16);
+        }
+
+        PitchMode& p = psg.pitch;
+        if (p.state)
+        {
+            if (p.state == 2)
+            {
+                const bool reached = p.step > 0 ? p.current >= p.target : p.current <= p.target;
+                if (reached)
+                {
+                    p.current = p.target;
+                    p.state = 3;
+                }
+                else
+                {
+                    p.current += p.step;
+                }
+            }
+            glide = p.current;
+        }
+
+        if (!mod && !glide)
+        {
+            continue;
+        }
+
+        const int32_t cents = glide + mod + (glide ? 0 : 100 * psg.index);
+        Write(kFrequencyRegisters[c], 2, FineFrequency(cents));
     }
 }
 
@@ -540,6 +817,10 @@ void Sequencer::MixerRun()
             if (voice.position >= voice.loop_end)
             {
                 voice.position = voice.loop_start;
+                if (piece_.sample >= 0)
+                {
+                    NextSamplePass(voice);
+                }
             }
         }
         else if (voice.position >= voice.end)

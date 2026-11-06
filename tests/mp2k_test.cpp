@@ -396,6 +396,18 @@ public:
         return header_at;
     }
 
+    // Writes a game's call of m4aSoundMode with `mode`: straight after its call of m4aSoundInit, or after another
+    // routine's.
+    void GameSoundMode(uint32_t mode, bool after_init)
+    {
+        constexpr uint32_t kGameCall = kRomBase + 0x140;
+        constexpr uint32_t kGamePool = kRomBase + 0x14C;
+        PutBl(kGameCall, after_init ? kInit : kRomBase + 0x1F0);
+        Put16(kGameCall + 4, uint16_t(0x4800 | ((kGamePool - ((kGameCall + 8) & ~3u)) / 4)));
+        PutBl(kGameCall + 6, kInit + 6);
+        Put32(kGamePool, mode);
+    }
+
 private:
     // Writes the parts of the driver that detection reads: the init's setting of the mode, the routine that starts a
     // song with its literal pool, and the mixer's test for reversed and compressed samples.
@@ -685,6 +697,72 @@ void TestDetection()
     SEQLIB_CHECK_EQ(unset_info.mix_rate, 13379);
     SEQLIB_CHECK(!unset_info.warnings.empty());
 
+    // Metroid Fusion's init keeps its mode in r8 for a later call, and the mode's top byte of 1 asks for stereo.
+    // Without the move, nothing marks the load as the mode's.
+    Cart fusion(0x0193F600, {4});
+    fusion.Put16(kInit + 2, 0x4680);
+    fusion.Put16(kInit + 4, 0);
+    fusion.Song({Track().Fine()}, voices);
+    Cart loose(0x0193F600, {4});
+    loose.Put16(kInit + 2, 0);
+    loose.Put16(kInit + 4, 0);
+    loose.Song({Track().Fine()}, voices);
+
+    const DriverInfo fusion_info = Detect(fusion.ToRom());
+    const DriverInfo loose_info = Detect(loose.ToRom());
+
+    SEQLIB_CHECK_EQ(fusion_info.sound_mode, 0x0193F600);
+    SEQLIB_CHECK_EQ(fusion_info.mix_rate, 10512);
+    SEQLIB_CHECK_EQ(fusion_info.max_channels, 6);
+    SEQLIB_CHECK_EQ(fusion_info.master_volume, 15);
+    SEQLIB_CHECK_EQ(loose_info.sound_mode, 0);
+
+    // A game's code can set the mode again straight after the init: bl m4aSoundInit; ldr r0, =mode; bl m4aSoundMode.
+    // Each field of that mode that isn't 0 replaces the init's. A mode that the code sets elsewhere doesn't count.
+    Cart again;
+    again.GameSoundMode(0x00960680, true);
+    again.Song({Track().Fine()}, voices);
+    const DriverInfo again_info = Detect(again.ToRom());
+    SEQLIB_CHECK_EQ(again_info.sound_mode, kMode);
+    SEQLIB_CHECK_EQ(again_info.max_channels, 6);
+    SEQLIB_CHECK_EQ(again_info.master_volume, 12);
+    SEQLIB_CHECK_EQ(again_info.mix_rate, 18157);
+    Cart elsewhere;
+    elsewhere.GameSoundMode(0x00960680, false);
+    elsewhere.Song({Track().Fine()}, voices);
+    SEQLIB_CHECK_EQ(Detect(elsewhere.ToRom()).max_channels, 5);
+
+    // A row gives the mode of a game that works it out while it runs.
+    Cart spyro;
+    spyro.PutBytes(kRomBase + 0xAC, {'A', 'S', 'Y', 'E'});
+    spyro.Song({Track().Fine()}, voices);
+    const DriverInfo spyro_info = Detect(spyro.ToRom());
+    SEQLIB_CHECK_EQ(spyro_info.max_channels, 8);
+    SEQLIB_CHECK_EQ(spyro_info.master_volume, 10);
+    SEQLIB_CHECK_EQ(spyro_info.mix_rate, 13379);
+
+    // Fire Emblem and Kuru Kuru Kururin set the DirectSound channels for the song they start.
+    Cart emblem;
+    emblem.PutBytes(kRomBase + 0xAC, {'A', 'E', '7', 'E'});
+    emblem.PutHalfwords(0x08003FC0,
+                        {0xB580, 0xB081, 0x466F, 0x6038, 0x6838, 0x285A, 0xD010, 0x285A, 0xDC04, 0x282A, 0xDC18,
+                         0x2829, 0xDB16, 0xE009, 0x285F, 0xD007, 0x285F, 0xDC02, 0x285C, 0xD003, 0xE00E, 0x2874,
+                         0xD000, 0xE00B, 0x4804, 0x2108, 0x5641, 0x2908, 0xD002, 0x2008, 0xF7FF, 0xFFC6});
+    emblem.Song({Track().Fine()}, voices);
+    const Rom emblem_rom = emblem.ToRom();
+    const DriverInfo emblem_info = Detect(emblem_rom);
+    SEQLIB_CHECK_EQ(SongChannels(emblem_rom, emblem_info, 41), 8);
+    SEQLIB_CHECK_EQ(SongChannels(emblem_rom, emblem_info, 40), emblem_info.max_channels);
+    Cart kururin;
+    kururin.PutBytes(kRomBase + 0xAC, {'A', 'K', 'R', 'P'});
+    kururin.Put32(0x0801EF6C + 4, 2);
+    kururin.Song({Track().Fine()}, voices);
+    const Rom kururin_rom = kururin.ToRom();
+    const DriverInfo kururin_info = Detect(kururin_rom);
+    SEQLIB_CHECK_EQ(SongChannels(kururin_rom, kururin_info, 1), 2);
+    SEQLIB_CHECK_EQ(SongChannels(kururin_rom, kururin_info, 24), kururin_info.max_channels);
+    SEQLIB_CHECK_EQ(Sequencer(kururin_rom, kururin_info, 1).DirectChannels(), 2);
+
     // Some games' compiler swaps r2 and r3 in the routine that starts a song. The mono mixer's volume code marks a
     // mixer that plays every channel on both sides.
     Cart swapped;
@@ -719,6 +797,22 @@ void TestDetection()
     SEQLIB_CHECK(DetectDriver(bare_rom, table, none, error));
     SEQLIB_CHECK_EQ(none.song_count, 1);
     SEQLIB_CHECK_EQ(SongPlayer(bare_rom, none, 0).track_count, 16);
+
+    // An entry of zeros in the player table is a player with no tracks. The players after it still count. A song plays
+    // no more tracks than its player has, as in Advance Wars's song 82.
+    Cart gap(kMode, {10, 1});
+    for (uint32_t i = 0; i < 12; i += 4)
+    {
+        gap.Put32(kPlayerTable + i, 0);
+    }
+    gap.Song({Track().Fine(), Track().Fine()}, voices, 1);
+    const Rom gap_rom = gap.ToRom();
+
+    const DriverInfo gap_info = Detect(gap_rom);
+
+    SEQLIB_REQUIRE_EQ(gap_info.players.size(), 2);
+    SEQLIB_CHECK_EQ(gap_info.players[0].track_count, 0);
+    SEQLIB_CHECK_EQ(SongPlayer(gap_rom, gap_info, 0).track_count, 1);
 }
 
 void TestTiming()
@@ -1346,6 +1440,46 @@ void TestHourLimit()
     const auto offs = m.Find(0x80);
     SEQLIB_CHECK(last <= 216001 * kMidiTicks);
     SEQLIB_CHECK(!offs.empty() && offs.back().tick >= 215999 * kMidiTicks);
+}
+
+void TestSilentEndAfterLastSound()
+{
+    // A note of 24 ticks at a tick a frame, a wait, a volume change and the end. The voice's release of 0 stops the
+    // note's sound a frame after its release. After a wait of 600 ticks, the change comes 9.6 s after the sound has
+    // died away, and the song ends at the change. After a wait of 720 ticks, it comes 11.6 s after, more than
+    // kMaxSilentEndSeconds. The song then ends a tick after the sound, and its MIDI file holds nothing later.
+    Cart cart;
+    const uint32_t voices = cart.VoiceGroup({{0, Cart::Voice(0, cart.Wave(Saw(), 13379, 0))}});
+    for (int wait : {600, 720})
+    {
+        cart.Song({Track()
+                       .Cmd(kCmdTempo, 75)
+                       .Cmd(kCmdVoice, 0)
+                       .Cmd(kCmdVol, 100)
+                       .Note(24, 60, 100)
+                       .Wait(wait)
+                       .Cmd(kCmdVol, 50)
+                       .Fine()},
+                  voices);
+    }
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+
+    const SongReport near = ConvertSong(rom, info, 0, TempSettings("silent_end_near"), nullptr);
+    const SongReport far = ConvertSong(rom, info, 1, TempSettings("silent_end_far"), nullptr);
+
+    SEQLIB_CHECK(near.ok && AtFrames(near.seconds, 600));
+    SEQLIB_CHECK(far.ok && far.seconds > 24 / kFrameRate && far.seconds < 30 / kFrameRate);
+    const MidiEvents m = ReadMidi(far.midi_path);
+    uint64_t last = 0;
+    for (const auto& track : m.tracks)
+    {
+        for (const auto& e : track.events)
+        {
+            last = std::max(last, e.tick);
+        }
+    }
+    SEQLIB_CHECK(m.Find(0x90).size() == 1 && last < 30 * kMidiTicks);
 }
 
 void TestConversion()
@@ -2332,6 +2466,53 @@ void TestDroppedNotes()
     SEQLIB_CHECK(m.Find(0x90).size() == 1 && m.Find(0x91).empty());
 }
 
+void TestSongChannels()
+{
+    // Before The Sacred Stones starts a song up to 127, its routine at 0x080028FC gives songs 1, 2, 64, 66, 67, 86 and
+    // 116 8 DirectSound channels, and the other songs the init's number. The cart's init gives one. Song 0 then plays
+    // one of its two notes at once, and song 1 plays both. A routine with other code gives no song another number.
+    const std::vector<uint16_t> kRoutine = {0xB500, 0x2843, 0xDC08, 0x2842, 0xDA0A, 0x2801, 0xDB14, 0x2802, 0xDD06,
+                                            0x2840, 0xD004, 0xE00F, 0x2856, 0xD001, 0x2874, 0xD10B, 0x4804, 0x7A00,
+                                            0x0600, 0x1600, 0x2808, 0xD00E, 0x2008, 0xF7FF, 0xFFDD};
+
+    auto make = [&](uint16_t first)
+    {
+        Cart cart(0x00940100);
+        const uint32_t voices = cart.VoiceGroup({{0, Cart::Voice(0, cart.Wave(Saw(), 13379, 0))}});
+        for (int s = 0; s < 2; s++)
+        {
+            cart.Song({Track().Cmd(kCmdVoice, 0).Cmd(kCmdVol, 127).Note(24, 60, 100).Wait(24).Fine(),
+                       Track().Cmd(kCmdVoice, 0).Cmd(kCmdVol, 127).Note(24, 62, 100).Wait(24).Fine()},
+                      voices);
+        }
+        cart.PutBytes(kRomBase + 0xAC, {'B', 'E', '8', 'E'});
+        cart.PutHalfwords(0x080028FC, kRoutine);
+        cart.Put16(0x080028FC, first);
+
+        return cart.ToRom();
+    };
+
+    const Rom rom = make(kRoutine[0]);
+    const Rom other_rom = make(0xB510);
+    const DriverInfo info = Detect(rom);
+    const DriverInfo other_info = Detect(other_rom);
+    ConvertSettings opt = TempSettings("song_channels");
+
+    const SongReport r0 = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport r1 = ConvertSong(rom, info, 1, opt, nullptr);
+    const SongReport other = ConvertSong(other_rom, other_info, 1, opt, nullptr);
+
+    SEQLIB_CHECK_EQ(SongChannels(rom, info, 0), 1);
+    SEQLIB_CHECK_EQ(SongChannels(rom, info, 1), 8);
+    SEQLIB_CHECK(std::find(info.log.begin(), info.log.end(),
+                           "songs 1, 2, 64, 66, 67, 86 and 116: 8 DirectSound channels (the game's routine at "
+                           "0x080028FC)") != info.log.end());
+    SEQLIB_CHECK(r0.ok && r0.warnings.size() == 1 && r0.warnings[0].find("1 note had no available sound channel") == 0);
+    SEQLIB_CHECK(r1.ok && r1.warnings.empty());
+    SEQLIB_CHECK(other_info.song_channels.songs.empty() && SongChannels(other_rom, other_info, 1) == 1);
+    SEQLIB_CHECK(other.ok && other.warnings.size() == 1);
+}
+
 void TestDoubledNote()
 {
     // Two notes of one key that a track starts on one tick make one MIDI note, which goes on as long as either of them
@@ -2603,6 +2784,12 @@ void TestCamelotDetection()
     SEQLIB_CHECK_EQ(info.sound_mode, kMode);
     SEQLIB_CHECK(info.camelot_sequencer && info.camelot_mixer);
     SEQLIB_CHECK(!plain_info.camelot_sequencer && !plain_info.camelot_mixer);
+
+    // The words of the echo come before the mixer's pulse wave. Without them, the echo has Golden Sun's level.
+    SEQLIB_CHECK_EQ(info.camelot_echo, 53);
+    cart.Put32(kCamelotPulse - 0x1CC, 0xFFFA0020);
+    cart.Put32(kCamelotPulse - 0x1C8, 0x001FFFFA);
+    SEQLIB_CHECK_EQ(Detect(cart.ToRom()).camelot_echo, 32);
 }
 
 // Camelot's note start takes the third free channel, or the last free one when there are only one or two, unless a
@@ -2881,6 +3068,7 @@ void RunTests()
     TestLoopAfterTie();
     TestLoopSettingsAgain();
     TestHourLimit();
+    TestSilentEndAfterLastSound();
     TestConversion();
     TestLevels();
     TestMonoLevels();
@@ -2898,6 +3086,7 @@ void RunTests()
     TestPsgNoReverb();
     TestCompressedSample();
     TestDroppedNotes();
+    TestSongChannels();
     TestDoubledNote();
     TestTempoChange();
     TestPsgPitch();

@@ -245,7 +245,8 @@ private:
 
     const Rom& rom_;
     const DriverInfo& info_;
-    uint16_t silenced_; // the channels at a level of 0
+    uint16_t silenced_;     // the channels at a level of 0
+    uint32_t music_volume_; // out of 128: the music volume at which the game starts the tune
     bool valid_ = false;
     TuneHeader header_;
     std::vector<Track> tracks_;

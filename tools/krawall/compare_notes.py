@@ -42,6 +42,7 @@ import driver_emu
 from gbarom import ROM_BASE, load_rom
 from traces import parse_range
 
+MELODIC_CHANNELS = 15  # the MIDI channels other than the drum channel
 TIME_TOLERANCE = 0.001   # seconds that an event can be from the driver's tick, for the MIDI tempos' rounding
 PITCH_TOLERANCE_CENTS = 5
 
@@ -198,6 +199,19 @@ def levels_to_controllers(left, right):
     return cc10, min(127, max(0, round(127 * math.sqrt(amp / loudest))))
 
 
+def without_final_silence(notes, stereo):
+    """Returns the notes as a module with more than MELODIC_CHANNELS channels writes them: each ends where the mixer
+    holds both of its levels at 0, and a note whose levels stay 0 throughout goes."""
+    kept = []
+    for n in notes:
+        states = list(n['states'])
+        while states and not states[-1][1]['left'] and not (stereo and states[-1][1]['right']):
+            n = dict(n, off=states.pop()[0])
+        if states:
+            kept.append(dict(n, states=states))
+    return kept
+
+
 def midi_length(path):
     """Returns the seconds to the end of a MIDI file's longest track."""
     data = Path(path).read_bytes()
@@ -254,6 +268,8 @@ def check_song(rom, info, song, midi_path, sf2_path, report):
             return False
         return True
 
+    if sum(1 for c in expected if expected[c]) > MELODIC_CHANNELS:
+        expected = {c: without_final_silence(expected[c], info['stereo']) for c in expected}
     notes, changes = conversion.read_timing(midi_path, by_track=True)
     presets = read_sf2(sf2_path)
     headers = {}

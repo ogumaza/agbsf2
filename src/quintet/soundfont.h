@@ -44,8 +44,9 @@ class SoundfontBuilder
 {
 public:
     // Keeps a reference to `rom`. The ROM has to outlive the builder. In a SoundFont that `songs` songs share,
-    // SongBanks gives each song's presets their bank and programs.
-    explicit SoundfontBuilder(const Rom& rom, int songs = 1);
+    // SongBanks gives each song's presets their bank and programs. The noise drums render at `noise_rate` Hz, the PSG's
+    // rate under the driver's SOUNDBIAS setting.
+    explicit SoundfontBuilder(const Rom& rom, int songs = 1, uint32_t noise_rate = 65536);
 
     Sf2File& File()
     {

@@ -1650,7 +1650,7 @@ void TestPsgRunOut()
     }
     SEQLIB_CHECK(values == expected);
     SEQLIB_REQUIRE(!square.empty());
-    const uint32_t last_step = square_offs[0].tick - square.back().first;
+    const uint64_t last_step = square_offs[0].tick - square.back().first;
     SEQLIB_CHECK(last_step == 150 || last_step == 300);
     SEQLIB_CHECK(square_offs[0].tick > 6 * 150 + 20 * 150);
     SEQLIB_CHECK_EQ(uint32_t(square_offs[0].tick), end);
@@ -1671,6 +1671,36 @@ void TestPsgRunOut()
     }
     SEQLIB_CHECK(values == expected);
     SEQLIB_CHECK_EQ(wave_offs[0].tick - wave_ons[0].tick, uint64_t(8 * 150));
+}
+
+void TestSilentEndAfterLastSound()
+{
+    // A square's note of 4 ticks at a tick a frame, a wait, a volume change and the end. The release's envelope runs
+    // on for about 26 frames (TestPsgRunOut()). After a wait of 600 ticks, the change comes about 9.5 s after the
+    // square falls silent, and the sequence ends at the change. After a wait of 720 ticks, it comes about 11.5 s after,
+    // more than kMaxSilentEndSeconds. The sequence then ends two frames after the last frame that sounds, and its MIDI
+    // file holds nothing later.
+    Cart cart;
+    cart.Sequences({{TrackData().Bytes({0xC2, kSquare}).Note(0x30, 4, 127).Wait(600).Bytes({0xE0, 0x40}).End()},
+                    {TrackData().Bytes({0xC2, kSquare}).Note(0x30, 4, 127).Wait(720).Bytes({0xE0, 0x40}).End()}});
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+
+    const SongReport near = ConvertSong(rom, info, 0, TempSettings("rd2_silent_end_near"), nullptr);
+    const SongReport far = ConvertSong(rom, info, 1, TempSettings("rd2_silent_end_far"), nullptr);
+
+    SEQLIB_CHECK(near.ok && std::fabs(near.seconds - 600 / kFrameRate) < 0.02);
+    SEQLIB_CHECK(far.ok && far.seconds > 20 / kFrameRate && far.seconds < 40 / kFrameRate);
+    const MidiEvents midi = ReadMidi(far.midi_path);
+    uint64_t last = 0;
+    for (const auto& track : midi.tracks)
+    {
+        for (const auto& e : track.events)
+        {
+            last = std::max(last, e.tick);
+        }
+    }
+    SEQLIB_CHECK(midi.Find(0x90).size() == 1 && last < 40 * 150);
 }
 
 void TestPsgPanPasses()
@@ -2048,6 +2078,7 @@ void RunTests()
     TestSampleLegato();
     TestWaveVolume();
     TestPsgRunOut();
+    TestSilentEndAfterLastSound();
     TestPsgPanPasses();
     TestLevelOrder();
     TestHighVelocities();

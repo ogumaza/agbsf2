@@ -13,15 +13,8 @@
 
 namespace agbsf2::quintet
 {
-namespace
-{
-
-// The rate at which noise is rendered: the PSG's output rate under the driver's SOUNDBIAS setting.
-constexpr uint32_t kNoiseRate = 65536;
-
-} // namespace
-
-SoundfontBuilder::SoundfontBuilder(const Rom& rom, int songs) : rom_(rom), banks_(songs), psg_(kNoiseRate)
+SoundfontBuilder::SoundfontBuilder(const Rom& rom, int songs, uint32_t noise_rate)
+    : rom_(rom), banks_(songs), psg_(noise_rate)
 {
 }
 

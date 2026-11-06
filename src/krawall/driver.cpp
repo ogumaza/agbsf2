@@ -6,10 +6,13 @@
 #include <cstdint>
 #include <cstdio>
 #include <initializer_list>
+#include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "xsflib/bytes.h"
@@ -43,29 +46,296 @@ struct GameSettings
     uint32_t music_volume = 128; // krapSetMusicVol()'s volume
     uint32_t music_fade_in = 0;  // the volume's step a frame from 0 after each start, or 0 for none
     int quality = -1;            // kramQualityMode()'s argument, or -1 for the one that detection finds
+    uint32_t once[4] = {};       // modules that the game plays once, in mode 0, through routines of its own
 };
 
 constexpr GameSettings kGameSettings[] = {
     // Eragon: its options' default music level, 7 of 10, at 0x08063A41. The table at 0x08063C8C gives level 7 a volume
     // of 161.
     {.game_code = "BENE", .music_volume = 161},
+    // Eragon's European release: its options' default music level, 7 of 10, at 0x0806398D. The table at 0x08063BD8
+    // gives level 7 a volume of 161.
+    {.game_code = "BENP", .music_volume = 161},
+    // Harry Potter and the Prisoner of Azkaban: its options' default music level, 10 of 10, at 0x0806B816. The routine
+    // at 0x0803FF98 gives the library 12 times the level.
+    {.game_code = "BHTE", .music_volume = 120},
+    // Its Japanese release: the default, 10 of 10, at 0x0806B7A2. The routine at 0x08040000 gives the library 12 times
+    // the level.
+    {.game_code = "BHTJ", .music_volume = 120},
     // Juka and the Monophonic Menace: the routine at 0x08023A84 runs before the mixer's worker each frame. It sets the
     // music volume, which it raises from 0 by 2 a frame after each start.
     {.game_code = "BJKE", .music_fade_in = 2},
+    // Its European release: the routine at 0x08023A38 does the same.
+    {.game_code = "BJKP", .music_fade_in = 2},
     // Racing Fever: the routine at 0x080042A4 sets half the volume that the game gives it, 127 of 0xFF, before it
     // plays a module.
     {.game_code = "BRWP", .music_volume = 127},
     // Puppy Luv: Spa and Resort: the routine at 0x0801A548 gives the options' music volume a default of 64. The game
     // sets that volume after its call of krapSetMusicVol() with 60 at 0x08024BF8.
     {.game_code = "BYXE", .music_volume = 64},
+    // The Koala Brothers: Outback Adventures calls krapSetMusicVol() with 64 before its title's song, at 0x0800097C.
+    // Each level's routine starts its song at 0 and fades it to 64, as at 0x080019BA. The routine at 0x08003AAC fades
+    // song 2 to 32 instead. Five other levels play song 2 at 64.
+    {.game_code = "BAKE", .music_volume = 64},
+    // Its European release makes the same call at the same address.
+    {.game_code = "BAKP", .music_volume = 64},
+    // The Lord of the Rings: The Third Age: at boot, the routine at 0x0803DA8C passes the music volume of the game's
+    // settings to krapSetMusicVol(). Its default, at 0x08054849, is 153. The handler of a script's command 9, at
+    // 0x080104F4, can set another volume for a scene.
+    {.game_code = "B3AE", .music_volume = 153},
+    // Its Japanese release: the routine at 0x0803DB28 does the same. The default, at 0x08054BF9, is 153.
+    {.game_code = "B3AJ", .music_volume = 153},
+    // Crash of the Titans: at boot, the routine at 0x08036A10 passes the music level of the game's settings to the
+    // routine at 0x08036AC0, which calls krapSetMusicVol() with the level's volume from the table at 0x08063DBC. The
+    // default level, at 0x08063A25, is 2, a volume of 96.
+    {.game_code = "BQCE", .music_volume = 96},
+    // Its European release: the routine at 0x08036A1C does the same, with the table at 0x08063E08. The default level,
+    // at 0x08063A71, is 2, a volume of 96.
+    {.game_code = "BQCP", .music_volume = 96},
+    // Digimon Racing: after its language select, the game passes the music level of its settings to the routine at
+    // 0x0800806C, which calls krapSetMusicVol() through 0x08013134 with the level's volume from the table at
+    // 0x08040E88. The routine at 0x08007DB4 gives the level a default of 6, a volume of 180.
+    {.game_code = "BDGE", .music_volume = 180},
+    // Its European release has the same routines at 0x0800806C, 0x08013134 and 0x08007DB4, and the table at 0x08040EB8.
+    {.game_code = "BDGP", .music_volume = 180},
+    // Digimon Racing's Japanese release has the same code at other addresses. It has no language select. At boot, the
+    // routine at 0x080080F0 calls krapSetMusicVol() through 0x080131B8 with the level's volume from the table at
+    // 0x080401C8. The routine at 0x08007E38 gives the level a default of 6, a volume of 180.
+    {.game_code = "BDJJ", .music_volume = 180},
     // The games with the modified build call kragInit() with their options' choice of stereo, 1 by default, and
     // kramQualityMode() with 0x21 in their sound init. Their start-up code then sets the options' music volume: Big
     // Mutha Truckers 100 at 0x08000684, Street Racing Syndicate 64 at 0x080003DA, M&M's Break 'Em 48 at 0x08000418 and
-    // Princess Natasha 64 at 0x080008F4.
+    // Princess Natasha 64 at 0x080008F4. Each of the first two games has another release that makes the call at the
+    // same address.
     {.game_code = "B63E", .stereo = 1, .music_volume = 100, .quality = 0x21},
+    {.game_code = "B63P", .stereo = 1, .music_volume = 100, .quality = 0x21},
+    {.game_code = "BCZE", .stereo = 1, .music_volume = 64, .quality = 0x21},
     {.game_code = "BCZP", .stereo = 1, .music_volume = 64, .quality = 0x21},
     {.game_code = "BEME", .stereo = 1, .music_volume = 48, .quality = 0x21},
     {.game_code = "BNPE", .stereo = 1, .music_volume = 64, .quality = 0x21},
+    // Cocoto Platform Jumper plays its modules through its routine at 0x08008C1C, in the mode that the caller gives, or
+    // through its routine at 0x08008B88, which starts the module later in mode 1 or 0 by its third argument on the
+    // stack. Mode 0 plays four modules once: from 0x0801375A, 0x08016B80 and 0x0801357E through the first, and from
+    // 0x08013E4A through the second.
+    {.game_code = "BC8P", .once = {0x08032C94, 0x0803520C, 0x0804EC30, 0x080565D4}},
+    // Games that call krapSetMusicVol() once at boot or before their first module, with no options behind it. The
+    // addresses are those of the calls: The Game of Life, Yahtzee and Payday 96 at 0x0801F51C, Candy Land 96 at
+    // 0x0800CD58, Dora the Explorer: Dora's World Adventure 77 at 0x0800FDC0, and Shamu's Deep Sea Adventures 60 in ARM
+    // code at 0x08000488.
+    {.game_code = "B3UE", .music_volume = 96},
+    {.game_code = "BC4E", .music_volume = 96},
+    {.game_code = "BXPE", .music_volume = 77},
+    {.game_code = "BBAE", .music_volume = 60},
+    // Shamu's Deep Sea Adventures' European release is the same program, byte for byte, apart from the header.
+    {.game_code = "BBAP", .music_volume = 60},
+    // Marvel: Ultimate Alliance starts its modules at 0 and fades them to 64, at 0x0803AB06 and 0x0803AB30.
+    // Harry Potter and the Order of the Phoenix starts them at 0, at 0x08032FFA. It fades them to 16 times the byte at
+    // 0x02004F10, 5 by default, at 0x08033046.
+    {.game_code = "B4ME", .music_volume = 64},
+    {.game_code = "BJXE", .music_volume = 80},
+    // Marvel: Ultimate Alliance's European release makes the same calls at 0x0803AADE and 0x0803AB08.
+    {.game_code = "B4MP", .music_volume = 64},
+    // The Bee Game calls krapSetMusicVol(64) in ARM code at 0x08028064.
+    {.game_code = "BKFE", .music_volume = 64},
+    // The Bee Game's European release, Die Biene Maja: Klatschmohnwiese in Gefahr, makes the same call at 0x08027FC8.
+    {.game_code = "BKFX", .music_volume = 64},
+    // The three Uno games call krapSetMusicVol(96) at boot, then their wrappers set the level from a table of the
+    // game's: Uno 52 80 at 0x080290C8, Uno and Skip-Bo 80 at 0x0802CBD0, and Uno Free Fall 48 at 0x080162F4.
+    {.game_code = "BU5E", .music_volume = 80},
+    {.game_code = "BUQE", .music_volume = 80},
+    {.game_code = "BUIE", .music_volume = 48},
+    // Their European releases have the same tables and make the same calls at other addresses: Uno 52 at 0x0802941C,
+    // Uno and Skip-Bo at 0x0802D654, and Uno Free Fall at 0x080169C0.
+    {.game_code = "BU5P", .music_volume = 80},
+    {.game_code = "BUQP", .music_volume = 80},
+    {.game_code = "BUIP", .music_volume = 48},
+    // Three games share a routine that passes a level from 0 to 9 through a table to krapSetMusicVol(), and keeps the
+    // level in their settings. Another routine in two of them maps its argument to the argument of kramQualityMode().
+    // The Legend of Spyro: The Eternal Night's table is at 0x0806F9E8. Its routine at 0x0804972C sets level 9 at boot,
+    // a volume of 85. Its routine at 0x08049A40 gets 2 from 0x0804967C, a quality of 1.
+    // Pirates of the Caribbean: Dead Man's Chest's table is at 0x08080710. Its routine at 0x080350F8 sets level 5, a
+    // volume of 140. Its routine at 0x080353B8 gets 2 from 0x08035050, a quality of 1.
+    // The Chronicles of Narnia's table at 0x0805449C gives level 9 a volume of 254.
+    {.game_code = "BU7E", .music_volume = 85, .quality = 1},
+    // The Legend of Spyro: The Eternal Night's European release has the same table at 0x0806FCB4. The routine at
+    // 0x080499F8 sets level 9 at boot, and the routine at 0x08049D0C gets 2 from 0x08049948.
+    {.game_code = "BU7P", .music_volume = 85, .quality = 1},
+    {.game_code = "B8QE", .music_volume = 140, .quality = 1},
+    {.game_code = "B2WE", .music_volume = 254},
+    // The Sims 2 calls krapSetMusicVol(180) from the routine at 0x0804DFD0. That routine keeps the volume in the game's
+    // settings.
+    {.game_code = "B46E", .music_volume = 180},
+};
+
+// The pieces that a game plays in a mode or at a music volume that detection can't read. A row names a module, and one
+// of the songs that its orders separate with +++, or -1 for a module without markers. The values come from the game's
+// code.
+struct SongSettings
+{
+    const char* game_code;
+    uint32_t module;
+    int song = -1;         // the song's number in the module, or -1 for a module without markers
+    int mode = -1;         // krapPlay()'s mode, or -1 for the one that the song and jingle give
+    int music_volume = -1; // krapSetMusicVol()'s volume after krapPlay(), or -1 for the game's
+};
+
+constexpr SongSettings kSongSettings[] = {
+    // Care Bears: Care Quest plays songs 0 and 8 at 128. Each level's routine starts its song at 0 and fades it to
+    // 64: song 1 at 0x08003400, song 4 at 0x08004BCC, song 7 at 0x08007218 and song 6 at 0x08008524. The routine at
+    // 0x080038BC plays song 2 once, in the song mode, at 128. The routine at 0x0800A1AC plays songs 4 and 5 as jingles
+    // in a level. Song 5 then plays at the level's 64.
+    {.game_code = "BEAE", .module = 0x08360B0C, .song = 1, .music_volume = 64},
+    {.game_code = "BEAE", .module = 0x08360B0C, .song = 2, .mode = 2},
+    {.game_code = "BEAE", .module = 0x08360B0C, .song = 4, .music_volume = 64},
+    {.game_code = "BEAE", .module = 0x08360B0C, .song = 5, .mode = 6, .music_volume = 64},
+    {.game_code = "BEAE", .module = 0x08360B0C, .song = 6, .music_volume = 64},
+    {.game_code = "BEAE", .module = 0x08360B0C, .song = 7, .music_volume = 64},
+    // Its European release fades its levels' songs to 64 at other addresses: song 1 at 0x080035A4, song 4 at
+    // 0x08004D44, song 7 at 0x08007380 and song 6 at 0x08008722. The routine at 0x08003B70 plays song 3 once, not
+    // song 2. The routine at 0x0800A428 plays the jingles.
+    {.game_code = "BEAP", .module = 0x08361B28, .song = 1, .music_volume = 64},
+    {.game_code = "BEAP", .module = 0x08361B28, .song = 3, .mode = 2},
+    {.game_code = "BEAP", .module = 0x08361B28, .song = 4, .music_volume = 64},
+    {.game_code = "BEAP", .module = 0x08361B28, .song = 5, .mode = 6, .music_volume = 64},
+    {.game_code = "BEAP", .module = 0x08361B28, .song = 6, .music_volume = 64},
+    {.game_code = "BEAP", .module = 0x08361B28, .song = 7, .music_volume = 64},
+    // The Koala Brothers: Outback Adventures plays songs 4 and 5 only as jingles, as at 0x0800171A and 0x0800172E.
+    {.game_code = "BAKE", .module = 0x0858C284, .song = 4, .mode = 6},
+    {.game_code = "BAKE", .module = 0x0858C284, .song = 5, .mode = 6},
+    // Its European release makes the same calls at the same addresses, with the module elsewhere.
+    {.game_code = "BAKP", .module = 0x0858BF70, .song = 4, .mode = 6},
+    {.game_code = "BAKP", .module = 0x0858BF70, .song = 5, .mode = 6},
+    // Franklin the Turtle's ARM code plays nine of its modules only as jingles, at 41 calls of krapPlay(), as at
+    // 0x08008848, 0x080088F8 and 0x08013AB8. Each of its 20 mini-games calls krapSetMusicVol(64) and then plays piece
+    // 1, 2 or 3, as at 0x08008290 and 0x08008400. krapPlay() keeps the music volume. The title plays piece 0 at 128.
+    {.game_code = "BFKE", .module = 0x083321A8, .music_volume = 64},
+    {.game_code = "BFKE", .module = 0x08334368, .music_volume = 64},
+    {.game_code = "BFKE", .module = 0x08335A18, .music_volume = 64},
+    {.game_code = "BFKE", .module = 0x08335F60, .mode = kModeJingle},
+    {.game_code = "BFKE", .module = 0x083361F4, .mode = kModeJingle},
+    {.game_code = "BFKE", .module = 0x0833647C, .mode = kModeJingle},
+    {.game_code = "BFKE", .module = 0x083366F0, .mode = kModeJingle},
+    {.game_code = "BFKE", .module = 0x0833697C, .mode = kModeJingle},
+    {.game_code = "BFKE", .module = 0x08336C28, .mode = kModeJingle},
+    {.game_code = "BFKE", .module = 0x08336E84, .mode = kModeJingle},
+    {.game_code = "BFKE", .module = 0x08337104, .mode = kModeJingle},
+    {.game_code = "BFKE", .module = 0x0833737C, .mode = kModeJingle},
+    // Its European release has three revisions under one game code. Each has the code and the modules at other
+    // addresses. The revisions make these calls in the same order, with the modules in the same order.
+    {.game_code = "BFKP", .module = 0x0832D3C0, .music_volume = 64},
+    {.game_code = "BFKP", .module = 0x0832F580, .music_volume = 64},
+    {.game_code = "BFKP", .module = 0x08330C30, .music_volume = 64},
+    {.game_code = "BFKP", .module = 0x08331178, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x0833140C, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x08331694, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x08331908, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x08331B94, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x08331E40, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x0833209C, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x0833231C, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x08332594, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x08332FAC, .music_volume = 64},
+    {.game_code = "BFKP", .module = 0x0833516C, .music_volume = 64},
+    {.game_code = "BFKP", .module = 0x0833681C, .music_volume = 64},
+    {.game_code = "BFKP", .module = 0x08336D64, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x08336FF8, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x08337280, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x083374F4, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x08337780, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x08337A2C, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x08337C88, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x08337F08, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x08338180, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x083321A8, .music_volume = 64},
+    {.game_code = "BFKP", .module = 0x08334368, .music_volume = 64},
+    {.game_code = "BFKP", .module = 0x08335A18, .music_volume = 64},
+    {.game_code = "BFKP", .module = 0x08335F60, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x083361F4, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x0833647C, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x083366F0, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x0833697C, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x08336C28, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x08336E84, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x08337104, .mode = kModeJingle},
+    {.game_code = "BFKP", .module = 0x0833737C, .mode = kModeJingle},
+    // Cocoto Kart Racer's routine at 0x0800BC70 plays a race's module and sets the music volume: 100 for the first four
+    // tracks at 0x0800C936, and 90 for the fifth at 0x0800C94E. On the last lap, 0x08005426 plays a jingle and
+    // 0x0800542E sets 90. krapPlay() keeps the music volume. 90 therefore holds for the last lap's module, from
+    // 0x08005638, for the jingle at the race's end, from 0x080053BA to 0x080053E6, and for the results' module, from
+    // 0x0800B400 and 0x0800BB3C. The cup's end plays the race's jingles again at 128, at 0x08009692 to 0x080096D6. The
+    // menus set 128. The countdown's jingle, from 0x0800BC9C, plays at 128 in a single race and a cup's first race, and
+    // at 90 in the cup's other races. It has no row.
+    {.game_code = "BC5P", .module = 0x082415F0, .music_volume = 90},
+    {.game_code = "BC5P", .module = 0x082405FC, .music_volume = 90},
+    {.game_code = "BC5P", .module = 0x0823F658, .music_volume = 90},
+    {.game_code = "BC5P", .module = 0x0822A254, .music_volume = 100},
+    {.game_code = "BC5P", .module = 0x08230458, .music_volume = 100},
+    {.game_code = "BC5P", .module = 0x082344B8, .music_volume = 90},
+    {.game_code = "BC5P", .module = 0x08253D18, .music_volume = 90},
+    {.game_code = "BC5P", .module = 0x08256C0C, .music_volume = 90},
+    {.game_code = "BC5P", .module = 0x0826181C, .music_volume = 100},
+    {.game_code = "BC5P", .module = 0x08261D7C, .music_volume = 90},
+    {.game_code = "BC5P", .module = 0x082726E8, .music_volume = 100},
+    // Cocoto Platform Jumper's routine at 0x08008C1C sets the music volume after krapPlay(). Its caller gives a factor,
+    // and says whether the options' music level scales it. The level's default is 8 of 10, at 0x08000506. A level's
+    // module has a factor of 110, from 0x08003A8C. The routine then sets 88. In the first four worlds, a tip stops the
+    // music 51 frames after the start. When the tip ends, 0x08016EB2 sets the factor times the level over 12: 73. The
+    // pause's end, at 0x08016790, sets 73 too. A restart after a lost life plays at 88 without a tip. The fifth world's
+    // levels have no tips. Its module plays at 88, and at 120 at the game's end, from 0x08006118. The flood when the
+    // clock runs out plays at 80, from 0x080165A8 with a factor of 100. The module from 0x08013E4A plays at 88. Those
+    // from 0x0801357E and 0x0801375A play at 110, and those from 0x0800588C, 0x08005D20, 0x08008AAC and 0x08016B80 at
+    // 120, without the level.
+    {.game_code = "BC8P", .module = 0x0802DE90, .music_volume = 73},
+    {.game_code = "BC8P", .module = 0x080322F0, .music_volume = 73},
+    {.game_code = "BC8P", .module = 0x08032C94, .music_volume = 110},
+    {.game_code = "BC8P", .module = 0x080349C0, .music_volume = 120},
+    {.game_code = "BC8P", .module = 0x0803520C, .music_volume = 120},
+    {.game_code = "BC8P", .module = 0x08041C38, .music_volume = 88},
+    {.game_code = "BC8P", .module = 0x080439E4, .music_volume = 80},
+    {.game_code = "BC8P", .module = 0x0804EC30, .music_volume = 88},
+    {.game_code = "BC8P", .module = 0x08056334, .music_volume = 73},
+    {.game_code = "BC8P", .module = 0x080565D4, .music_volume = 110},
+    {.game_code = "BC8P", .module = 0x0813D328, .music_volume = 120},
+    {.game_code = "BC8P", .module = 0x081448FC, .music_volume = 120},
+    {.game_code = "BC8P", .module = 0x081499C8, .music_volume = 73},
+    // The Bee Game's ARM routine at 0x08027CDC plays each entry of its table of modules at 0x08027C1C in the song mode.
+    // That mode goes back to a module's first order rather than its restart order.
+    {.game_code = "BKFE", .module = 0x08380B3C, .mode = kModeSong},
+    {.game_code = "BKFE", .module = 0x08389078, .mode = kModeSong},
+    {.game_code = "BKFE", .module = 0x0837DA44, .mode = kModeSong},
+    {.game_code = "BKFE", .module = 0x08377CB8, .mode = kModeSong},
+    {.game_code = "BKFE", .module = 0x08374BBC, .mode = kModeSong},
+    {.game_code = "BKFE", .module = 0x08374F9C, .mode = kModeSong},
+    {.game_code = "BKFE", .module = 0x08385BF8, .mode = kModeSong},
+    {.game_code = "BKFE", .module = 0x0837ADE4, .mode = kModeSong},
+    {.game_code = "BKFE", .module = 0x08375378, .mode = kModeSong},
+    {.game_code = "BKFE", .module = 0x08374658, .mode = kModeSong},
+    // The Bee Game's European release has the same routine at 0x08027C40 and the same modules, 0x5A68 bytes lower.
+    // The routine plays the entries of the table at 0x08027B80.
+    {.game_code = "BKFX", .module = 0x0837B0D4, .mode = kModeSong},
+    {.game_code = "BKFX", .module = 0x08383610, .mode = kModeSong},
+    {.game_code = "BKFX", .module = 0x08377FDC, .mode = kModeSong},
+    {.game_code = "BKFX", .module = 0x08372250, .mode = kModeSong},
+    {.game_code = "BKFX", .module = 0x0836F154, .mode = kModeSong},
+    {.game_code = "BKFX", .module = 0x0836F534, .mode = kModeSong},
+    {.game_code = "BKFX", .module = 0x08380190, .mode = kModeSong},
+    {.game_code = "BKFX", .module = 0x0837537C, .mode = kModeSong},
+    {.game_code = "BKFX", .module = 0x0836F910, .mode = kModeSong},
+    {.game_code = "BKFX", .module = 0x0836EBF0, .mode = kModeSong},
+};
+
+// The tables with a music volume for each entry of a game's table of modules.
+struct SongLevels
+{
+    const char* game_code;
+    uint32_t levels;
+};
+
+constexpr SongLevels kSongLevels[] = {
+    // Postman Pat and the Greendale Rocket: the routine at 0x08003B54 plays entry n of its table of modules and then
+    // calls krapSetMusicVol() at 0x08003B76 with byte n of this table, times the options' level over 128. The level's
+    // default is 128.
+    {"BROP", 0x08032C48},
 };
 
 // The start of the player's tables, which are the same in every build.
@@ -83,11 +353,23 @@ constexpr uint32_t kLinear[] = {1096155136, 1097144902, 1098135561, 1099127114, 
 // then picks the entry. The game's calls of the routine give the entry's number with movs r0, #number.
 constexpr const char* kPlayEntryPattern = "49xx 00xx 1840 6800 21xx 22xx Fxxx Fxxx";
 
+// A game's direct call of krapPlay(): ldr r0, =module; movs r1, #mode, then movs r2, #song or not, and bl krapPlay.
+// Cocoto Kart Racer plays some of its modules once that way, in mode 0 or 4.
+constexpr const char* kPlayCallPatterns[] = {"48xx 21xx 22xx Fxxx Fxxx", "48xx 21xx Fxxx Fxxx"};
+
 // A game's call of krapPlay() for an entry of a table of what it plays: ldr r1, =table; lsls r0, rN, #3; adds r0, r0,
 // r1; ldr r3, [r0]; ldr r4, [r0, #4]; ldrb r1, [r0, #4]; lsrs r2, r4, #8; lsls r2, r2, #24; lsrs r2, r2, #24; adds r0,
 // r3, #0; bl krapPlay. An entry has 8 bytes: the module's address, krapPlay()'s mode and song, and 2 bytes of 0.
 // Eragon's routine at 0x0803FD04 plays its entries that way.
 constexpr const char* kPlayTablePattern = "49xx 00xx 1840 6803 6844 7901 0A22 0612 0E12 1C18 Fxxx Fxxx";
+
+// A game's routine that plays entry n of its table of modules in the mode of its table of modes, a word an entry. It
+// then calls krapSetMusicVol() with the volume of its table of volumes, a byte an entry: push {r4, lr}; adds r4, r0,
+// #0; ldr r0, =modules; lsls r1, r4, #2; adds r0, r1, r0; ldr r0, [r0]; ldr r3, =modes; adds r1, r1, r3; ldr r1, [r1];
+// bl krapPlay; ldr r0, =volumes; adds r0, r4, r0; ldrb r0, [r0]; movs r1, #0; bl krapSetMusicVol. Franklin's Great
+// Adventures' routine at 0x0800362C plays its modules that way. Its start-up code copies the table of modules to RAM.
+constexpr const char* kPlayVolumePattern =
+    "B510 1C04 48xx 00A1 1808 6800 4Bxx 18C9 6809 Fxxx Fxxx 48xx 1820 7800 2100 Fxxx Fxxx";
 
 // The bytes of an entry of such a table, and the most entries that detection reads.
 constexpr uint32_t kPlayEntrySize = 8;
@@ -109,6 +391,7 @@ struct BuildCode
     int timer_index;
     const char* frame; // getDmaAddress()'s movs of half the samples of a frame
     int frame_index;
+    int frame_shift_index; // the lsls whose shift scales the movs to the samples of a frame, or -1 for a shift of 1
 
     // The starts of kragInit(), which the game calls with its choice of stereo, and of kramQualityMode() and
     // kramSetMasterVol(). kragInit() calls kramSetMasterVol() itself, kInitMasterCall bytes in, before the game can.
@@ -122,6 +405,10 @@ struct BuildCode
 };
 
 constexpr uint32_t kInitMasterCall = 6;
+
+// The game's sound init calls kramSetMasterVol() within this many bytes after its call of kragInit(). A game can call
+// it elsewhere too, as Shrek SuperSlam's pause does at 0x0801A24E.
+constexpr uint32_t kInitMasterWindow = 0x80;
 
 // The code of the build of 2003/09/01. The builds of player.c, 1.2.2.10 to 1.4, have the same krapPlay(), timers,
 // getDmaAddress() and kragInit(). Their compiler gave the row's note on other registers. Build 1.4 has the
@@ -140,7 +427,11 @@ constexpr const char* kMasterPlayerC = "B5F0 4Cxx 4Exx 1C05 2100 2000 11C3 1C1A 
 constexpr const char* kPlay2004 = "B5F0 4657 464E 4645 B4E0 4680 2002 1C0F 4692 Fxxx Fxxx 2003 Fxxx Fxxx 2204";
 constexpr const char* kTables2004 = "0431 48xx 0B8A 5886 007C 61AE 3C02 5B31 48xx 008E 5984 616C";
 constexpr const char* kTimer2004 = "4Bxx 49xx 48xx 800B 3102 4Bxx 8008 3906 800B";
-constexpr const char* kFrame2004 = "4Bxx 18D5 23xx 6035 005D";
+
+// getDmaAddress()'s step in the builds from 2004/09/17 on: movs r3, #half and lsls r5, r3, #shift. The shift is 1 for a
+// frame of 276 samples. Cocoto Platform Jumper's build of 2005-04-21 shifts by 2, for 552 samples a frame.
+constexpr const char* kFrame2004 = "4Bxx 18D5 23xx 6035 00xD";
+
 constexpr const char* kInit2004 = "B510 1C04 2080 F000 Fxxx 1C20 F000 F8xx";
 constexpr const char* kQuality2004 = "B530 2120 4001 2900 D0xx 49xx 2300 700B";
 constexpr const char* kMaster = "B5F0 1C04 0C20 2800 D0xx 49xx";
@@ -173,41 +464,42 @@ constexpr const char* kMasterModified = "B5F0 1C07 0C38 2800 D1xx 2005";
 // code. From 2004/11/14 on, kramSetMusicVol() calls a routine that sets each channel's mixing routine again, and in
 // 2005-04-21 that routine gives a channel in the centre a routine of its own.
 constexpr BuildCode kBuildCode[] = {
-    {Build::kV1_2_2_10, "$Id: player.c,v 1.2.2.10 ", kPlay2003, kTablesPlayerC, 1, 8, kTimer2003, 5, kFrame2003, 1,
+    {Build::kV1_2_2_10, "$Id: player.c,v 1.2.2.10 ", kPlay2003, kTablesPlayerC, 1, 8, kTimer2003, 5, kFrame2003, 1, -1,
      kInit2003, kQualityPlayerC, kMasterPlayerC, nullptr},
-    {Build::kV1_2_2_14, "$Id: player.c,v 1.2.2.14 ", kPlay2003, kTablesPlayerC, 1, 8, kTimer2003, 5, kFrame2003, 1,
+    {Build::kV1_2_2_14, "$Id: player.c,v 1.2.2.14 ", kPlay2003, kTablesPlayerC, 1, 8, kTimer2003, 5, kFrame2003, 1, -1,
      kInit2003, kQualityPlayerC, kMasterPlayerC, nullptr},
-    {Build::kV1_2_2_15, "$Id: player.c,v 1.2.2.15 ", kPlay2003, kTablesPlayerC, 1, 8, kTimer2003, 5, kFrame2003, 1,
+    {Build::kV1_2_2_15, "$Id: player.c,v 1.2.2.15 ", kPlay2003, kTablesPlayerC, 1, 8, kTimer2003, 5, kFrame2003, 1, -1,
      kInit2003, kQualityPlayerC, kMasterPlayerC, nullptr},
-    {Build::kV1_2_2_17, "$Id: player.c,v 1.2.2.17 ", kPlay2003, kTablesPlayerC, 1, 8, kTimer2003, 5, kFrame2003, 1,
+    {Build::kV1_2_2_17, "$Id: player.c,v 1.2.2.17 ", kPlay2003, kTablesPlayerC, 1, 8, kTimer2003, 5, kFrame2003, 1, -1,
      kInit2003, kQualityPlayerC, kMasterPlayerC, nullptr},
-    {Build::kV1_4, "$Id: player.c,v 1.4 ", kPlay2003, kTablesPlayerC, 1, 8, kTimer2003, 5, kFrame2003, 1, kInit2003,
+    {Build::kV1_4, "$Id: player.c,v 1.4 ", kPlay2003, kTablesPlayerC, 1, 8, kTimer2003, 5, kFrame2003, 1, -1, kInit2003,
      kQuality2003, kMaster, nullptr},
-    {Build::k2003_09_01, nullptr, kPlay2003, kTables2003, 1, 8, kTimer2003, 5, kFrame2003, 1, kInit2003, kQuality2003,
-     kMaster, nullptr},
-    {Build::k2005_04_21, nullptr, kPlay2004, kTables2004, 1, 8, kTimer2004, 5, kFrame2004, 2, kInit2004, kQuality2004,
-     kMaster, "425A 0993 E7xx 2304 E7xx 2301 7023 7042"},
-    {Build::k2004_11_14, nullptr, kPlay2004, kTables2004, 1, 8, kTimer2004, 5, kFrame2004, 2, kInit2004, kQuality2004,
-     kMaster, "425A 0993 E7xx 2300 E7xx 2201 2340 7022 425A 1C13 7043"},
-    {Build::k2004_09_17, nullptr, kPlay2004, kTables2004, 1, 8, kTimer2004, 5, kFrame2004, 2, kInit2004, kQuality2004,
-     kMaster, "B570 4Bxx 28FF D9xx 20FF 7018 48xx 2420 1C1E 2540 7881 2900"},
-    {Build::kUnsigned, nullptr, kPlayUnsigned, kTablesUnsigned, 0, 0, kTimerUnsigned, 6, kFrameUnsigned, 8,
+    {Build::k2003_09_01, nullptr, kPlay2003, kTables2003, 1, 8, kTimer2003, 5, kFrame2003, 1, -1, kInit2003,
+     kQuality2003, kMaster, nullptr},
+    {Build::k2005_04_21, nullptr, kPlay2004, kTables2004, 1, 8, kTimer2004, 5, kFrame2004, 2, 4, kInit2004,
+     kQuality2004, kMaster, "425A 0993 E7xx 2304 E7xx 2301 7023 7042"},
+    {Build::k2004_11_14, nullptr, kPlay2004, kTables2004, 1, 8, kTimer2004, 5, kFrame2004, 2, 4, kInit2004,
+     kQuality2004, kMaster, "425A 0993 E7xx 2300 E7xx 2201 2340 7022 425A 1C13 7043"},
+    {Build::k2004_09_17, nullptr, kPlay2004, kTables2004, 1, 8, kTimer2004, 5, kFrame2004, 2, 4, kInit2004,
+     kQuality2004, kMaster, "B570 4Bxx 28FF D9xx 20FF 7018 48xx 2420 1C1E 2540 7881 2900"},
+    {Build::kUnsigned, nullptr, kPlayUnsigned, kTablesUnsigned, 0, 0, kTimerUnsigned, 6, kFrameUnsigned, 8, -1,
      kInitUnsigned, kQualityUnsigned, kMasterUnsigned, nullptr, kSamplesUnsigned},
-    {Build::kModified, nullptr, kPlayModified, kLoaderModified, -1, 0, kTimerModified, 8, kFrameModified, 3,
+    {Build::kModified, nullptr, kPlayModified, kLoaderModified, -1, 0, kTimerModified, 8, kFrameModified, 3, -1,
      kInitModified, kQualityModified, kMasterModified, nullptr},
 };
 
-// Returns the address of the first copy of `bytes` in the ROM at a multiple of `align`, or 0.
-uint32_t FindBytes(const Rom& rom, const std::vector<uint8_t>& bytes, uint32_t align)
+// Returns the address of the first copy of `bytes` in the ROM at a multiple of `align`, from `from` on, or 0.
+uint32_t FindBytes(const Rom& rom, const std::vector<uint8_t>& bytes, uint32_t align, uint32_t from = kRomBase)
 {
     const uint8_t* data = rom.Ptr(kRomBase);
-    if (!data || bytes.empty())
+    if (!data || bytes.empty() || from < kRomBase || from - kRomBase >= rom.Size())
     {
         return 0;
     }
 
     const uint8_t* end = data + rom.Size();
-    for (const uint8_t* at = data; (at = std::search(at, end, bytes.begin(), bytes.end())) != end; at++)
+    for (const uint8_t* at = data + (from - kRomBase); (at = std::search(at, end, bytes.begin(), bytes.end())) != end;
+         at++)
     {
         if ((at - data) % align == 0)
         {
@@ -225,9 +517,10 @@ uint32_t FindText(const Rom& rom, const char* text)
     return FindBytes(rom, std::vector<uint8_t>(bytes.begin(), bytes.end()), 1);
 }
 
-// Returns the address of the first copy of a table's values in the ROM, at a multiple of their size, or 0.
+// Returns the address of the first copy of a table's values in the ROM, at a multiple of their size, from `from` on, or
+// 0.
 template <typename T, size_t N>
-uint32_t FindTable(const Rom& rom, const T (&values)[N])
+uint32_t FindTable(const Rom& rom, const T (&values)[N], uint32_t from = kRomBase)
 {
     std::vector<uint8_t> bytes;
     for (T v : values)
@@ -238,7 +531,7 @@ uint32_t FindTable(const Rom& rom, const T (&values)[N])
         }
     }
 
-    return FindBytes(rom, bytes, uint32_t(sizeof(T)));
+    return FindBytes(rom, bytes, uint32_t(sizeof(T)), from);
 }
 
 // Returns `at` if the ROM's halfwords there start with `values`, or 0.
@@ -262,11 +555,14 @@ uint32_t HalfwordsAt(const Rom& rom, uint32_t at, const int16_t (&values)[N])
 
 // ARM code that calls a Thumb routine of the library. A game whose code is ARM calls the routine through a veneer,
 // ldr ip, [pc]; bx ip, followed by the routine's address with the Thumb bit set. Or it loads that address itself:
-// ldr rX, =routine|1; mov lr, pc; bx rX.
+// ldr rX, =routine|1; mov lr, pc; bx rX. BFKE's start-up code sets the argument after the load: ldr rX,
+// =routine|1; mov r0, #value; mov lr, pc; bx rX.
 constexpr uint32_t kVeneerLoad = 0xE59FC000;
 constexpr uint32_t kVeneerBranch = 0xE12FFF1C;
 constexpr uint32_t kMovLrPc = 0xE1A0E00F;
 constexpr uint32_t kBx = 0xE12FFF10;
+constexpr uint32_t kMovR0 = 0xE3A00000;
+constexpr uint32_t kMovR0Mask = 0xFFFFF000;
 
 // The most ARM instructions that ArmArgument() reads back from a call.
 constexpr int kMaxArgumentSteps = 16;
@@ -300,10 +596,19 @@ std::vector<uint32_t> FindArmCalls(const Rom& rom, uint32_t routine)
 
         uint32_t reg = 0;
         const uint32_t literal = ArmLiteral(word, at, reg);
-        if (literal && rom.Contains(literal, 4) && rom.U32(literal) == (routine | 1) && rom.U32(at + 4) == kMovLrPc &&
-            rom.U32(at + 8) == (kBx | reg))
+        if (!literal || !rom.Contains(literal, 4) || rom.U32(literal) != (routine | 1))
+        {
+            continue;
+        }
+        if (rom.U32(at + 4) == kMovLrPc && rom.U32(at + 8) == (kBx | reg))
         {
             calls.push_back(at);
+        }
+        else if (reg != 0 && rom.Contains(at, 16) && (rom.U32(at + 4) & kMovR0Mask) == kMovR0 &&
+                 rom.U32(at + 8) == kMovLrPc && rom.U32(at + 12) == (kBx | reg))
+        {
+            // The call starts after the move, so that ArmArgument() reads it.
+            calls.push_back(at + 8);
         }
     }
 
@@ -427,6 +732,23 @@ int CallArgument(const Rom& rom, uint32_t routine)
     return -1;
 }
 
+// Returns the argument that the Thumb code loads into r0, with `movs` or `ldr` from a literal, just before the call at
+// `call`, or -1.
+int64_t ThumbCallLiteral(const Rom& rom, uint32_t call)
+{
+    const uint16_t before = rom.U16(call - 2);
+    if ((before & 0xFF00) == 0x2000)
+    {
+        return before & 0xFF;
+    }
+    if ((before & 0xFF00) == 0x4800)
+    {
+        return ThumbLiteral(rom, call - 2);
+    }
+
+    return -1;
+}
+
 // Returns the argument that the game loads into r0, with `movs` or `ldr` from a literal, just before its first call to
 // `routine` other than the one at `skip`, or -1 if no call has one. Without a Thumb call, the value that ARM code
 // leaves in r0 before a call counts.
@@ -434,19 +756,10 @@ int64_t CallLiteral(const Rom& rom, uint32_t routine, uint32_t skip)
 {
     for (uint32_t call : FindCalls(rom, routine))
     {
-        if (call == skip)
+        const int64_t value = call == skip ? -1 : ThumbCallLiteral(rom, call);
+        if (value >= 0)
         {
-            continue;
-        }
-
-        const uint16_t before = rom.U16(call - 2);
-        if ((before & 0xFF00) == 0x2000)
-        {
-            return before & 0xFF;
-        }
-        if ((before & 0xFF00) == 0x4800)
-        {
-            return ThumbLiteral(rom, call - 2);
+            return value;
         }
     }
     for (uint32_t call : FindArmCalls(rom, routine))
@@ -601,8 +914,23 @@ bool ReadTables(const Rom& rom, const BuildCode& code, uint32_t table_code, Driv
 
     // The player's tables.
     info.sine = FindTable(rom, kSine);
-    info.ramp = FindTable(rom, kRamp);
-    // The square wave's first values, all 255, turn up in other data too. The wave follows the ramp.
+    // The ramp's first values turn up in other data too, as in Franklin's Great Adventures. So do the square wave's,
+    // all 255. The ramp follows the sine, and the square wave follows the ramp. Where no ramp follows the sine, the
+    // ramp is the first copy of its values that the square wave follows. Cocoto Kart Racer's data hold another copy of
+    // the ramp's first values before the player's tables.
+    info.ramp = info.sine ? HalfwordsAt(rom, info.sine + 128, kRamp) : 0;
+    if (!info.ramp)
+    {
+        info.ramp = FindTable(rom, kRamp);
+        for (uint32_t at = info.ramp; at; at = FindTable(rom, kRamp, at + 2))
+        {
+            if (HalfwordsAt(rom, at + 128, kSquare))
+            {
+                info.ramp = at;
+                break;
+            }
+        }
+    }
     info.square = info.ramp ? HalfwordsAt(rom, info.ramp + 128, kSquare) : 0;
     info.random = FindTable(rom, kRandom);
     info.periods = FindTable(rom, kPeriods);
@@ -640,7 +968,9 @@ bool ReadMixRate(const Rom& rom, const BuildCode& code, DriverInfo& info, std::s
         return false;
     }
     info.mix_rate = int((1u << 24) / (0x10000 - reload));
-    info.frame_samples = (rom.U16(frame + 2 * uint32_t(code.frame_index)) & 0xFF) << 1;
+    const int shift =
+        code.frame_shift_index >= 0 ? (rom.U16(frame + 2 * uint32_t(code.frame_shift_index)) >> 6) & 0x1F : 1;
+    info.frame_samples = (rom.U16(frame + 2 * uint32_t(code.frame_index)) & 0xFF) << shift;
     if (info.mix_rate != kModelRate)
     {
         info.warnings.push_back("the mixer runs at " + std::to_string(info.mix_rate) +
@@ -662,9 +992,33 @@ void ReadGameSettings(const Rom& rom, const BuildCode& code, DriverInfo& info)
     info.stereo = stereo != 0;
     info.quality = uint8_t(std::max(mode, 0));
 
-    // The game's master volume, from its call to kramSetMasterVol() rather than kragInit()'s.
+    // The game's master volume, from its call to kramSetMasterVol() rather than kragInit()'s. The sound init's call,
+    // which follows the game's call of kragInit(), comes first. Without one, the first call with a literal counts.
     const uint32_t master = FindFirstThumb(rom, code.master);
-    const int64_t master_volume = master ? CallLiteral(rom, master, init ? init + kInitMasterCall : 0) : -1;
+    int64_t master_volume = -1;
+    if (init && master)
+    {
+        const std::vector<uint32_t> inits = FindCalls(rom, init);
+        for (uint32_t call : FindCalls(rom, master))
+        {
+            const auto follows = [call](uint32_t c)
+            {
+                return call > c && call - c <= kInitMasterWindow;
+            };
+            if (call != init + kInitMasterCall && std::any_of(inits.begin(), inits.end(), follows))
+            {
+                master_volume = ThumbCallLiteral(rom, call);
+            }
+            if (master_volume >= 0)
+            {
+                break;
+            }
+        }
+    }
+    if (master_volume < 0 && master)
+    {
+        master_volume = CallLiteral(rom, master, init ? init + kInitMasterCall : 0);
+    }
     if (master_volume >= 0)
     {
         info.master_volume = uint32_t(master_volume);
@@ -859,6 +1213,78 @@ std::vector<uint32_t> FindJingles(const Rom& rom, DriverInfo& info)
     return jingles;
 }
 
+// Returns the modules that the game plays once through its direct calls of krapPlay() (kPlayCallPatterns): the listed
+// modules that no such call plays with the loop bit. Each has the mode of its first such call in the ROM. The game's
+// row of kGameSettings adds the modules that it plays once through routines of its own, in mode 0. Logs them.
+std::vector<std::pair<uint32_t, int>> FindPlaysOnce(const Rom& rom, DriverInfo& info)
+{
+    // Each call's module and mode, in the ROM's order, and the modules that a call loops.
+    std::map<uint32_t, std::pair<uint32_t, int>> calls;
+    std::set<uint32_t> looped;
+    for (const char* text : kPlayCallPatterns)
+    {
+        const std::vector<ThumbPattern> pattern = ParseThumbPattern(text);
+        const uint32_t bl = 2 * uint32_t(pattern.size()) - 4;
+        for (uint32_t at : FindThumb(rom, pattern))
+        {
+            const uint32_t module = ThumbLiteral(rom, at);
+            const int mode = rom.U16(at + 2) & 0xFF;
+            const bool listed = std::find(info.modules.begin(), info.modules.end(), module) != info.modules.end();
+            if (!listed || BlTarget(rom, at + bl) != info.play)
+            {
+                continue;
+            }
+
+            calls[at] = {module, mode};
+            if (mode & kModeLoop)
+            {
+                looped.insert(module);
+            }
+        }
+    }
+
+    std::vector<std::pair<uint32_t, int>> once;
+    std::set<uint32_t> seen;
+    std::string listed;
+    for (const auto& [at, call] : calls)
+    {
+        const auto [module, mode] = call;
+        if (looped.contains(module) || !seen.insert(module).second)
+        {
+            continue;
+        }
+
+        once.emplace_back(module, mode);
+        listed += (listed.empty() ? "" : ", ") + Hex(module) + " (mode " + std::to_string(mode) + ")";
+    }
+    // The modules that the game plays once through routines of its own.
+    for (const GameSettings& game : kGameSettings)
+    {
+        if (rom.GameCode() != game.game_code)
+        {
+            continue;
+        }
+
+        for (uint32_t module : game.once)
+        {
+            const bool listed_module =
+                std::find(info.modules.begin(), info.modules.end(), module) != info.modules.end();
+            if (module && listed_module && seen.insert(module).second)
+            {
+                once.emplace_back(module, 0);
+                listed += (listed.empty() ? "" : ", ") + Hex(module) + " (mode 0)";
+            }
+        }
+    }
+
+    if (!listed.empty())
+    {
+        info.log.push_back("modules that the game plays once: " + listed);
+    }
+
+    return once;
+}
+
 // Returns the entries of the game's table of what it plays (kPlayTablePattern), up to the first that isn't one: an
 // entry needs a module that the list has, a mode of 0 to 7 and 2 bytes of 0. An entry that repeats an earlier one is
 // left out. Sets the table's address in `info`, or leaves it 0 if the game has no such table, and logs the table.
@@ -911,6 +1337,48 @@ std::vector<ModuleSong> ReadPlayTable(const Rom& rom, DriverInfo& info)
     return entries;
 }
 
+// Returns the pieces that the game's routine of kPlayVolumePattern plays: each entry of the table of modules that the
+// scan found, in the entry's mode and at its music volume. An entry that repeats an earlier one is left out. Returns
+// none if the game has no such routine or a mode isn't one of krapPlay()'s, and logs the tables.
+std::vector<ModuleSong> ReadModuleSettings(const Rom& rom, DriverInfo& info)
+{
+    std::vector<ModuleSong> entries;
+    const uint32_t count = uint32_t(info.table_count);
+    for (uint32_t at : FindThumb(rom, ParseThumbPattern(kPlayVolumePattern)))
+    {
+        // The routine's table of modules is the one that the scan found, or a copy of it in RAM.
+        const uint32_t modules = ThumbLiteral(rom, at + 4);
+        const uint32_t modes = ThumbLiteral(rom, at + 12);
+        const uint32_t volumes = ThumbLiteral(rom, at + 22);
+        if (BlTarget(rom, at + 18) != info.play || count == 0 ||
+            (modules != info.module_table && rom.Contains(modules, 4)) || !rom.Contains(modes, 4 * count) ||
+            !rom.Contains(volumes, count))
+        {
+            continue;
+        }
+
+        for (uint32_t n = 0; n < count; n++)
+        {
+            const uint32_t mode = rom.U32(modes + 4 * n);
+            if (mode > 7)
+            {
+                return {};
+            }
+            const ModuleSong piece{info.modules[n], -1, false, int(mode), rom.U8(volumes + n)};
+            if (std::find(entries.begin(), entries.end(), piece) == entries.end())
+            {
+                entries.push_back(piece);
+            }
+        }
+
+        info.log.push_back("the game's routine at " + Hex(at) + " plays each module in the mode of the table at " +
+                           Hex(modes) + " and at the music volume of the table at " + Hex(volumes));
+        break;
+    }
+
+    return entries;
+}
+
 // Lists the songs. The entries of the game's table of what it plays come first, each in the entry's mode. A module that
 // no entry plays follows. One without markers converts as a whole, and one with markers song by song, each in the
 // player's song mode. A whole module that the game plays once converts in the jingle mode. Logs the songs that play
@@ -918,6 +1386,10 @@ std::vector<ModuleSong> ReadPlayTable(const Rom& rom, DriverInfo& info)
 void ListSongs(const Rom& rom, DriverInfo& info, const std::vector<uint32_t>& more_jingles = {})
 {
     info.songs = ReadPlayTable(rom, info);
+    if (info.songs.empty())
+    {
+        info.songs = ReadModuleSettings(rom, info);
+    }
 
     std::string once;
     for (size_t n = 0; n < info.songs.size(); n++)
@@ -934,6 +1406,7 @@ void ListSongs(const Rom& rom, DriverInfo& info, const std::vector<uint32_t>& mo
 
     std::vector<uint32_t> jingles = FindJingles(rom, info);
     jingles.insert(jingles.end(), more_jingles.begin(), more_jingles.end());
+    const std::vector<std::pair<uint32_t, int>> direct_once = FindPlaysOnce(rom, info);
     std::string listed;
     for (uint32_t at : info.modules)
     {
@@ -948,6 +1421,16 @@ void ListSongs(const Rom& rom, DriverInfo& info, const std::vector<uint32_t>& mo
 
         ModuleInfo module;
         const int songs = ReadModule(rom, info.build, at, module) ? SongsInModule(module) : 0;
+        const auto this_module = [at](const std::pair<uint32_t, int>& p)
+        {
+            return p.first == at;
+        };
+        const auto direct = std::find_if(direct_once.begin(), direct_once.end(), this_module);
+        if (songs == 0 && direct != direct_once.end())
+        {
+            info.songs.push_back({at, -1, false, direct->second});
+            continue;
+        }
         if (songs == 0)
         {
             const bool jingle = std::find(jingles.begin(), jingles.end(), at) != jingles.end();
@@ -973,6 +1456,44 @@ void ListSongs(const Rom& rom, DriverInfo& info, const std::vector<uint32_t>& mo
     if (!listed.empty())
     {
         info.log.push_back("jingles, which play once: " + listed);
+    }
+
+    // The rows give the pieces whose mode or music volume detection can't read from the game's code.
+    for (const SongSettings& row : kSongSettings)
+    {
+        const auto piece = std::find_if(info.songs.begin(), info.songs.end(), [&row](const ModuleSong& s)
+                                        { return s.module == row.module && s.song == row.song; });
+        if (rom.GameCode() != row.game_code || piece == info.songs.end())
+        {
+            continue;
+        }
+
+        std::string text = "the game plays song " + std::to_string(piece - info.songs.begin());
+        if (row.mode >= 0)
+        {
+            piece->mode = row.mode;
+            text += " in mode " + std::to_string(row.mode);
+        }
+        if (row.music_volume >= 0)
+        {
+            piece->music_volume = row.music_volume;
+            text += " at a music volume of " + std::to_string(row.music_volume);
+        }
+        info.log.push_back(text);
+    }
+
+    for (const SongLevels& table : kSongLevels)
+    {
+        if (rom.GameCode() != table.game_code || !rom.Contains(table.levels, uint32_t(info.songs.size())))
+        {
+            continue;
+        }
+
+        for (size_t i = 0; i < info.songs.size(); i++)
+        {
+            info.songs[i].music_volume = rom.U8(table.levels + uint32_t(i));
+        }
+        info.log.push_back("the game gives each song a music volume, from the table at " + Hex(table.levels));
     }
 }
 

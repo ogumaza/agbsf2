@@ -57,6 +57,8 @@ struct DriverInfo
     uint32_t pitch_table = 0;                 // 2^(n/12) for n = -64..63 in 9.23 fixed point, at n = 0
     uint32_t sine_table = 0;                  // 257 words: the vibrato's sine
     std::array<uint8_t, 100> fade_table = {}; // the length of each decay and release, from the driver's table
+    int music_volume = 128;                   // out of 128: the music volume of each tune that music_volumes leaves out
+    std::vector<uint8_t> music_volumes;       // each tune's music volume at its start in the game
     std::vector<std::string> log;             // detection results for --info
     std::vector<std::string> warnings;        // assumptions detection had to make
 };
@@ -64,6 +66,10 @@ struct DriverInfo
 // Finds the driver in `rom`. Returns false and sets `error` if no tune could be found, or returns false with `error`
 // empty if the game shows no sign of the driver and no tune table is given.
 bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info, std::string& error);
+
+// Returns the music volume, out of 128, at which the game's code starts tune `tune`. The mixer scales every note of the
+// tune by it. Most games set it after they request a tune. The driver's init sets 128.
+int MusicVolume(const DriverInfo& info, int tune);
 
 // Returns the address of tune `tune`'s header, or 0 if it's past the table.
 uint32_t TuneAddress(const Rom& rom, const DriverInfo& info, int tune);

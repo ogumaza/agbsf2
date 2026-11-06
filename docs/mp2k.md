@@ -29,17 +29,24 @@ differences:
   channels.
 * **The settings.** Each game's init gives the driver its mix rate, the
   number of DirectSound channels and the master volume (see
-  [Architecture](#architecture)).
+  [Architecture](#architecture)). Some games give a song another number of
+  DirectSound channels before they start it (see [Starting a
+  song](#starting-a-song)).
 * **The music players.** Each game has its own table of players, with their
   track counts.
 * **Camelot's version.** *Golden Sun: The Lost Age* (`AGFE`) changes how a
   note takes a channel and works out its volume and rate, and has a mixer of
   Camelot's with straight-line releases, synth voices and an echo (see
-  [Camelot's version](#camelots-version)).
+  [Camelot's version](#camelots-version)). *Mario Tennis: Power Tour* (`BTME`)
+  has a later version, with 12 channels and samples of 4-bit steps.
+* **The Metroid games' sequencer.** *Metroid Fusion* (`AMTE`) and *Metroid:
+  Zero Mission* (`BMXE`) have a reworked sequencer, other envelopes and other
+  PSG code (see [The Metroid games' sequencer](#the-metroid-games-sequencer)).
 
 Some games change the driver's code itself. `agbsf2` models the SDK's
-driver and Camelot's version. Another modified driver requires a study of the
-driver's code to find how the driver behaves differently.
+driver, Camelot's version and the Metroid games' sequencer. Another modified
+driver requires a study of the driver's code to find how the driver behaves
+differently.
 
 ## Architecture
 
@@ -127,7 +134,12 @@ halfword. With the halfword set, a song can't take the player over from a song
 of higher priority that's still playing.
 The init opens each player, up to a count in its code. `agbsf2` reads
 the players up to the first entry whose state or tracks aren't in RAM, or that
-has no tracks.
+has no tracks. An entry of zeros is a player with no tracks, and the table
+goes on after it. *Advance Wars* starts its table with one. *Kingdom Hearts:
+Chain of Memories* has three after player 12. Song 145 is the first that names
+a player after them. *Mario & Luigi: Superstar Saga* has 13 after player
+16, and its music player is number 31. Entries of zeros after the last player
+don't count.
 
 A song plays only as many tracks as its player has. In `BPEE` the music
 player has 10 tracks, and the three sound effect players 3, 9 and 1.
@@ -150,6 +162,20 @@ out (see [Music players](#music-players)). It sets the player's tempo to 150, it
 to 0, and its priority to the song's. Each of the song's tracks, up to the
 player's track count, starts at its first command, and the rest of the player's
 tracks stop. The player plays its first tick in the next frame.
+
+Some games set the number of DirectSound channels for a song before they start
+it, through `m4aSoundMode`. The call stops every DirectSound channel. *Fire
+Emblem* (`AE7E`) starts a song up to 127 through its routine at `0x08003F14`.
+That routine first calls the one at `0x08003FC0`. The second routine gives
+songs 41, 42, 90, 92, 95 and 116 8 channels, and the other songs the init's
+7. *Fire Emblem: The Sacred Stones* (`BE8E`) does the same through its
+routines at `0x08002890` and `0x080028FC`, for songs 1, 2, 64, 66, 67, 86 and
+116. A song above 127 keeps the number that the song before it left. Each
+game's boot sets 7 right after the sound init. `agbsf2` reads the songs and
+their number from a table of these two routines. It checks each routine's
+code at its address first. A game whose routine differs keeps the init's
+number for every song. *Fire Emblem: The Binding Blade* (`AFEJ`) never
+changes the number.
 
 ## Tracks
 
@@ -436,7 +462,11 @@ hardware's envelope, which moves 64 times a second.
 
 The hardware runs the same envelope between the routine's writes to the sound
 registers. The wave channel has four volumes and silence, and it takes the one
-that the envelope's level falls in.
+that the envelope's level falls in. Levels 0 and 1 are silent. Levels 2 to 5
+play at 25%, 6 to 9 at 50%, 10 to 13 at 75%, and 14 and 15 at 100%. The
+hardware halves each 4-bit point of the pattern at 50% and quarters it at 25%,
+and drops the fraction. At 75%, mGBA 0.11.0 takes three quarters of the point
+and drops the fraction.
 
 ## Mixer
 
@@ -492,6 +522,34 @@ driver takes the samples a frame and works out the rate in Hz:
 Without a mode, the driver plays at 13379 Hz with 8 DirectSound channels and a
 master volume of 15.
 
+### Modes from the game's code
+
+A game's code can call `m4aSoundMode` again after the init. Each field of the
+mode that isn't 0 replaces the driver's setting. `agbsf2` reads these cases:
+
+* A call straight after the init, with a literal:
+  `bl m4aSoundInit; ldr r0, =mode; bl m4aSoundMode`. *Guilty Gear X: Advance
+  Edition* (`AGXE`) sets a master volume of 8 that way, at `0x0802C230`.
+  *F-Zero: GP Legend* (`BFZE`) sets 6 DirectSound channels, at `0x08000E34`.
+* A game that works the mode out while it runs, which needs a row. *Spyro:
+  Season of Flame* (`ASYE`) builds it from the settings it stores at
+  `0x03000860`.
+* A game that sets the DirectSound channels for each song it starts, in
+  `SongChannels()`. *Kuru Kuru Kururin* (`AKRP`) reads them from a table of a
+  word for each song, at `0x0801EF6C`. *Fire Emblem* (`AE7E`) and *Fire Emblem:
+  The Sacred Stones* (`BE8E`) set them through a routine of the game's, as
+  above.
+* A game whose code gives some songs a mode before it starts them, or a
+  volume for the song's player after the start. Such a game needs rows. *The Barbie
+  Diaries: High School Mystery* (`BBIE`), *The Little Mermaid: Magic in Two
+  Kingdoms* (`BN9E`) and *Mr. Driller 2* (`BR2E`) set the DirectSound channels
+  by scene. *Mr. Driller 2* sets a reverb of 50 for the songs of its games.
+  *Strawberry Shortcake: Ice Cream Island Riding Camp* (`B35P`) plays song 2
+  with the reverb that the title's song leaves. *Steel Empire* (`BKTP`) gives
+  each song's player the volume of the song's entry in its table at
+  `0x080460FC`. A track then plays at a quarter of that volume as its `volX`,
+  and the MIDI file's CC11 follows its louder levels.
+
 ## Camelot's version
 
 *Golden Sun: The Lost Age* (`AGFE`) has a version of the driver that Camelot
@@ -534,6 +592,40 @@ from 1 to 2, or from 2 up. The ARM7 runs the new instructions straight away,
 having no cache. When a frame's points of a sample fit, the mixer has DMA3
 copy them to the stack and mixes them from there.
 
+### Mario Tennis: Power Tour
+
+*Mario Tennis: Power Tour* (`BTME`) has the same mixer at half the rate. Its
+init sets the mode `0x0095FA00`: 15768 Hz and 10 DirectSound channels. The
+routine at `0x08250C48` then calls `0x082512F8`, which sets up the sound for
+264 points a frame. That routine stores 9 as the `SoundInfo`'s setting of the
+rate. The rest of what it stores is for 15768 Hz: 264 samples a frame, a DMA
+period of 6 frames, a rate of 15768 and a step of 532. Timer 0 runs at 15768 Hz
+(`0xFBD8`), and timer 1 runs once a frame, with Camelot's `m4aSoundVSync`
+(`0x08000630`) on its interrupt. Each FIFO gets a byte for each point, from
+buffers of 1584 bytes at `0x02002640` and `0x02002C70`. Where Golden Sun's
+output stage writes two bytes for each point, this one writes one
+(`0x08001480`). `agbsf2` takes the rate from the init's mode.
+
+This version ignores the 10 DirectSound channels that the mode sets. `SoundMain`
+passes a count of 12 to the mixer in every mode (`0x080006F0`). The mixer mixes
+12 channels. The note start searches 12 (`0x0824ED3E`). `agbsf2` uses 12. The
+sequencer differs from the one in Golden Sun in two more ways. A player with
+priority 120 sets the priority of its notes to 255 (`0x0824ECD0`). Other players
+stop at 254. The note start skips a released note of priority 255
+(`0x0824ED3E`).
+
+The mixer decodes the sample of a fixed-pitch voice as 4-bit steps when the
+sample size is negative (`0x03000C1C`). The sample data contains two steps a
+byte, the high half first. The negated size is the number of steps. An index
+that starts at 56 scales them. For each step, the mixer puts the 4-bit value at
+the top of a word, shifts it right by half the index and adds it to the point.
+The index then moves up by 4 less the step size. Small steps make the next ones
+finer, and large steps make them coarser. At the start of the points for each
+frame, the mixer keeps the low 16 bits of the point and the low 8 bits of the
+index. 542 of the 914 songs in the game use such a sample. The samples are
+short voices and sound effects on players 6 and 7. The SoundFont contains the
+decoded points, at the mixer rate.
+
 ### Notes and channels
 
 A sample takes the third DirectSound channel that's off, in the list's order.
@@ -544,7 +636,8 @@ whatever their priorities, or else a channel whose note has a lower priority
 than the new one, or the same priority from this track or a later one. Of
 those, it takes the one with the lowest priority, then from the latest track,
 then the first in the list. The search goes through 10 channels, the number the
-game's mode sets.
+game's mode sets. In *Mario Tennis: Power Tour* the search covers 12 channels
+(see above).
 
 The left volume starts from 128 rather than 127:
 
@@ -634,6 +727,112 @@ before, and −8/128 of the right side's. The game doesn't change the echo, and
 the songs' reverb settings don't reach it. `agbsf2` therefore gives every song a
 reverb send of 53. Of the driver's reverb settings, 53 has the closest feedback.
 
+In *Mario Tennis: Power Tour*, the right side gets back a quarter of its output
+from a frame before (264 points), 32/128 of it from seven frames before (1848
+points), and −6/128 of the left side's from seven frames before. The left side
+gets a quarter of the right side's output from 352 points before, 31/128 of the
+left side's from seven frames before, and −6/128 of the right side's. `agbsf2`
+reads the echo's level from the two words of the mixer that hold these factors
+(`0x080013EC` in this game, `0x080012F0` in Golden Sun), and gives every song a
+reverb send of that level.
+
+## The Metroid games' sequencer
+
+*Metroid Fusion* (`AMTE`) and *Metroid: Zero Mission* (`BMXE`) have a sound
+engine that is a rework of the SDK's library. Their songs, voices and samples
+are the SDK's. The sequencer, the DirectSound envelopes and the PSG code
+differ. The addresses below come from *Metroid Fusion*. `agbsf2` finds the
+engine by its handler of `TEMPO`. The handler keeps twice the tempo and tests
+it against 150:
+
+```
+ldr  r2, [r1, #0x24]         ; 6A4A: the track's position
+ldrb r3, [r2, #1]            ; 7853: the byte after the command
+adds r2, #2                  ; 3202
+str  r2, [r1, #0x24]         ; 624A
+lsls r2, r3, #1              ; 005A
+strh r2, [r0, #10]           ; 8142
+cmp  r2, #150                ; 2A96
+```
+
+*Metroid: Zero Mission* has no `m4aSongNumStart`. Its routine at `0x08003FAC`
+queues a song, and the frame's routine starts it. `agbsf2` takes its tables
+from two loads of literals in a row, the music player table's and then the
+song table's, followed within two instructions by a shift of the song's number
+by 3 (`0x08002B28`).
+
+### Commands and the LFO
+
+In *Metroid Fusion*, a note reads up to two bytes after it, a key and a
+velocity. A third byte below `0x80` is the next note's key. In *Metroid: Zero
+Mission*, a third byte adds to the note's length. The SDK's library does the
+same.
+`agbsf2` tells the two apart by *Metroid Fusion*'s code at `0x080017B2`.
+`XCMD` `08` and `09` set the echo's volume and length. `MEMACC` and the other
+unused commands do nothing.
+
+A track that is waiting counts the wait down first. The LFO then moves on, and
+the commands that are due run once the wait is 0. A tick that starts with no
+wait runs its commands without moving the LFO on. The LFO's delay counts down
+before anything else. The LFO moves on only while the track's newest note
+sounds. `LFOS` sets half the speed, rounded up. The swing is (depth + 1) × the
+triangle wave's value / 128. A step leaves the swing as it is when the triangle
+wave's new value equals the old swing (`0x080016E0`). A depth or speed of 0
+doesn't clear the swing. Each note sets the swing to 0, starts the delay again
+and works out the track's levels and pitch.
+
+### Volume, pan and pitch
+
+The level is the volume times the expression over 32. A tremolo multiplies it
+by 65 plus the swing, over 64, up to 255. The pan goes from -64 to 63. The
+right side gets (64 + pan) / 128 of the level, and the left side
+(64 − pan) / 128. A note plays at its velocity plus 1, out of 128, of each
+side's level.
+
+The pitch in 256ths of a semitone is 4 × the bend × the bend range, plus 256 ×
+the key shift and 16 × the tune. A bend above the centre counts 1 more. A
+vibrato adds 48 × the swing.
+
+A drum kit's voice of pan byte 0 sets the track's pan to the centre. A byte from
+`0x80` up sets the byte less `0xC0`. Other bytes leave the track's pan. Each
+DirectSound note keeps the pan that it started with. When the volume changes,
+the mixer works a drum kit's levels out again for each note at that note's pan
+(`0x08001006`). The track keeps the pan of the last of these notes.
+
+### Envelopes and frequencies
+
+A DirectSound note's decay starts in the frame that its attack ends. Its
+release ends the note at level 0. A note that has both an echo volume and an
+echo length then stays silent for a frame and plays on at its last level for
+the length less 1 (`0x080010EA`). The echo's volume sets no level.
+
+A square or wave channel takes its frequency setting from a table of 128 keys
+(`0x080A5278`). Keys below 36 repeat the octave from 36. A fine tune adds
+(fine + 1) / 256 of the step to the next key's setting. `agbsf2` finds the
+table from the routine that reads it (`0x08001E56`). The noise channel's
+settings are the SDK's.
+
+The PSG routine (`0x080011DC`) counts a channel's envelope a level at a time,
+once every `attack`, `decay` or `release` frames. Unlike the SDK's library, it
+takes no extra step every 15th frame. It writes a square's or the noise
+channel's NRx2 only when a phase starts or the track's volume changes, and
+restarts the channel each time. The hardware envelope moves the level in
+between:
+
+* The attack restarts the channel at 0, rising, and the count starts at 1.
+* When the count reaches the full level, the decay restarts the channel a
+  level below it, falling.
+* The sustain restarts it at the sustain level, with a step time of 0.
+* A release restarts it a level below the count, falling. The note ends, or
+  its echo starts, when the count reaches 0.
+* A change of volume restarts the channel at the count, with a step time of
+  0, so it holds that level until the next phase.
+* A voice with a sound length plays at its sustain level until the hardware's
+  length counter ends it, and has no release.
+
+The wave channel takes its volume from the count at each step. It restarts
+only when its note starts or its volume changes.
+
 ## Locating the driver
 
 `agbsf2` finds the driver in a ROM from its code, without fixed
@@ -673,8 +872,18 @@ ldr  r0, =mode               ; 48xx
 bl   m4aSoundMode
 ```
 
-`agbsf2` takes a mode with a mix rate setting from 1 to 12, an output
-resolution, and nothing in its top byte:
+*Metroid Fusion*'s init keeps the mode for a later call instead:
+
+```
+ldr  r0, =mode               ; 48xx
+mov  r8, r0                  ; 4680
+```
+
+`agbsf2` takes a mode with a mix rate setting from 1 to 12 and an output
+resolution. The top byte is 0, or 1 in *Metroid Fusion*. Its routine reads
+that as stereo output. *Metroid Fusion*'s engine isn't the SDK's library. It
+keeps no `0x03007FF0` pointer and no identifier, and `driver_emu.py` can't run
+it.
 
 | Bits | Contents |
 |---|---|

@@ -118,7 +118,7 @@ private:
 } // namespace agbsf2::test
 
 // Each driver's tests, in konami_test.cpp, rare_test.cpp, quintet_test.cpp, mp2k_test.cpp, rd2_test.cpp,
-// brownie_test.cpp, krawall_test.cpp and ubimilan_test.cpp.
+// brownie_test.cpp, krawall_test.cpp, ubimilan_test.cpp and rd1_test.cpp.
 namespace agbsf2::konami
 {
 
@@ -174,3 +174,17 @@ namespace agbsf2::ubimilan
 void RunTests();
 
 } // namespace agbsf2::ubimilan
+
+namespace agbsf2::rd1
+{
+
+void RunTests();
+
+} // namespace agbsf2::rd1
+
+namespace agbsf2::alphadream
+{
+
+void RunTests();
+
+} // namespace agbsf2::alphadream

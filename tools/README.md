@@ -32,8 +32,9 @@ scripts, and the `compare_notes.py` scripts apart from Rare's and MP2K's, run
 driver's files.
 
 Driver-specific scripts are in `tools/konami/`, `tools/rare/`, `tools/quintet/`,
-`tools/rd2/`, `tools/mp2k/`, `tools/brownie/`, `tools/krawall/` and
-`tools/ubimilan/`. Run the commands below from the repository root.
+`tools/rd2/`, `tools/mp2k/`, `tools/brownie/`, `tools/krawall/`,
+`tools/ubimilan/`, `tools/rd1/` and `tools/alphadream/`. Run the commands below
+from the repository root.
 
 ## Konami's driver
 
@@ -103,8 +104,13 @@ Yu-Gi-Oh! Ultimate Masters Edition: World Championship Tournament 2006 (`BY6J`,
 of the Duelist (`BY7E`), Yu-Gi-Oh! GX: Duel Academy (`BYGE`), Yu-Gi-Oh! World
 Championship Tournament 2004 (`BYWP`), Rave Master: Special Attack Force
 (`BRME`), Yu-Gi-Oh! The Eternal Duelist Soul (`AY5E`), Yu-Gi-Oh! Worldwide
-Edition (`AYWE`) and Yu-Gi-Oh! Dungeon Dice Monsters (`AYDE`) are built in. For
-another game, find the same routines, starting from the patterns in
+Edition (`AYWE`) and Yu-Gi-Oh! Dungeon Dice Monsters (`AYDE`) are built in.
+So are those of GetBackers Dakkanya (`AGBJ`), Yu-Gi-Oh! Duel Monsters 5 Expert 1
+(`AY5J`), Animal Yokochou (`BAYJ`), Groove Adventure Rave 2 (`ARIJ`), Hikaru no
+Go 1 and 2 (`AHKJ`, `AKEJ`), Yu-Gi-Oh! Duel Monsters 6 Expert 2 (`AY6J`),
+Mermaid Melody Pichi Pichi Pitch (`BMAJ`), Mermaid Melody Pichi Pichitto Live
+Start! (`B3MJ`) and Tennis no Ouji-sama 2004 (`B4GJ`, `B4SJ`). For another
+game, find the same routines, starting from the patterns in
 `docs/konami.md`, and add them to `GAMES`. A game whose driver has the same code
 as one of these usually places the routines at different addresses. Match
 the code while ignoring literal pools and call targets. Read the init arguments
@@ -487,6 +493,27 @@ outside the GBA's memory. The emulator reads 0 there, and so does `agbsf2`.
 space with 0xFF, and writes the test sequence in the form of the game's
 revision.
 
+## AlphaDream's driver
+
+| Script | Description |
+|---|---|
+| `driver_emu.py` | runs the driver of *Mario & Luigi: Superstar Saga* under the Unicorn ARM emulator: after each frame, the player that plays, its tracks, the sample channels' and PSG channels' records, and the writes to the sound registers |
+| `compare_trace.py` | diffs `agbsf2 --trace` against the emulated driver, frame by frame: the player, its tracks and the sample channels' records |
+
+### Checking agbsf2 against AlphaDream's driver
+
+```sh
+python tools/alphadream/compare_trace.py rom.gba build/agbsf2 -j 2    # the model: every song, 12000 frames
+python tools/alphadream/driver_emu.py rom.gba trace 41 600            # song 41's first 600 frames
+```
+
+`compare_trace.py` leaves out the PSG channels' records and the writes to the
+sound registers. The model doesn't keep the PSG's envelopes. `driver_emu.py`
+picks the addresses by the ROM's game code. Those of `A88E` are built in. The
+script calls the driver's init, the mixer's setup and the start routine on
+player 1, then each frame the per-frame routine and the mixer. It runs no BIOS
+call but the LZ77 decompression, and no video.
+
 ## MP2K
 
 | Script | Description |
@@ -563,17 +590,24 @@ that `agbsf2` finds them by are in `docs/mp2k.md`:
    code.
 
 `driver_emu.py` picks the routine addresses by the ROM's game code. Those of
-*Pokémon Emerald* (`BPEE`), *The Legend of Zelda: A Link to the Past & Four
-Swords* (`AZLE`), whose Four Swords half and menus use MP2K, *The Legend of
-Zelda: The Minish Cap* (`BZME`), *Kingdom Hearts: Chain of Memories* (`B8CE`),
-*Super Robot Taisen: Original Generation 2* (`B2RE`) and *Golden Sun: The Lost
-Age* (`AGFE`) are built in. For
+*Pokémon Emerald* (`BPEE`), *Pokémon Ruby Version* (`AXVE`), *The Legend of
+Zelda: A Link to the Past & Four Swords* (`AZLE`), whose Four Swords half and
+menus use MP2K, *The Legend of Zelda: The Minish Cap* (`BZME`), *Kingdom
+Hearts: Chain of Memories* (`B8CE`), *Super Robot Taisen: Original Generation
+2* (`B2RE`), *Pokémon Mystery Dungeon: Red Rescue Team* (`B24E`), *Golden
+Sun: The Lost Age* (`AGFE`), *Fire Emblem: The Binding Blade* (`AFEJ`), *Fire
+Emblem* (`AE7E`) and *Fire Emblem: The Sacred Stones* (`BE8E`) are built in.
+For
 another game, find the same routines and tables, and add them to `GAMES`:
 `init`, `song_start`, `main` and `vsync` are `m4aSoundInit`,
 `m4aSongNumStart`, `m4aSoundMain` and `m4aSoundVSync`, and `song_table` and
 `player_table` come from `m4aSongNumStart`'s literal pool. The emulator finds
 the driver's state, its channels and the PSG routine from the structure whose
-address the init stores at `0x03007FF0`.
+address the init stores at `0x03007FF0`. Some games set the driver up for a
+song before they start it. Such a routine of the game's is `song_setup`.
+`play()` calls it with the song before `song_start`, for a song up to 127.
+*Fire Emblem* and *Fire Emblem: The Sacred Stones* give some songs 8
+DirectSound channels that way.
 
 `AGFE`'s entry runs Camelot's version under `CamelotEmulator`, which does what
 the game does around the driver (see `docs/mp2k.md`): it copies the mixer to
@@ -861,6 +895,15 @@ python tools/ubimilan/compare_notes.py rom.gba build/agbsf2 rom         # the co
 python tools/ubimilan/driver_emu.py rom.gba render 3 600 ref.wav        # piece 3's first 600 frames
 ```
 
+Songs 14-22 of *Tomb Raider* are samples with no sequence. Both comparisons
+check the pieces and leave those songs out.
+
+*The Mummy* starts songs 1-16 with channel 9's kit switched off. `agbsf2
+--info` lists a second version of each, "with the kit". `compare_trace.py`
+traces the first version. The emulated engine then runs the game's switch with
+0 before such a piece starts. `compare_notes.py` checks both versions. With
+`--no-kit`, `driver_emu.py` switches the kit off the same way.
+
 `compare_trace.py` runs `agbsf2 --trace` and the game's code side by side.
 Frame by frame, the script compares every write to the PSG's registers, the
 track's countdown, next command and next sequence, and each voice that the
@@ -918,3 +961,26 @@ Raider: The Prophecy* (`AL9P`) are built in. For another game, add an entry to
 The harness copies the mixer to IWRAM itself, because the game's copy goes
 through its memory manager. Unicorn has no DMA, and the harness does DMA 3's
 copies itself.
+
+## Nintendo R&D1's MIDI-file driver
+
+| Script | Description |
+|---|---|
+| `driver_emu.py` | runs the driver of *WarioWare, Inc.* or *Rhythm Tengoku* under the Unicorn ARM emulator: after each frame, each player that plays a song, its tracks, its channels' records, the voices and the writes to the sound registers |
+| `compare_trace.py` | diffs `agbsf2 --trace` against the emulated driver, frame by frame: the player, its tracks and its channels' records |
+| `smfscan.py` | counts the events, controllers and markers of every MIDI file in a game's song table |
+
+### Checking agbsf2 against Nintendo R&D1's driver
+
+```sh
+python tools/rd1/compare_trace.py rom.gba build/agbsf2 --songs 4,10 -j 4   # the model, 12000 frames a song
+python tools/rd1/driver_emu.py rom.gba trace 4 600                         # song 4's first 600 frames
+```
+
+`compare_trace.py` compares only the state that the model keeps: the player's
+tempo, step and fade, each track's place, wait and running status, and each
+channel's record byte for byte. The voices and the PSG's registers are left
+out. `driver_emu.py` picks the addresses by the ROM's game code. Those of
+`AZWE` and `BRIJ` are built in. The script calls the driver's init, the game's
+call of the echo routine, the play routine and the per-frame routine. It runs
+no BIOS call and no video.

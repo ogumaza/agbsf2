@@ -14,6 +14,8 @@ lists.
 *Super Mario Advance 3: Yoshi's Island* has A Link to the Past's revision with
 another volume for sample voices (see
 [The Super Mario Advance 3 revision](#the-super-mario-advance-3-revision)).
+*Super Mario Advance 4: Super Mario Bros. 3* has the same revision (see
+[Super Mario Advance 4](#super-mario-advance-4)).
 
 The driver mixes samples in software, at 10512 Hz in stereo, into a buffer for
 each of the two DirectSound FIFOs: FIFO A plays the left side and FIFO B the
@@ -481,6 +483,14 @@ echo's level. The game sets the echo through a request; the sequences only
 give the sends. Last, the mix is divided by 128, kept to 8 bits, and written to
 the output buffers.
 
+Init sets the echo's level to 16. That level turns the echo off. While the
+level is 15 or less, a sample voice whose track has an echo send mixes into
+the echo's buffer instead of the mix. In `AZLE`, only the game's routine at
+`0x08129E94` asks for the echo. The routine makes request `0x0300` with an
+entry of the byte table at `0x08198C4C`: 31, 2, 3 or 0. Nothing in the game
+calls that routine. A Link to the Past therefore plays every voice without
+the echo.
+
 ## PSG voices
 
 Each frame, a PSG voice that plays works out its pitch as a sample voice's
@@ -728,6 +738,61 @@ lasts until the game plays other music.
 `agbsf2` converts each sequence with the settings of the first music
 number that plays it. The second volume scales the level of every voice,
 sample or PSG, by volume / `0x80`, and the MIDI file's CC11 follows it.
+
+The game's code at `0x0802C2D4` starts the music of each part of a level.
+The same code then sets the echo. The halfword at offset `0x29AA` of the
+record that `0x03007240` points to picks the music from the table at
+`0x0816932C`. For entry 4 of that table, music `0x12`, the code calls the
+routine at `0x0812C248` with 1. For entry 2, music `0x13`, the argument is 2.
+For the other entries the argument is 0. Eight values of the halfword at
+offset `0x2AAC` of the record give 1 whatever the music. Seventeen others give
+0. A few parts return before the call and keep the echo as it was. The
+routine makes request `0x0300` with that entry of the byte table at
+`0x083077E0`: 31, 2 or 3. The code at `0x080FB52A` makes the same choice from
+the music's entry again. The game's other calls of the routine pass 0.
+
+No track of the game's music has an echo send. The game's sequences have no
+`E3`. No request sets a track's send. The echo therefore reaches only the
+sample voices of the sound effects. Their tracks start with a send of `7F`.
+Music `0x12` and `0x13` play sequences 29 and 27. Leaving the echo out changes
+nothing in their conversions. `agbsf2` converts each sound effect without the
+echo. The game plays the effects that way in the other levels.
+
+## Super Mario Advance 4
+
+*Super Mario Advance 4: Super Mario Bros. 3* (US game code `AX4E`, revision 1)
+has the Super Mario Advance 3 revision. The driver's variables are `0x70` bytes
+higher than in `A3AE`.
+
+In `AX4E` the routines are:
+
+| Address | Routine |
+|---|---|
+| `0x080E4414` | the game's sound init, which calls the driver's init at `0x080E4D10` with the game's settings at `0x08263C8C` |
+| `0x080E4598` | the game's play-music routine: the low byte of each halfword of the table at `0x08263CAC` gives the sequence |
+| `0x080E4624` | the game's routine for the music's tempo change |
+| `0x080E4536` | the game's routine for the music's second volume |
+| `0x080E6D94` | request a sequence: `r0` = player, `r1` = sequence |
+| `0x080E6DB8` | request a sound effect: `r0` = player, `r1` = the sound effects' sequence, `r2` = the track |
+| `0x080E6D80` | hand over the requests made since its last call |
+| `0x080E4DDC` | the VBlank routine |
+| `0x080E4DE8` | the per-frame routine |
+| `0x080E72A0` | carry out the requests |
+
+The game plays its music on player `0x13`. The play-music routine requests the
+sequence and sets nothing else. The table's entries give sequences up to music
+number 66. Another table follows.
+
+A level starts its music with no request for the tempo change. For music whose
+entry in the table has bit 8 set (numbers 16 to 28 and 50 to 54),
+`0x080E4624` sets the tempo change with request 4: +52 for the first bit of
+its argument and -25 for the second. The level's timer code gives the first
+bit at `0x0800459E`, when the time reaches 100. It gives the second at
+`0x0800457C`, while the byte at `0x03003D10` isn't 0. The level's start calls
+the routine at `0x08014B04` after the play-music routine. That routine gives
+the second bit while the same byte isn't 0. Two other bytes of the level's
+record can stop it. Nobody has identified the state that sets the byte at
+`0x03003D10`. `agbsf2` converts the music without a tempo change.
 
 ## Locating the driver
 

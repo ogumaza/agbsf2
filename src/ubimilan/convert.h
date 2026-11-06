@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include "music.h"
 #include "rom.h"
 #include "ubimilan/driver.h"
@@ -11,6 +13,10 @@
 
 namespace agbsf2::ubimilan
 {
+
+// Returns the versions of a song: the song as the game starts it, then the song with the kit for a song that the game
+// starts with channel 9's kit switched off.
+std::vector<SongVersion> SongVersions(const DriverInfo& info, int song);
 
 // Works out a song's length, loop and channels the way ConvertSong() does, without writing anything.
 SongReport InspectSong(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings);

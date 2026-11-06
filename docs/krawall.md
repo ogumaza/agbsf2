@@ -531,6 +531,16 @@ order, and a few pieces once, in song mode or as a jingle.
   `0x080132D0` takes that form. The game's three calls of the routine give
   entry 16. A module whose orders separate songs with `+++` still converts
   song by song.
+* A game's call of `krapPlay()` for a module:
+  `48xx 21xx 22xx Fxxx Fxxx`, or `48xx 21xx Fxxx Fxxx` without the song.
+  That's `ldr r0, =module`, `movs r1, #mode`, `movs r2, #song` and the `bl`.
+  If no such call loops a module, the module plays once. It converts in the
+  mode of the first such call in the ROM. *Cocoto Kart Racer* (`BC5P`) plays
+  five modules once that way, in mode 0. Those are the three jingles of a race's
+  end, from `0x080053BA` to `0x080053E6`, and the ones that the calls at
+  `0x08005426` and `0x0800BC9C` play. The game also plays the three jingles in
+  mode 4 at a cup's end, from `0x08009692` to `0x080096D6`. Mode 0 plays a module once and stops. It
+  doesn't play the module as a jingle.
 
 The builds of `player.c` are told apart by their version strings, from
 `$Id: player.c,v ` up to the date. Their code takes the patterns above with
@@ -547,15 +557,22 @@ three changes:
 A game with one of these builds can call the library's routines from ARM
 code. `agbsf2` reads two forms of such a call. One is a `bl` to a veneer of
 `ldr ip, [pc]`, `bx ip` and the routine's address. The other is
-`ldr rN, =routine`, `mov lr, pc` and `bx rN`. The argument is the last value
-written to `r0` before the call. It has to come from a `mov` of a constant,
+`ldr rN, =routine`, `mov lr, pc` and `bx rN`. `BFKE`'s start-up code puts
+a `mov r0, #value` between the `ldr` and the `mov lr, pc`, and `agbsf2` reads
+that form too. The argument is the last value written to `r0` before the call. It has to come from a `mov` of a constant,
 an `ldr` of a literal or a `mov` from a register that one of those set. That
 write has to fall within the 16 instructions before the call. Each of them has
 to be unconditional, and none of them a branch, a call or a `push`.
 
 The player's tables are found by their first values. The square wave's first
-values, all 255, also turn up in other data. The square wave is therefore
-taken from right after the ramp. The modules are found by
+values, all 255, also turn up in other data. So can the ramp's. The ramp
+follows the sine, and the square wave follows the ramp. The square wave is
+therefore taken from right after the ramp. The ramp is taken from right after
+the sine where it's there. In *Franklin's Great Adventures*, the ramp's first
+values turn up in other data. Where no ramp follows the sine, the ramp is the
+first copy of its values that the square wave follows. *Cocoto Kart Racer*
+(`BC5P`) holds another copy of the ramp's first values before the player's
+tables. The modules are found by
 a scan of the ROM for headers that the player can play: up to 32 channels, a
 restart before the last order, a speed, a tempo from `0x20` on, flags of 0 or 1,
 pans within -64 and 64, and patterns whose index starts at 0 and doesn't go
@@ -583,6 +600,23 @@ entry that repeats an earlier one is left out. Each entry plays in its mode.
 It starts from its song if the module's orders separate songs with `+++`.
 *Eragon* (`BENE`) has such a routine at `0x0803FD04`. Its table, at
 `0x08F2C9D4`, has 29 entries.
+
+A game can also give each entry of its table of modules a mode and a music
+volume, in two tables of their own. *Franklin's Great Adventures* (`BFLE`)
+plays entry n through its routine at `0x0800362C`:
+`B510 1C04 48xx 00A1 1808 6800 4Bxx 18C9 6809 Fxxx Fxxx 48xx 1820 7800 2100 Fxxx Fxxx`.
+That's `push {r4, lr}`, `adds r4, r0, #0`, `ldr r0, =modules`,
+`lsls r1, r4, #2`, `adds r0, r1, r0`, `ldr r0, [r0]`, `ldr r3, =modes`,
+`adds r1, r1, r3`, `ldr r1, [r1]`, `bl krapPlay`, `ldr r0, =volumes`,
+`adds r0, r4, r0`, `ldrb r0, [r0]`, `movs r1, #0` and
+`bl krapSetMusicVol`. The table of modes has a word for each entry, at
+`0x08048000`. The table of volumes has a byte for each entry, at
+`0x08048044`. The game's start-up code copies the table of modules to RAM, at
+`0x0300605C`, and the routine reads that copy. `agbsf2` takes the table of
+modules that its scan found. Each entry converts in its mode, at its volume.
+An entry that repeats an earlier one is left out. In `BFLE`, 3 of the 17
+entries have mode 0. The game plays those once. The volumes go from 70 to
+128.
 
 ## The builds from 2004/09/17 on
 
@@ -656,6 +690,10 @@ The player differs in six more ways:
   routine for the centre. In mono, every channel plays at the level of the
   centre, rather than of a pan to the left. A game in mono then plays at half
   the level of the earlier builds.
+* **The call's samples.** A call of the worker mixes 276 samples in most
+  games. In *Cocoto Platform Jumper* (`BC8P`), *Let's Ride! Friends
+  Forever* (`BEFE`) and *Let's Ride! Dreamer* (`BL9E`), a call mixes 552, at
+  the same rate of 16384 Hz.
 
 The mixer's channels and the mixer's other variables are laid out as in
 2003/09/01.
@@ -671,7 +709,11 @@ The three builds have the same code for the player, in other forms than
   the first `ldr` loading the instruments' and the second the samples'.
 * `kragInit()`'s timers: `4Bxx 49xx 48xx 800B 3102 4Bxx 8008 3906 800B`, from
   the fourth `ldr`.
-* `getDmaAddress()`'s step: `4Bxx 18D5 23xx 6035 005D`.
+* `getDmaAddress()`'s step: `4Bxx 18D5 23xx 6035 00xD`. That's
+  `movs r3, #n` and then `lsls r5, r3, #shift`. `n` shifted left by the
+  shift gives the samples that a call of the worker mixes. In most games, `n`
+  is 138 and the shift is 1, for 276 samples. In the three games whose calls
+  mix 552 samples, the shift is 2.
 * `kragInit()` and `kramQualityMode()`:
   `B510 1C04 2080 F000 Fxxx 1C20 F000 F8xx` and
   `B530 2120 4001 2900 D0xx 49xx 2300 700B`. `kramSetMasterVol()` takes
@@ -854,6 +896,17 @@ in the entry's mode. The routine at `0x08041504` plays an entry as a jingle,
 in mode 4. The game plays entry 27, of mode 2, that way. That entry's song is
 its module's last, and both modes play it the same.
 
+*Harry Potter and the Prisoner of Azkaban* (`BHTE`) has the build of
+2003/09/01, with the RAM of *Digimon Racing*'s. Its sound init, at
+`0x0803FDFC`, calls `kragInit(1)`, `kramSetMasterVol(0x40080)` and
+`kramQualityMode(2)`. The routine at `0x0803FF98` then sets the volumes from
+the game's options at `0x030055A1` and `0x030055A2`. The effects get 25 times
+their level, and the music gets 12 times its level through
+`krapSetMusicVol()`. Both default levels are 10 of 10, at `0x0806B815`. The
+music volume is then 120. `agbsf2` takes that volume from the table of games'
+settings. The game's routine at `0x0803FEB4` plays an entry of its table of
+modules, at `0x08FB0CC4`, in loop mode.
+
 *Juka and the Monophonic Menace* (`BJKE`) has the build of 2004/09/17. Its
 sound init, at `0x0802395C`, calls `kragInit(1)`. The mixer runs at quality 0,
 with a master volume of `0x80`. The game's routine at `0x08023E9C` plays an
@@ -878,6 +931,63 @@ from the game's options. The options' default music level, 7 of 10, is at
 every piece through its table of what it plays (see [Locating the
 player](#locating-the-player)). Entries 4, 19 and 20 play in song mode. That
 mode doesn't loop at the module's end. The other entries play in loop mode.
+
+*Cocoto Kart Racer* (`BC5P`) has the same build. Its start-up code copies the
+library's data in IWRAM in two parts. The game's init calls `kragInit(1)` at
+`0x0800CC00`. The mixer runs at quality 0, with a master volume of `0x80`.
+The game plays each module through a direct call of `krapPlay()`. Five
+modules play once, in mode 0 (see [Locating the player](#locating-the-player)).
+The others play in loop mode. After some of those calls, the game sets the
+music volume with `krapSetMusicVol()`, at `0x0800FBC8`. `krapPlay()` keeps the
+volume. A race's module plays at 100 on the first four tracks (`0x0800C936`) and
+at 90 on the fifth (`0x0800C94E`). The last lap's jingle sets 90 (`0x0800542E`).
+The last lap's module, the jingles at the race's end and the results' module
+therefore play at 90. The menus set 128. `agbsf2` takes each module's volume
+from the table of pieces' settings. The countdown's jingle stays at 128. The
+game plays it at 90 in a cup's races after the first.
+
+*Cocoto Platform Jumper* (`BC8P`) has the same build. A call of its worker
+mixes 552 samples. The game's routine at `0x08000298` calls `kragInit(1)`. The
+game calls `kramQualityMode()` with 0 or 2 as its state changes. `agbsf2`
+mixes at quality 0. The game's call at `0x08002B46` sets that quality. The
+game's routine at `0x08008C1C` plays a module in the mode that its caller
+gives. It then sets the music volume from a level in the game's options. The
+routine at `0x08008B88` starts a module later, in mode 1 or 0. Four modules
+play once, in mode 0: from `0x0801357E`, `0x0801375A` and `0x08016B80` through
+the first routine, and from `0x08013E4A` through the second. Detection can't
+read those calls. `agbsf2` takes the four modules from the table of games'
+settings.
+
+Each caller of `0x08008C1C` gives a factor, and says whether the music level of
+the game's options scales it. The level's default is 8 of 10 (`0x08000506`).
+With the level, the routine sets the factor times 8 over 10. A level's module
+has a factor of 110. The routine then sets 88. In the first four worlds, a tip
+stops the music 51 frames after the start. The tip's end (`0x08016EB2`) and the
+pause's end (`0x08016790`) set the factor times 8 over 12: 73. A restart after a
+lost life plays at 88 without a tip. `agbsf2` takes each module's volume from
+the table of pieces' settings:
+
+| Module | Music volume | The game's play |
+|---|---|---|
+| `0x0802DE90`, `0x081499C8`, `0x080322F0`, `0x08056334` | 73 | the first four worlds' levels, after the tip |
+| `0x08041C38` | 88 | the fifth world's levels, without tips; 120 at the game's end (`0x08006118`) |
+| `0x080439E4` | 80 | the flood when the clock runs out, a factor of 100 with the level (`0x080165A8`) |
+| `0x0804EC30` | 88 | once, a factor of 110 with the level (`0x08013E4A`) |
+| `0x08032C94`, `0x080565D4` | 110 | once, without the level (`0x0801375A`, `0x0801357E`) |
+| `0x080349C0`, `0x081448FC`, `0x0813D328`, `0x0803520C` | 120 | without the level (`0x0800588C`, `0x08005D20`, `0x08008AAC`, `0x08016B80`) |
+
+*Let's Ride! Friends Forever* (`BEFE`) has the same build, with calls of 552
+samples. Its start-up code copies the library's data in EWRAM in two parts.
+The game calls `kragInit(0)`, for mono, at `0x08000370` and again at
+`0x0801C0E2`. It then sets the music volume to 128 at `0x0801C114`. The game
+plays each of its two modules in loop mode.
+
+*Let's Ride! Dreamer* (`BL9E`) has the same build, with calls of 552 samples.
+Its sound init, at `0x08004CE0`, calls `kragInit(0)`, for mono. It then sets
+the music volume to 128 and calls `kramQualityMode(1)`. The game's routine at
+`0x08004D88` plays each of its three modules in loop mode. *Horse and Pony:
+Let's Ride 2* (`BYPP`) is the game's European release. Its sound init is at
+`0x08004BE0`. Its routine at `0x08004C88` plays the modules.
 
 *Puppy Luv: Spa and Resort* (`BYXE`) has the unsigned build. Its boot, at
 `0x08024BD6`, calls `kragInit(1)`, `krapSetMusicVol(60, 0)`,

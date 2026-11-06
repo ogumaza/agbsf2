@@ -56,6 +56,8 @@ constexpr uint32_t kPlayEffect = kRomBase + 0x180;
 constexpr uint32_t kCode = kRomBase + 0x200;
 constexpr uint32_t kLookup = kRomBase + 0x600;
 constexpr uint32_t kGameCode = kRomBase + 0x700;
+constexpr uint32_t kLoader = kRomBase + 0x800;
+constexpr uint32_t kLoaderCall = kRomBase + 0x840;
 constexpr uint32_t kEffectCode = kRomBase + 0x780;
 constexpr uint32_t kLengthTable = kRomBase + 0x900;
 constexpr uint32_t kFrequencyTable = kRomBase + 0x910;
@@ -198,8 +200,11 @@ public:
         }
 
         const bool j = revision_ == Revision::kJ;
-        Pattern(kPlayEffect, j ? "B570 4900 6008 2500 4800 6801 0068 1840 8840 1846 7830 28FF 4770"
-                               : "B570 4900 6008 2500 4E00 4800 6801 0068 1840 8840 1844 7820 28FF 4770");
+        Pattern(kPlayEffect,
+                j ? "B570 4900 6008 2500 4800 6801 0068 1840 8840 1846 7830 28FF 4770"
+                : revision_ == Revision::kS
+                    ? "B570 4A00 2100 7011 4900 6008 2500 4E00 4800 6801 0068 1840 8840 1844 7820 28FF 4770"
+                    : "B570 4900 6008 2500 4E00 4800 6801 0068 1840 8840 1844 7820 28FF 4770");
         at = PassFile(kEffectCode, kEffectsFile, kPlayEffect);
         if (!j)
         {
@@ -250,6 +255,58 @@ public:
         return data;
     }
 
+    // Writes a music file at file `file`, as the J revision's loader reads it: the songs, the sound effects, the wave
+    // table, the noise macros of banks 0 and 1, and the samples of banks 0 and 1. A word of its size comes before each
+    // part. Each list of songs ends with a length of 0. Each bank has one sample. Returns the address of each part.
+    std::array<uint32_t, 7> MusicFile(int file, const std::vector<std::vector<uint8_t>>& songs,
+                                      const std::vector<std::vector<uint8_t>>& effects)
+    {
+        std::array<uint32_t, 7> parts = {};
+        uint32_t at = FileAddress(file);
+        for (size_t p = 0; p < parts.size(); p++)
+        {
+            std::vector<uint8_t> data(16, 0x11);
+            if (p < 2)
+            {
+                data.clear();
+                for (const std::vector<uint8_t>& s : p == 0 ? songs : effects)
+                {
+                    data.insert(data.end(), s.begin(), s.end());
+                }
+                data.resize(data.size() + 2, 0);
+            }
+            else if (p >= 5)
+            {
+                // A sample's size, its rate and its 4 points, and a size of 0 after it.
+                data = {10, 0, 0, 0, 0x00, 0x20, 1, 2, 3, 4, 0, 0, 0, 0};
+            }
+            data.resize((data.size() + 3) & ~size_t(3), 0);
+
+            Put32(at, uint32_t(data.size()));
+            parts[p] = at + 4;
+            for (size_t i = 0; i < data.size(); i++)
+            {
+                Put8(at + 4 + uint32_t(i), data[i]);
+            }
+            at += 4 + uint32_t(data.size());
+        }
+
+        return parts;
+    }
+
+    // Writes the J revision's loader of music files, and the game's code that passes it file `file` in a literal: ldr
+    // r0, =file; bl loader. The game's code no longer passes the play routine a music file.
+    void Loader(int file)
+    {
+        Pattern(kLoader, "B5F0 1C05 CD10 1C2A 08A0 0080 182D 4B00 2000 7018 8811 4E00 2900 D000 4C00 4770");
+        Pattern(kLoaderCall, "4800 F000 F800", 0, FileAddress(file));
+        PutBl(kLoaderCall + 2, kLoader);
+        for (uint32_t i = 0; i < 12; i += 4)
+        {
+            Put32(kGameCode + 60 + i, 0);
+        }
+    }
+
 private:
     // Writes `pattern`'s halfwords at `at`, with its ldr at halfword `ldr` (if any) loading `literal` from a pool after
     // it. Returns the next free word.
@@ -288,9 +345,17 @@ private:
         return at + 12;
     }
 
-    // Writes the game's code that looks file `file` up and passes it to `routine`, at `at`. Returns the next free word.
+    // Writes the game's code that looks file `file` up and passes it to `routine`, at `at`. In the S revision, the code
+    // passes the file from a literal instead: ldr r1, =file; adds r0, r1, #0; bl routine. Returns the next free word.
     uint32_t PassFile(uint32_t at, int file, uint32_t routine)
     {
+        if (revision_ == Revision::kS)
+        {
+            const uint32_t next = Pattern(at, "4900 1C08 F000 F800", 0, FileAddress(file));
+            PutBl(at + 4, routine);
+            return next;
+        }
+
         Put16(at, 0x2000);
         Put16(at + 2, uint16_t(0x2100 | file));
         PutBl(at + 4, kLookup);
@@ -341,7 +406,10 @@ private:
             Pattern(kPlay, "B5F0 1C07 2400 4E00 4D00 CE01 F000 F800 CD01 4770");
         }
 
-        uint32_t at = Pattern(kCode, "250D DD00 E100 220C DD00 E100 4800 1810 7801 20C0 0040", 6, kLengthTable);
+        // The S revision's note reader takes the place of the code that reads the length table.
+        uint32_t at = revision_ == Revision::kS
+                          ? Pattern(kCode, "2080 4030 2800 D000 E000 46B0 7821 20C0 0040")
+                          : Pattern(kCode, "250D DD00 E100 220C DD00 E100 4800 1810 7801 20C0 0040", 6, kLengthTable);
         at = Pattern(at, "2E53 DD00 2653 4D00 1C30 210C", 3, kFrequencyTable);
         at = Pattern(at, "2A34 DD00 2234 4800 0051", 3, kPcmPitchTable);
         at = Pattern(at, "4800 0411 1409 1809 2000 5608", 0, kLfoTable);
@@ -395,7 +463,17 @@ private:
             at = PassFile(at, kSfxMacroFile, sfx_macro_setter);
             at = PassFile(at, kSfxSampleFile, sample_setters[1]);
         }
-        PassFile(at, kMusicFile, kPlay);
+        if (revision_ == Revision::kS)
+        {
+            // The S revision's game loads the music file's address and skips to the song before its call: ldr r0,
+            // =file; str r0, [r7, #4]; ldr r0, [r7, #4]; bl play.
+            Pattern(at, "4800 6078 6878 F000 F800", 0, FileAddress(kMusicFile));
+            PutBl(at + 6, kPlay);
+        }
+        else
+        {
+            PassFile(at, kMusicFile, kPlay);
+        }
     }
 
     Revision revision_;
@@ -1315,6 +1393,120 @@ void TestMusic()
     SEQLIB_CHECK(!bare_forced && forced_error == "no Quintet sound driver found, so it has no length table");
 }
 
+// A game whose driver of the J revision loads a music file gives the driver its tables in the file. The game's code
+// passes the loader one file, and a scan of the ROM finds another. The conversion numbers the second file's songs after
+// the first file's songs and sound effects, and names their files by those numbers.
+void TestLoadedFiles()
+{
+    Cart cart(Revision::kJ);
+    const std::vector<uint8_t> song = Song({Channel().Bytes({0x5E, 15}).Note(0, 3).End()});
+    const std::array<uint32_t, 7> first = cart.MusicFile(8, {song, song}, {song});
+    const std::array<uint32_t, 7> second = cart.MusicFile(10, {song}, {});
+    cart.Loader(8);
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+    std::string error;
+    const std::unique_ptr<Music> music = agbsf2::OpenMusic(rom, Overrides(), error);
+    const ConvertSettings opt = TempSettings("loaded_files");
+    SEQLIB_REQUIRE(music && music->SongCount() == 4);
+
+    const SongReport last = music->ConvertSong(3, opt);
+
+    SEQLIB_CHECK(info.music_files == (std::vector<uint32_t>{FileAddress(8), FileAddress(10)}));
+    SEQLIB_CHECK_EQ(info.music_file, first[0]);
+    SEQLIB_CHECK_EQ(info.effects_file, first[1]);
+    SEQLIB_CHECK_EQ(info.waves, first[2]);
+    SEQLIB_CHECK(info.macros == (std::array<uint32_t, 2>{first[3], first[4]}));
+    SEQLIB_CHECK(info.samples == (std::array<uint32_t, 2>{first[5], first[6]}));
+    SEQLIB_CHECK_EQ(info.song_addresses.size(), 2);
+    SEQLIB_CHECK_EQ(info.effect_addresses.size(), 1);
+    SEQLIB_CHECK_EQ(info.sample_addresses[0].size(), 1);
+    SEQLIB_CHECK_EQ(info.sample_addresses[1].size(), 1);
+    SEQLIB_CHECK_EQ(music->InspectSong(2, opt).address, first[1]);
+    SEQLIB_CHECK_EQ(music->InspectSong(3, opt).address, second[0]);
+    SEQLIB_CHECK(last.ok && !last.silent);
+    SEQLIB_CHECK(last.midi_path == SongStem(opt, SongNumber(3, 0)) + ".mid");
+}
+
+// The S revision: the A revision's play routine with notes of two bytes and the commands numbered from 80. The game
+// passes its files to the driver from literals. The channel sets tempo 90 (8F = 7F), volume 15 (8A = 5E) and an
+// envelope step of 3 (86 = 3E). Then C plays for an eighth note, with a dot (9B = D1) and a tie (9E = D4) to another
+// eighth: 48 + 24 + 48 = 120 ticks. B0 skips the byte after it. That byte would otherwise set the volume. The note
+// played again lasts a quarter note, and so does the rest. Pitch 12 only waits for an eighth, and C follows at tick
+// 360.
+void TestRevisionS()
+{
+    Cart cart(Revision::kS);
+    cart.Songs({Song({Channel()
+                          .Bytes({0x8F, 90,   0x8A, 15, 0x86, 3,  0x00, 8,  0x9B, 0x9E, 0x00,
+                                  8,    0xB0, 0x8A, 14, 4,    15, 4,    12, 8,    0x00, 4})
+                          .End()})});
+    cart.Effects({Song({Channel().Bytes({0x00, 4}).End()})});
+    cart.Samples(kSampleFile, {{Saw(300), 8000}});
+    cart.Samples(kSfxSampleFile, {{Saw(300), 8000}, {Saw(300), 8000}});
+    const Rom rom = cart.ToRom();
+
+    const DriverInfo info = Detect(rom);
+
+    SEQLIB_CHECK(info.revision == Revision::kS);
+    SEQLIB_CHECK_EQ(info.play, kPlay);
+    SEQLIB_CHECK_EQ(info.play_effect, kPlayEffect);
+    SEQLIB_CHECK_EQ(info.length_table, 0);
+    SEQLIB_CHECK_EQ(info.music_file, FileAddress(kMusicFile));
+    SEQLIB_CHECK_EQ(info.effects_file, FileAddress(kEffectsFile));
+    SEQLIB_CHECK_EQ(info.waves, FileAddress(kWaveFile));
+    SEQLIB_CHECK(info.macros == (std::array<uint32_t, 2>{FileAddress(kMacroFile), FileAddress(kSfxMacroFile)}));
+    SEQLIB_CHECK(info.samples == (std::array<uint32_t, 2>{FileAddress(kSampleFile), FileAddress(kSfxSampleFile)}));
+    SEQLIB_CHECK_EQ(info.sample_addresses[1].size(), 2);
+    SEQLIB_CHECK(info.warnings.empty());
+
+    Sequencer seq(rom, info, 0);
+    std::vector<Event> events;
+    long long step = -1;
+    for (int f = 0; f < 200; f++)
+    {
+        const std::vector<RegisterWrite>& writes = seq.Step();
+        for (const Event& e : seq.Events())
+        {
+            events.push_back(e);
+        }
+        if (!events.empty() && events.back().kind == Event::kRest && step < 0)
+        {
+            step = LastWrite(writes, 0x04000062);
+        }
+    }
+
+    std::vector<std::pair<Event::Kind, uint64_t>> notes;
+    for (const Event& e : events)
+    {
+        if (e.kind == Event::kNote || e.kind == Event::kPlayAgain || e.kind == Event::kRest)
+        {
+            notes.emplace_back(e.kind, e.tick);
+        }
+    }
+
+    // After the rest, the square channel keeps its envelope step: the S revision has no flag that clears it.
+    SEQLIB_CHECK(notes == (std::vector<std::pair<Event::Kind, uint64_t>>{
+                              {Event::kNote, 0}, {Event::kPlayAgain, 120}, {Event::kRest, 216}, {Event::kNote, 360}}));
+    SEQLIB_CHECK(step >= 0 && (step >> 8 & 7) == 3 && (step >> 12) == 0);
+
+    // The listing reads the notes and commands as the driver does.
+    const uint32_t data = SongAddress(info, 0) + 14;
+    const Command tempo = DecodeCommand(rom, info, data, 0);
+    const Command note = DecodeCommand(rom, info, data + 6, 0);
+    const Command dot = DecodeCommand(rom, info, data + 8, 0);
+    const Command skip = DecodeCommand(rom, info, data + 12, 0);
+    const Command again = DecodeCommand(rom, info, data + 14, 0);
+    const Command wait = DecodeCommand(rom, info, data + 18, 0);
+
+    SEQLIB_CHECK(tempo.size == 2 && tempo.command == 0x7F && tempo.text == "tempo 90, for every channel");
+    SEQLIB_CHECK(note.note && note.size == 2 && note.ticks == 48 && note.text == "note C, 48 ticks (1/8)");
+    SEQLIB_CHECK(dot.command == 0xD1 && dot.size == 1);
+    SEQLIB_CHECK(skip.size == 2 && skip.text == "nothing: skips a byte");
+    SEQLIB_CHECK(again.note && again.text == "play again, 96 ticks (1/4)");
+    SEQLIB_CHECK(wait.note && wait.text == "wait, 48 ticks (1/8)");
+}
+
 // A PCM sound that plays 14 bytes and then loops over 6 gets its loop repeated 6 times: 36 points, the first length of
 // kMinLoop points or more.
 void TestShortLoop()
@@ -1366,6 +1558,8 @@ void RunTests()
     TestDump();
     TestEffects();
     TestMusic();
+    TestLoadedFiles();
+    TestRevisionS();
     TestShortLoop();
 }
 

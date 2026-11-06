@@ -38,10 +38,6 @@ RETURN_TRAP = 0x0F000000
 DMA_CONTROL = (0x040000B8, 0x040000C4, 0x040000D0, 0x040000DC)  # each DMA channel's count and control registers
 SLOT_SIZE = 0x28
 
-# The music volume, out of 128, at which Donkey Kong Country 3 plays most of its tunes. The driver's init sets 128. The
-# game sets the volume for each tune after it requests the tune. agbsf2's model plays every tune at this volume.
-GAME_MUSIC_VOLUME = 69
-
 
 class Addresses:
     """A5NE (Donkey Kong Country)."""
@@ -58,7 +54,16 @@ class Addresses:
     samples_per_frame = 0x03001414
     channel_volume = 0x03001560  # 16 controller 7 values
     envelope_settings = None     # in BDQE's revision, 4 bytes for each channel from controllers 20-23
-    music_volume = None          # in BDQE, the word that holds the music volume
+    # The music volume, out of 128, at which the game starts each tune, through its setter. The game's routine
+    # `volume_routine` gives it for the requested tune, with the options' music level, an s16, at `volume_option`.
+    # Without the routine, `volumes` gives each tune's, from the game's calls of the setter (src/rare/driver.cpp), or
+    # `volume` every tune's.
+    volume_setter = 0x08032734
+    volume_routine = None
+    volume_option = None         # (address, value): the options' music level when the game's first tune starts
+    volumes = (127, 127, 127, 115, 127, 105, 127, 127, 127, 127, 127, 127, 127, 105, 127, 127, 127, 127, 119, 127,
+               127, 127, 140, 127, 140, 150, 110, 110, 127, 110, 110, 110, 110, 90, 110, 127, 127, 127, 127)
+    volume = 128
     channel_levels = None        # in BDQE, the 16 bytes that hold the channels' levels, out of 128
     water = None                 # in BDQE, the tune played above and under water, with the channels of each arrangement
 
@@ -75,6 +80,9 @@ class AddressesAWUE(Addresses):
     buffers = (0x08089868, 0x08089860)
     samples_per_frame = 0x03001624
     channel_volume = 0x03001760
+    volume_setter = 0x0800e074
+    volumes = (127, 80, 127, 127, 127, 80, 127, 80, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127,
+               127, 127, 127, 127, 127, 127, 127, 127, 60, 127, 127, 127, 127, 127, 80, 127, 127)
 
 
 class AddressesBPIE(Addresses):
@@ -90,6 +98,8 @@ class AddressesBPIE(Addresses):
     buffers = (0x08169e48, 0x08169e40)
     samples_per_frame = 0x02027a58
     channel_volume = 0x03004378
+    volume_setter = 0x0814a974
+    volumes = None
 
 
 class AddressesBKZX(Addresses):
@@ -105,6 +115,9 @@ class AddressesBKZX(Addresses):
     buffers = (0x080a0030, 0x080a0028)
     samples_per_frame = 0x0203f4c8
     channel_volume = 0x03004a40
+    volume_setter = 0x080050b8
+    volumes = None
+    volume = 56
 
 
 class AddressesB2DE(Addresses):
@@ -119,6 +132,9 @@ class AddressesB2DE(Addresses):
     buffers = (0x080d2c44, 0x080d2c3c)
     samples_per_frame = 0x03000c14
     channel_volume = 0x03000d60
+    volume_setter = 0x08032f50
+    volume_routine = 0x08027b88
+    volume_option = (0x0300082a, 0xb3)
 
 
 class AddressesBAJE(Addresses):
@@ -135,6 +151,8 @@ class AddressesBAJE(Addresses):
     buffers = (0x0806b8f4, 0x0806b8fc)
     samples_per_frame = 0x0203cc60
     channel_volume = 0x0203cd2c
+    volume_setter = 0x080024f4
+    volumes = (50,) * 24 + (63, 63, 63, 50, 63, 63, 63, 50, 50, 50)
 
 
 class AddressesBDQE(Addresses):
@@ -150,7 +168,9 @@ class AddressesBDQE(Addresses):
     samples_per_frame = 0x03001294
     channel_volume = 0x03001380
     envelope_settings = 0x030023f0
-    music_volume = 0x030023c4
+    volume_setter = 0x080af270
+    volume_routine = 0x08085b98
+    volume_option = (0x03000658, 0xff)  # set at boot from the music slider (0x0807ADDC)
     channel_levels = 0x03001400
     # The game's routine at 0x08085CE0 plays tune 12 on channels 0-3 above water and on channels 4-8 under water.
     water = (12, range(0, 4), range(4, 9))
@@ -317,11 +337,20 @@ class DriverEmulator:
         return struct.unpack('<i', self.uc.mem_read(address, 4))[0]
 
     def play(self, tune):
-        """Requests `tune`. It starts on the next frame. In BDQE, the music volume is then set as the game sets it for
-        most tunes."""
-        self.call(self.addr.request, (tune,))
-        if self.addr.music_volume is not None:
-            self.uc.mem_write(self.addr.music_volume, struct.pack('<I', GAME_MUSIC_VOLUME))
+        """Requests `tune`. It starts on the next frame. The music volume is then set as the game's code sets it for the
+        tune: through the game's routine for it, run here, or from the volumes of the game's calls."""
+        a = self.addr
+        self.call(a.request, (tune,))
+        if a.volume_routine is not None:
+            option, level = a.volume_option
+            self.uc.mem_write(option, struct.pack('<h', level))
+            self.call(a.volume_routine)
+            volume = self.uc.reg_read(UC_ARM_REG_R0)
+        elif a.volumes is not None:
+            volume = a.volumes[tune]
+        else:
+            volume = a.volume
+        self.call(a.volume_setter, (volume,))
 
     def frame(self):
         """Runs one frame. Returns the mixer's output for it, as signed 8-bit samples. Afterwards `steps` holds the

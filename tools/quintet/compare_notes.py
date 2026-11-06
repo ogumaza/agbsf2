@@ -332,7 +332,7 @@ class Psg:
 def driver_frames(rom, song, frames):
     """Runs the driver and returns, for each frame, what each channel plays: None for silence, or a dict of its levels
     on each side (128 for a full-scale FIFO sample), its frequency setting or FIFO rate, and what it plays."""
-    emu = driver_emu.DriverEmulator(rom)
+    emu = driver_emu.DriverEmulator(rom, song)
     regs = {}
     wave_ram = [bytearray(16), bytearray(16)]
     fifos = [dict(next=0, start=None, rate=0) for _ in range(2)]

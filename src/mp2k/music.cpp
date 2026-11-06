@@ -15,6 +15,7 @@
 #include "mp2k/sequencer.h"
 #include "mp2k/song.h"
 #include "mp2k/soundfont.h"
+#include "program.h"
 #include "rom.h"
 #include "sf2.h"
 
@@ -84,7 +85,8 @@ public:
 
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
-        Sf2File& f = shared_->File();
+        ntdlib::sequence_export::agb::Sf2File& f = shared_->File();
+        f.program = kProgramName;
         f.SetTitle(rom_.Title());
 
         return f.Write(path, error);
@@ -159,10 +161,11 @@ std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std
     ov.song_count = overrides.song_count;
 
     // Without --driver mp2k, a game whose code doesn't have the routine that starts a song isn't taken to have the
-    // driver, whatever song table it's given.
+    // driver, whatever song table it's given. The Metroid games' sequencer counts in its place: Metroid: Zero Mission
+    // starts its songs through another routine.
     DriverInfo info;
     const bool found = DetectDriver(rom, ov, info, error);
-    if (!info.song_start && overrides.driver != Driver::kMp2k)
+    if (!info.song_start && !info.metroid_sequencer && overrides.driver != Driver::kMp2k)
     {
         error.clear();
         return nullptr;

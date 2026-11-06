@@ -15,6 +15,7 @@
 #include "konami/seqformat.h"
 #include "konami/sequencer.h"
 #include "konami/soundfont.h"
+#include "program.h"
 #include "rom.h"
 #include "sf2.h"
 
@@ -43,6 +44,12 @@ public:
         return ReadSongHeader(rom_, info_.song_table, song, info_.revision, h) && h.base != 0;
     }
 
+    // A song that the game's live stage plays with FA's setting at 0 has a version in that state.
+    std::vector<SongVersion> Versions(int song) const override
+    {
+        return SongVersions(info_, song);
+    }
+
     // Calculates the song's duration, loop points and note-playing tracks using the conversion settings.
     SongReport InspectSong(int song, const ConvertSettings& settings) const override
     {
@@ -67,7 +74,8 @@ public:
 
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
-        Sf2File& f = shared_->File();
+        ntdlib::sequence_export::agb::Sf2File& f = shared_->File();
+        f.program = kProgramName;
         f.SetTitle(rom_.Title(), " (bank = song number)");
 
         return f.Write(path, error);

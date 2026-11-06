@@ -97,6 +97,13 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
     std::snprintf(line, sizeof line, "music %d: resource %d at 0x%08X, flags %d (%s)\n", song, info.songs[size_t(song)],
                   unsigned(piece.address), piece.flags, piece.Loops() ? "loops" : "plays once");
     out += line;
+    GameSample sample;
+    if (piece.sample >= 0 && ReadSample(rom, piece.address, sample))
+    {
+        std::snprintf(line, sizeof line, "\na sample that plays as music: %u points, loop %u to %u\n",
+                      unsigned(sample.length), unsigned(sample.loop_start), unsigned(sample.loop_end));
+        out += line;
+    }
     for (size_t i = 0; i < piece.sequences.size(); i++)
     {
         const int id = piece.sequences[i];

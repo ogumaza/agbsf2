@@ -583,6 +583,86 @@ void TestDetection()
     }
 }
 
+// The game's code sets the music volume as it starts a tune, and the mixer scales every note of the tune by it. The
+// MIDI file gives each channel the music volume as expression, written as 127 × √(volume / 128). A game that agbsf2
+// doesn't list plays at the init's 128. Donkey Kong Country 3's revision leaves out the notes whose level is 0 before
+// their velocity counts: a lower music volume leaves out those of more channel volumes.
+void TestMusicVolume()
+{
+    const Format kFormat = Format::kChannelByte;
+    Cart cart(kFormat);
+    const auto bank = cart.Bank({{0, cart.Sample(Saw())}});
+    for (int t = 0; t < 3; t++)
+    {
+        cart.Tune({Track(kFormat).Program(0, 0).On(0, 60, 100).Wait(48).Off(0, 60).End()}, bank);
+    }
+    const Rom rom = cart.ToRom();
+    DriverInfo info = Detect(rom);
+
+    SEQLIB_CHECK_EQ(MusicVolume(info, 0), 128);
+    SEQLIB_CHECK(info.warnings.empty());
+
+    // The expression that each tune's channel gets in its MIDI file.
+    auto expression = [](const Rom& r, const DriverInfo& i, int tune)
+    {
+        const SongReport report = ConvertSong(r, i, tune, TempSettings("music_volume"), nullptr);
+        std::vector<int> values;
+        for (const auto& e : ReadMidi(report.midi_path).Find(0xB0))
+        {
+            if (e.bytes[1] == 11)
+            {
+                values.push_back(e.bytes[2]);
+            }
+        }
+
+        return values;
+    };
+
+    SEQLIB_CHECK(expression(rom, info, 0) == std::vector<int>({127}));
+
+    // 70 is written as 94 and 40 as 71. A music volume above 128 plays at 128.
+    info.music_volumes = {70, 40, 150};
+
+    SEQLIB_CHECK_EQ(MusicVolume(info, 1), 40);
+    SEQLIB_CHECK_EQ(MusicVolume(info, 3), 128);
+    SEQLIB_CHECK(expression(rom, info, 0) == std::vector<int>({94}));
+    SEQLIB_CHECK(expression(rom, info, 1) == std::vector<int>({71}));
+    SEQLIB_CHECK(expression(rom, info, 2) == std::vector<int>({127}));
+
+    // A game that agbsf2 lists, in another build, plays at 128 and gets a warning.
+    Cart other = cart;
+    other.PutBytes(kRomBase + 0xAC, {'B', '2', 'D', 'E'});
+    const DriverInfo other_info = Detect(other.ToRom());
+
+    SEQLIB_CHECK_EQ(MusicVolume(other_info, 0), 128);
+    SEQLIB_CHECK_EQ(other_info.warnings.size(), 1u);
+
+    // In Donkey Kong Country 3's revision, a channel at volume 1 has a level of 0 at a music volume of 39, and of 1 at
+    // 69. Its note is then left out at 39 and mixed at 69. A build that agbsf2 doesn't list plays at 69.
+    Cart levels(kFormat);
+    const auto levels_bank = levels.Bank({{0, levels.Sample(Saw())}});
+    levels.Tune({Track(kFormat).Program(0, 0).Control(0, kCtrlVolume, 1).On(0, 60, 100).Wait(48).Off(0, 60).End()},
+                levels_bank);
+    levels.AddEnvelopeControllers();
+    levels.AddLevelTest();
+    const Rom levels_rom = levels.ToRom();
+    DriverInfo levels_info = Detect(levels_rom);
+
+    SEQLIB_CHECK_EQ(MusicVolume(levels_info, 0), 69);
+    SEQLIB_CHECK_EQ(levels_info.warnings.size(), 1u);
+
+    auto first_mix = [&](const DriverInfo& i)
+    {
+        Sequencer seq(levels_rom, i, 0);
+        seq.Step();
+        return seq.GetSlot(0).mix;
+    };
+
+    SEQLIB_CHECK(first_mix(levels_info) == MixResult::kMixed);
+    levels_info.music_volumes = {39};
+    SEQLIB_CHECK(first_mix(levels_info) == MixResult::kSilent);
+}
+
 // Donkey Kong Country 3's code picks the arrangement of a tune by the water. In the driver's revision with channel
 // levels, detection reads the tune and the channels of each arrangement from the routine that does it.
 void TestWaterTune()
@@ -2317,6 +2397,7 @@ void RunTests()
 {
     TestDecoding();
     TestDetection();
+    TestMusicVolume();
     TestWaterTune();
     TestTiming();
     TestSlots();

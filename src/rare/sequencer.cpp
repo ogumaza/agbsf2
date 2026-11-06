@@ -23,10 +23,6 @@ namespace
 // Maximum number of commands a track may run per frame. A loop without a delay in it would hang the driver.
 constexpr int kMaxCommandsPerFrame = 100000;
 
-// The music volume, out of 128, at which Donkey Kong Country 3 plays most of its tunes. The driver's init sets 128. The
-// game sets the volume for each tune after it requests the tune.
-constexpr uint32_t kGameMusicVolume = 69;
-
 // A quotient and remainder from the driver's 16-bit division.
 struct Quotient
 {
@@ -79,7 +75,7 @@ uint32_t SustainLevel(uint32_t sustain, uint8_t setting)
 }
 
 Sequencer::Sequencer(const Rom& rom, const DriverInfo& info, int tune, uint16_t silenced)
-    : rom_(rom), info_(info), silenced_(silenced)
+    : rom_(rom), info_(info), silenced_(silenced), music_volume_(uint32_t(MusicVolume(info, tune)))
 {
     valid_ = ReadTuneHeader(rom, TuneAddress(rom, info, tune), header_);
     if (!valid_)
@@ -642,11 +638,11 @@ void Sequencer::Mix()
             // A note's level before its velocity and envelope count is the music volume × (the channel's volume + 1) /
             // 128, × the channel's level / 128. Only the game's code turns a channel's level down, to 0 for the
             // channels in silenced_. In Donkey Kong Country 3's revision, a note at a level of 0 isn't mixed and
-            // doesn't count towards the limit. At the game's music volume, that also leaves out the notes of a channel
-            // at a volume of 0.
+            // doesn't count towards the limit. Below a music volume of 128, that also leaves out the notes of a
+            // channel at a volume of 0. A lower music volume leaves out those of more channel volumes.
             const bool silenced = silenced_ >> s.channel & 1;
             if (info_.skips_silent_notes &&
-                (silenced || (kGameMusicVolume * (channels_[size_t(s.channel)].volume + 1)) >> 7 == 0))
+                (silenced || (music_volume_ * (channels_[size_t(s.channel)].volume + 1)) >> 7 == 0))
             {
                 s.mix = MixResult::kSilent;
                 continue;

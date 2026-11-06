@@ -41,7 +41,7 @@ for path in "$@"; do
         echo "$name: same music as set.gsflib, already converted"
         ;;
     *)
-        echo "$name: no Konami, Rare, Quintet, Nintendo R&D2, Brownie Brown, Ubisoft Milan, Krawall or MP2K sound driver found: this game's music uses" \
+        echo "$name: no Konami, Rare, Quintet, Nintendo R&D1, Nintendo R&D2, AlphaDream, Brownie Brown, Ubisoft Milan, Krawall or MP2K sound driver found: this game's music uses" \
              "another engine, or a driver version that agbsf2 doesn't support" >&2
         status=1
         ;;

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
-// Converts the music of GBA games with Konami's, Rare's, Quintet's, Nintendo R&D2's, Brownie Brown's or Ubisoft Milan's
-// sound driver, Nintendo's MP2K or Krawall, to MIDI files and SoundFonts.
+// Converts the music of GBA games with Konami's, Rare's, Quintet's, Nintendo R&D1's, Nintendo R&D2's, AlphaDream's,
+// Brownie Brown's or Ubisoft Milan's sound driver, Nintendo's MP2K or Krawall, to MIDI files and SoundFonts.
 
 #include <algorithm>
 #include <cmath>
@@ -45,10 +45,11 @@ void Usage(FILE* f)
                  "\n"
                  "Converts every song in each GBA ROM (.gba) or GSF rip (.gsflib, .minigsf) to\n"
                  "a MIDI file and a matching SoundFont, for games whose music uses Konami's,\n"
-                 "Rare's, Quintet's, Nintendo R&D2's, Brownie Brown's or Ubisoft Milan's sound\n"
-                 "driver, Nintendo's MP2K or Krawall. A game with more than one of them has each\n"
-                 "one's songs converted. The results go in a folder beside the input file, with\n"
-                 "the same name. You can also drop files on the program.\n"
+                 "Rare's, Quintet's, Nintendo R&D1's, Nintendo R&D2's, AlphaDream's, Brownie\n"
+                 "Brown's or Ubisoft Milan's sound driver, Nintendo's MP2K or Krawall. A game\n"
+                 "with more than one of them has each one's songs converted. The results go in\n"
+                 "a folder beside the input file, with the same name. You can also drop files\n"
+                 "on the program.\n"
                  "\n"
                  "options:\n"
                  "  -o, --output DIR      output directory (default: <file's folder>/<base name>)\n"
@@ -76,8 +77,9 @@ void Usage(FILE* f)
                  "      --dump            also write a text listing of each song's sequence data\n"
                  "      --info            print each driver's detected tables and songs, then\n"
                  "                        exit\n"
-                 "      --driver NAME     use only konami, rare, quintet, rd2, brownie, ubimilan,\n"
-                 "                        krawall or mp2k, instead of every driver detection finds\n"
+                 "      --driver NAME     use only konami, rare, quintet, rd1, rd2, alphadream,\n"
+                 "                        brownie, ubimilan, krawall or mp2k, instead of every\n"
+                 "                        driver detection finds\n"
                  "      --song-table ADDR    use this song table address (hex; in Nintendo R&D2's\n"
                  "                           driver, the address of the game's settings for it,\n"
                  "                           in Ubisoft Milan's, the sound bank, and in Krawall,\n"
@@ -373,7 +375,8 @@ std::optional<int> ParseArgs(const std::vector<std::string>& args, Options& o)
             o.overrides.driver = DriverNamed(v);
             if (o.overrides.driver == Driver::kAny)
             {
-                OptionError("--driver needs konami, rare, quintet, rd2, brownie, ubimilan, krawall or mp2k");
+                OptionError(
+                    "--driver needs konami, rare, quintet, rd1, rd2, alphadream, brownie, ubimilan, krawall or mp2k");
                 return 2;
             }
         }

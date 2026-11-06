@@ -20,9 +20,20 @@ set by a timer. It doesn't mix samples in software.
 | *Super Robot Taisen D* (`A6SJ`) | A |
 | *Super Robot Taisen R* (`AJ9J`) | A |
 | *Super Robot Taisen J* (`B6JJ`) | J |
+| *Bouken Yuuki Plaston GP* (`A2PJ`) | J, with music files |
+| *Bouken Yuuki Densetsu Plaston Gate* (`APJJ`) | J, with music files |
+| *Bouken Yuuki PlaStar World: Densetsu no Plust Gate EX* (`BPDJ`) | J, with music files |
+| *Legend of Dynamic: Goushouden* (`AVDJ`) | J, with music files |
+| *Blender Bros.* (`ABRE`) | J, with music files |
+| *Doubutsu no Shima no Chobi Gurumi* (`A8DJ`) | J, with music files |
+| *Gachasute! Dyna Device Red* and *Blue* (`AAIJ`, `ABIJ`) | J, with music files |
+| *Robopon 2: Ring Version* and *Cross Version* (`ARPE`, `ACVE`) | J, with music files |
+| *Magical Fengshen* (`AJOJ`) | J, with music files |
+| *Suta Komi: Star Communicator* (`ASKJ`) | S |
 
-Most of this document holds for both revisions.
-[The J revision](#the-j-revision) lists the differences.
+Most of this document holds for every revision.
+[The J revision](#the-j-revision) and [the S revision](#the-s-revision) list
+the differences.
 
 ## Architecture
 
@@ -455,6 +466,63 @@ In `B6JJ` the play routine is at `0x0807D250`, the routine for sound effects
 at `0x0807D2B8`, the note reader at `0x0807D844`, the per-frame routine at
 `0x0807EEE4`, and the routine that sets the seed at `0x0807D490`.
 
+## The S revision
+
+*Suta Komi: Star Communicator* (`ASKJ`) has a build of the A revision with
+another song format. Its play routine is the A revision's. Its note reader
+tells a note from a command by bit 7 of the first byte, and divides 384 by the
+next byte: `2080 4030 2800 D0xx Exxx 46B0 7821 20C0 0040`. Its routine that
+plays a sound effect starts `B570 4Axx 2100 7011` and then follows the A
+revision's from `49xx`. The S revision differs from the A revision in these
+ways:
+
+| | A revision | S revision |
+|---|---|---|
+| a note | one byte: the pitch in the low nibble, the length index in the high nibble | two bytes: the pitch, then the note value |
+| the pitches | 0-11, 12 to play again, 13 to rest | 0-11, 14 to play again, 15 to rest; the others only wait for the note's length |
+| the length table | 13 bytes | none: a note lasts 384 ticks divided by its note value |
+| the commands | `0E` to `F1` | `80` to `BA`, in the A revision's order |
+| `D4`'s tie | a note of the same pitch | a note with the same first byte |
+| after a rest | the square channels' envelope step is 0 | the square channels keep their envelope step |
+| the starting tempo | 90 | 150 |
+| SOUNDBIAS after the play routine's reset | resolution 1 (65536 Hz) | resolution 3 (262144 Hz) |
+| a sample's length | its size less 64 bytes, less 0.6% | its size less 256 bytes, less 0.6% |
+| `E7` with its loop at its end | plays the range once | loops from the range's end |
+
+The S revision's commands, in the A revision's numbering:
+
+| S | A | S | A | S | A | S | A |
+|---|---|---|---|---|---|---|---|
+| `80` | `0E` | `8F` | `7F` | `9E` | `D4` | `AD` | `E3` |
+| `81` | `0F` | `90` | `8E` | `9F` | `D5` | `AE` | `E4` |
+| `82` | `1E` | `91` | `8F` | `A0` | `D6` | `AF` | `E5` |
+| `83` | `1F` | `92` | `9E` | `A1` | `D7` | `B0` | skips the byte after it |
+| `84` | `2E` | `93` | `9F` | `A2` | `D8` | `B1` | `E6` |
+| `85` | `2F` | `94` | `AE` | `A3` | `D9` | `B2` | `E7` |
+| `86` | `3E` | `95` | `AF` | `A4` | `DA` | `B3` | `E8` |
+| `87` | `3F` | `96` | `BE` | `A5` | `DB` | `B4` | `E9` |
+| `88` | `4E` | `97` | `BF` | `A6` | `DC` | `B5` | `EA` |
+| `89` | `4F` | `98` | `CE` | `A7` | `DD` | `B6` | `EB` |
+| `8A` | `5E` | `99` | `CF` | `A8` | `DE` | `B7` | `EC` |
+| `8B` | `5F` | `9A` | `D0` | `A9` | `DF` | `B8` | `ED` |
+| `8C` | `6E` | `9B` | `D1` | `AA` | `E0` | `B9` | `EE` |
+| `8D` | `6F` | `9C` | `D2` | `AB` | `E1` | `BA` | `EF` |
+| `8E` | `7E` | `9D` | `D3` | `AC` | `E2` | | |
+
+`BB` to `FE` do nothing, and `FF` ends the channel as in the A revision. The
+S revision has no `F0` or `F1`.
+
+The game gives the driver its music file, its sound effects' file, its wave
+table, its noise macros and its samples in literals: `ldr r1, =table; adds r0,
+r1, #0; bl routine`. Its play-song routine loads the music file's address from
+a literal and skips to the song before it calls the play routine. `agbsf2`
+looks back up to 96 bytes from that call for an `ldr` whose literal is a song.
+
+In `ASKJ` the play routine is at `0x0805FC30`, the routine for sound effects
+at `0x0805FC94` and the per-frame routine at `0x08061428`. The note reader is
+at `0x080601A4` and its command table at `0x0806044C`. The game's play-song
+routine is at `0x08026040`, and its music file is at `0x0879808C`.
+
 ## Locating the driver
 
 `agbsf2` finds the driver from its code, without fixed addresses. The play
@@ -538,6 +606,39 @@ music's variable.
 | the sample loader, A revision | `B570 1C02 48xx 2500 024C 237F` |
 | the sample loader, J revision | `B570 4Bxx 008A 18D2 1C03 6013 48xx 2200 024D 247F` |
 | the loader's callers for banks 0 and 1 | `B500 2100 Fxxx Fxxx BC01 4700` and `B500 2101 ...`, whose `bl` goes to the loader |
+
+### Music files
+
+The games other than the *Super Robot Taisen* ones keep their songs, their
+sound effects and the tables that the driver plays them with in a music file.
+The driver's loader reads the file into the driver's tables in RAM. Its code
+starts `B5F0 1C05 CD10 1C2A 08A0 0080 182D 4Bxx 2000 7018 8811 4Exx 2900 D0xx
+4Cxx`. The file has seven parts, in this order:
+
+1. the songs, one after another, up to a length of 0
+2. the sound effects, in the same form
+3. the wave table
+4. bank 0's noise macros
+5. bank 1's noise macros
+6. bank 0's samples
+7. bank 1's samples
+
+A word that gives the part's size in bytes comes before each part. The loader
+moves on by the size rounded down to a multiple of 4. It skips the last
+part's size. The game then plays song n or sound effect n of the file through
+routines that read the loader's tables.
+
+The games hand the loader the file in three ways: with a literal
+(`ldr r0, =file`), with the game's lookup of the file a few instructions
+before the call, or from a routine that gives the address of a numbered file
+(`bl routine; adds r0, #4`). In the third way, the game's code picks the
+number. `agbsf2` reads the files of the first two ways from the code. It also
+scans the ROM, a word at a time, for every file that reads in full. That
+finds the files of the third way. It also finds the files of a program that
+the game sends to another console, which has a copy of the driver. The files
+that the code gives come first, then those that a word of the ROM points to,
+as a table of numbered files does, and then the rest. `agbsf2` numbers each
+file's songs and sound effects after those of the file before.
 
 `--song-table` and `--song-count` override the music file and the number of
 songs. Without the driver's code, `agbsf2` can't find the driver's

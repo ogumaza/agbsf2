@@ -73,11 +73,16 @@ class Build2003:
     out_left, out_right = LEFT, RIGHT  # the buffers that the worker mixes a frame into
     left_reg = None  # the register that holds the left buffer's pointer after a tick, if no slot does
     vram = None  # the code and data that the start-up code copies to VRAM: (source, size, destination)
+    copies = ()  # other code and data that the start-up code copies: (source, size, destination)
     heap = None  # the game's heap pointer, which its start-up code sets before the sound init: (address, value)
     worker_state = ()  # values that the worker reads to mix a frame, stored before each call: (address, value, size)
     play_file = None  # the game's routine that loads a music file and plays its module, (file, loop), or None
+    play_entry = None  # the game's routine that plays entry n of `module_table` in its mode and at its volume, or None
     unpacked = None  # the word that holds the address of a music file's unpacked data after a load
     jingle_files = ()  # the music files that the game plays once, in the jingle mode
+    once = {}  # the modules that the game plays once, outside a table, and the mode of the play: {module: mode}
+    set_music_vol = None  # krapSetMusicVol(), for `music_volumes`
+    music_volumes = {}  # the music volume that the game sets after it plays each module, or that holds then
     sample_length = False  # True if a sample's header gives its length where the others give its end
     player_pointers = (0x08, 0x14, 0x30)  # the player's pointers to the module, the row's data and the pattern
     channel_pointers = (0x18,)  # a channel's pointer to its instrument
@@ -253,6 +258,9 @@ class DigimonRacing(Build2003):
     iwram = (0x087F2730, 0x1598)  # the code and data that the start-up code copies to IWRAM, and its size
     ewram = (0x087F3CC8, 0x27F8)  # the data it copies to EWRAM
     sound_init = 0x080130B4       # the game's sound init: kragInit(1), kramSetMasterVol(0x40080), kramQualityMode(0)
+    # After the language select, the routine at 0x0800806C sets the music volume to the default of the game's settings,
+    # 180, through 0x08013134. That routine calls krapSetMusicVol() at 0x080397D8.
+    after_init = ((0x080397D8, (180, 0)),)
     play = 0x08038398             # krapPlay(module, mode, song)
     worker = 0x03001068           # kramWorker(), in ARM, which the game calls once a frame
     after_tick = 0x0300111C       # where the worker goes on after a tick of the player
@@ -267,6 +275,57 @@ class DigimonRacing(Build2003):
     plays = 0x03000600            # the count of plays, which the mixer's handles hold
     module_table = 0x087D7CEC     # the game's table of modules, a word each
     jingles = (16,)               # the entries that the game's routine at 0x080132D0 plays once, in the jingle mode
+
+
+class HarryPotter(Build2003):
+    """BHTE (Harry Potter and the Prisoner of Azkaban): the 2003/09/01 build of Krawall, with the RAM of Digimon
+    Racing's. Its copy of the library's IWRAM differs from Digimon Racing's only in two literals."""
+    iwram = (0x08FB0DB0, 0x1598)
+    ewram = (0x08FB2348, 0x27F8)
+    # The game's options of the effects' and the music's volumes, 0 to 10. Its sound init passes them to the library
+    # times 25 and 12. Without a save, the defaults at 0x0806B815 give 10 and 10.
+    settings = ((0x030055A1, 10), (0x030055A2, 10))
+    sound_init = 0x0803FDFC  # kragInit(1), kramSetMasterVol(0x40080), kramQualityMode(2), then the options' volumes
+    play = 0x08047DFC
+    worker = 0x03001068
+    after_tick = 0x0300111C
+    set_pos = 0x03000578
+    dma_address = 0x08046E0C
+    frame_samples = 276
+    player = 0x02001644
+    mixer = 0x020008B4
+    master = 0x03000090
+    timer = 0x0200163C
+    music_volume = 0x02001640
+    plays = 0x03000600
+    module_table = 0x08FB0CC4
+    jingles = ()
+
+
+class FranklinsGreatAdventures(Build2004):
+    """BFLE (Franklin's Great Adventures): the 2004/11/14 build of Krawall. The start-up code copies the library's code
+    to 0x03000000 and the game's data, its table of modules among them, to 0x03006050. The game's routine at 0x0800362C
+    plays entry n of the table in the mode of its table at 0x08048000. It then calls krapSetMusicVol() with the volume
+    of its table at 0x08048044."""
+    iwram = (0x083B0FB8, 0x16F0)
+    copies = ((0x083B26A8, 0x186C, 0x03006050),)
+    ewram = (0x083B3F14, 0x28AC)
+    sound_init = 0x08003608  # kragInit(1)
+    play_entry = 0x0800362C
+    play = 0x0803EDD0
+    worker = 0x030011C0
+    after_tick = 0x03001274
+    set_pos = 0x030006D0
+    dma_address = 0x0803DD40
+    frame_samples = 276
+    player = 0x02001640
+    mixer = 0x020008B0
+    master = 0x030001E8
+    timer = 0x02001638
+    music_volume = 0x0200163C
+    plays = 0x03000758
+    module_table = 0x083B26B4
+    jingles = ()
 
 
 class EverythingOrNothing(Build2003):
@@ -414,6 +473,113 @@ class Eragon(Build2004):
     jingles = ()
 
 
+
+class CocotoKartRacer(Build2004):
+    """BC5P (Cocoto Kart Racer): the 2005-04-21 build of Krawall. The start-up code copies IWRAM's code and its data in
+    two parts. The game's init calls kragInit(1) at 0x0800CC00. The game plays five modules once, in mode 0, from direct
+    calls of krapPlay(): the three of a race's end at 0x080053BA to 0x080053E6, and those at 0x08005426 and 0x0800BC9C.
+    It plays the three in mode 4 too, from 0x08009692 to 0x080096D6. It plays the rest in loop mode. The music volumes
+    are those that the game's calls of krapSetMusicVol() leave for each module in a race."""
+    iwram = (0x083F4ED8, 0x1C70)
+    copies = ((0x083F6B48, 0x1248, 0x03004038),)
+    ewram = (0x083F7D90, 0x232C)
+    after_init = ((0x0800D410, (1,)),)  # kragInit(1)
+    play = 0x0800E5EC
+    worker = 0x03001740
+    after_tick = 0x030017F4
+    set_pos = 0x03000C50
+    dma_address = 0x0800D564
+    frame_samples = 276
+    player = 0x020010C0
+    mixer = 0x030001E8
+    master = 0x03000768
+    timer = 0x020010B8
+    music_volume = 0x020010BC
+    plays = 0x03000CD8
+    module_table = None
+    jingles = ()
+    once = {0x082415F0: 0, 0x082405FC: 0, 0x0823F658: 0, 0x08261D7C: 0, 0x08230980: 0}
+    set_music_vol = 0x0800FBC8
+    music_volumes = {0x082415F0: 90, 0x082405FC: 90, 0x0823F658: 90, 0x0822A254: 100, 0x08230458: 100, 0x082344B8: 90,
+                     0x08253D18: 90, 0x08256C0C: 90, 0x0826181C: 100, 0x08261D7C: 90, 0x082726E8: 100}
+
+
+class CocotoPlatformJumper(Build2004):
+    """BC8P (Cocoto Platform Jumper): the 2005-04-21 build of Krawall, built to mix 552 samples a call. The game's
+    routine at 0x08000298 calls kragInit(1). Its routine at 0x08008C1C plays a module in the mode that its caller gives,
+    and then sets the music volume. The game calls kramQualityMode() with 0 or 2 as its state changes. The music volumes
+    are those that the game's calls of krapSetMusicVol() leave for each module, at the options' default level of 8."""
+    iwram = (0x083734F4, 0x2DF4)
+    copies = ((0x083762E8, 0xDB8, 0x03004718),)
+    ewram = (0x083770A0, 0x2BCC)
+    after_init = ((0x0801B3F0, (1,)), (0x0801B6AC, (0,)))  # kragInit(1), kramQualityMode(0) as at 0x08002B46
+    play = 0x0801C5CC
+    worker = 0x03002474
+    after_tick = 0x03002528
+    set_pos = 0x03001984
+    dma_address = 0x0801B544
+    frame_samples = 552
+    player = 0x02001960
+    mixer = 0x03000F1C
+    master = 0x0300149C
+    timer = 0x02001958
+    music_volume = 0x0200195C
+    plays = 0x03001A0C
+    module_table = None
+    jingles = ()
+    once = {0x08032C94: 0, 0x0803520C: 0, 0x0804EC30: 0, 0x080565D4: 0}  # the plays of mode 0 that driver.cpp lists
+    set_music_vol = 0x0801DBA8
+    music_volumes = {0x0802DE90: 73, 0x080322F0: 73, 0x08032C94: 110, 0x080349C0: 120, 0x0803520C: 120, 0x08041C38: 88,
+                     0x080439E4: 80, 0x0804EC30: 88, 0x08056334: 73, 0x080565D4: 110, 0x0813D328: 120, 0x081448FC: 120,
+                     0x081499C8: 73}
+
+
+class LetsRideFriendsForever(Build2004):
+    """BEFE (Let's Ride! Friends Forever): the 2005-04-21 build of Krawall, built to mix 552 samples a call. The
+    start-up code copies EWRAM's data in two parts. The game calls kragInit(0), for mono, at 0x08000370 and again at
+    0x0801C0E2. It then sets the music volume to 128 at 0x0801C114, and plays every module in loop mode."""
+    iwram = (0x0864BF7C, 0x20C0)
+    ewram = (0x0864E03C, 0x2BCC)
+    copies = ((0x08650C08, 0x2CB8, 0x02005940),)
+    after_init = ((0x0803CAF8, (0,)), (0x0803F2B0, (128, 0)))  # kragInit(0), krapSetMusicVol(128, 0)
+    play = 0x0803DCD4
+    worker = 0x03001740
+    after_tick = 0x030017F4
+    set_pos = 0x03000C50
+    dma_address = 0x0803CC4C
+    frame_samples = 552
+    player = 0x02001960
+    mixer = 0x030001E8
+    master = 0x03000768
+    timer = 0x02001958
+    music_volume = 0x0200195C
+    plays = 0x03000CD8
+    module_table = None
+    jingles = ()
+
+
+class LetsRideDreamer(LetsRideFriendsForever):
+    """BL9E (Let's Ride! Dreamer): the 2005-04-21 build of Krawall, as in Let's Ride! Friends Forever, at other
+    addresses in ROM. The game's sound init at 0x08004CE0 calls kragInit(0), for mono, sets the music volume to 128 and
+    calls kramQualityMode(1). Its routine at 0x08004D88 plays one of three modules in loop mode."""
+    iwram = (0x083844B8, 0x30BC)
+    ewram = (0x08387574, 0x2BCC)
+    copies = ()
+    after_init = ()
+    sound_init = 0x08004CE0
+    play = 0x0800FE5C
+    dma_address = 0x0800EDD4
+
+
+class HorseAndPonyLetsRide2(LetsRideDreamer):
+    """BYPP (Horse and Pony: Let's Ride 2): the 2005-04-21 build of Krawall, as in Let's Ride! Dreamer. The game's sound
+    init at 0x08004BE0 makes the same calls, and its routine at 0x08004C88 plays one of three modules in loop mode."""
+    iwram = (0x08352730, 0x2B0C)
+    ewram = (0x0835523C, 0x2BCC)
+    sound_init = 0x08004BE0
+    play = 0x0800FCEC
+    dma_address = 0x0800EC64
+
 class RacingFever(Build2003):
     """BRWP (Racing Fever): build 1.2.2.14 of 2002/09/12. Its sound init calls kragInit(1), kramQualityMode(0x12) and
     krapSetMusicVol(0, 0). The build reads quality 0x12 as mode 0. The game's routine at 0x080042A4 sets the music
@@ -465,10 +631,237 @@ class Build1_2_2_10(Build2003):
     left_slot = 0x18
 
 
-GAMES = {b'ASIE': TheSims, b'B63E': BigMuthaTruckers, b'BBVE': Babar, b'BCZP': StreetRacingSyndicate,
-         b'BDGE': DigimonRacing, b'BEME': MmsBreakEm, b'BENE': Eragon, b'BJKE': Juka, b'BJBE': EverythingOrNothing,
-         b'BNPE': PrincessNatasha, b'BRWP': RacingFever, b'BYXE': PuppyLuv, b'MGBA': Build1_2_2_10,
-         b'0000': Build1_2_2_15, bytes(4): Build1_2_2_17}
+class ThirdAge(Build2003):
+    """B3AE (The Lord of the Rings: The Third Age): the 2003/09/01 build of Krawall, with the RAM of Digimon Racing's.
+    The boot calls kragInit(1), kramSetMasterVol(0x40080) and kramQualityMode(2). The routine at 0x0803DA8C then calls
+    krapSetMusicVol() with the settings' default of 153. The table at 0x08A0C068 gives each piece's module, mode and
+    song."""
+    iwram = (0x08FC4504, 0x1598)
+    ewram = (0x08FC5A9C, 0x27F8)
+    after_init = ((0x080466FC, (1,)), (0x0804696C, (0x40080,)), (0x080468E4, (2,)), (0x08048C2C, (153, 0)))
+    play = 0x080477EC
+    worker = 0x03001068
+    after_tick = 0x0300111C
+    set_pos = 0x03000578
+    dma_address = 0x080467FC
+    frame_samples = 276
+    player = 0x02001644
+    mixer = 0x020008B4
+    master = 0x03000090
+    timer = 0x0200163C
+    music_volume = 0x02001640
+    plays = 0x03000600
+    play_table = (0x08A0C068, 30)
+    module_table = None
+    jingles = ()
+
+
+class Urbz(ThirdAge):
+    """BOCE (The Urbz: Sims in the City): the 2003/09/01 build of Krawall, with the RAM of The Third Age's. The boot sets
+    the music volume to 255 from its settings. agbsf2 keeps 128, as for The Sims: Bustin' Out. The table at 0x0948F560
+    gives each piece's module, mode and song."""
+    iwram = (0x09FF5664, 0x1598)
+    ewram = (0x09FF6BFC, 0x27F8)
+    after_init = ((0x080681F0, (1,)), (0x08068460, (0x40080,)), (0x080683D8, (2,)))
+    play = 0x080692E0
+    dma_address = 0x080682F0
+    play_table = (0x0948F560, 55)
+
+
+class Robots(ThirdAge):
+    """BRTE (Robots): the 2003/09/01 build of Krawall, with the RAM of The Third Age's. The boot sets the music volume to
+    255 at 0x0803534C. agbsf2 keeps 128, as for The Sims: Bustin' Out."""
+    iwram = (0x08FDCCEC, 0x1598)
+    ewram = (0x08FDE284, 0x27F8)
+    after_init = ((0x0803F1EC, (1,)), (0x0803F45C, (0x40080,)), (0x0803F3D4, (2,)))
+    play = 0x080402DC
+    dma_address = 0x0803F2EC
+    play_table = None
+
+
+class FranklinTheTurtle(Build2003):
+    """BFKE (Franklin the Turtle): the 2003/09/01 build of Krawall. The start-up code, in ARM, copies the library's code
+    and two parts of data, and calls kragInit(0) at 0x08000294, for mono. Each mini-game calls krapSetMusicVol(64) and
+    then plays piece 1, 2 or 3. Nine modules play only as jingles."""
+    iwram = (0x083E8748, 0x1B54)
+    copies = ((0x083EA29C, 0x8E8, 0x0300301C),)
+    ewram = (0x083EAB84, 0x12A50)
+    after_init = ((0x0802E1B4, (0,)),)
+    play = 0x0802F2A4
+    worker = 0x03001178
+    after_tick = 0x0300122C
+    set_pos = 0x03000688
+    dma_address = 0x0802E2B4
+    frame_samples = 276
+    player = 0x0201189C
+    mixer = 0x02010B0C
+    master = 0x030001A0
+    timer = 0x02011894
+    music_volume = 0x02011898
+    plays = 0x03000710
+    module_table = None
+    jingles = ()
+    once = {0x08335F60: MODE_JINGLE, 0x083361F4: MODE_JINGLE, 0x0833647C: MODE_JINGLE, 0x083366F0: MODE_JINGLE,
+            0x0833697C: MODE_JINGLE, 0x08336C28: MODE_JINGLE, 0x08336E84: MODE_JINGLE, 0x08337104: MODE_JINGLE,
+            0x0833737C: MODE_JINGLE}
+    set_music_vol = 0x080306E4
+    music_volumes = {0x083321A8: 64, 0x08334368: 64, 0x08335A18: 64}
+
+
+class CareBears(Build2004):
+    """BEAE (Care Bears: Care Quest): the 2004/11/14 build of Krawall. Its routine at 0x08003400 and others fade a
+    level's song to 64. The routine at 0x080038BC plays song 2 once, in the song mode, and the routine at 0x0800A1AC
+    plays songs 4 and 5 as jingles."""
+    iwram = (0x083DB4DC, 0x49CC)
+    copies = ((0x083DFEA8, 0xF20, 0x030066E0),)
+    ewram = (0x083E0DC8, 0x28AC)
+    after_init = ((0x08016990, (0,)),)
+    play = 0x08017B74
+    worker = 0x0300449C
+    after_tick = 0x03004550
+    set_pos = 0x030039AC
+    dma_address = 0x08016AE4
+    frame_samples = 276
+    player = 0x02001640
+    mixer = 0x020008B0
+    master = 0x030034C4
+    timer = 0x02001638
+    music_volume = 0x0200163C
+    plays = 0x03003A34
+    module_table = None
+    jingles = ()
+    once = {(0x08360B0C, 2): MODE_SONG, (0x08360B0C, 5): MODE_SONG | MODE_JINGLE}
+    set_music_vol = 0x08019150
+    music_volumes = {(0x08360B0C, 1): 64, (0x08360B0C, 4): 64, (0x08360B0C, 5): 64, (0x08360B0C, 6): 64,
+                     (0x08360B0C, 7): 64}
+
+
+class KoalaBrothers(Build2004):
+    """BAKE (The Koala Brothers: Outback Adventures): the 2004/11/14 build of Krawall. The game sets the music volume to
+    64 at 0x0800097C and fades each level's song to 64. Songs 4 and 5 play only as jingles, at 0x0800171A and
+    0x0800172E."""
+    iwram = (0x085D9390, 0x4F4C)
+    copies = ((0x085DE2DC, 0xAF4, 0x03005FDC),)
+    ewram = (0x085DEDD0, 0x232C)
+    after_init = ((0x0800FF10, (0,)), (0x080126D0, (64, 0)))
+    play = 0x080110F4
+    worker = 0x03004A1C
+    after_tick = 0x03004AD0
+    set_pos = 0x03003F2C
+    dma_address = 0x08010064
+    frame_samples = 276
+    player = 0x020010C0
+    mixer = 0x030034C4
+    master = 0x03003A44
+    timer = 0x020010B8
+    music_volume = 0x020010BC
+    plays = 0x03003FB4
+    module_table = None
+    jingles = ()
+    once = {(0x0858C284, 4): MODE_SONG | MODE_JINGLE, (0x0858C284, 5): MODE_SONG | MODE_JINGLE}
+
+
+class LandBeforeTime(Build2004):
+    """BLOE (The Land Before Time: Into the Mysterious Beyond): the 2004/11/14 build of Krawall. The boot calls
+    kragInit(0), for mono."""
+    iwram = (0x084A6BFC, 0x73A8)
+    ewram = (0x084ADFA4, 0x6CFC)
+    after_init = ((0x0802E434, (0,)),)
+    play = 0x0802F618
+    worker = 0x03006E78
+    after_tick = 0x03006F2C
+    set_pos = 0x03006388
+    dma_address = 0x0802E588
+    frame_samples = 276
+    player = 0x020016D4
+    mixer = 0x02000944
+    master = 0x03005EA0
+    timer = 0x020016CC
+    music_volume = 0x020016D0
+    plays = 0x03006410
+    module_table = None
+    jingles = ()
+
+
+class CrashOfTheTitans(Build2004):
+    """BQCE (Crash of the Titans): the 2005-04-21 build of Krawall, with the RAM of Eragon's. The routine at 0x08036A10
+    passes the settings' music level to the routine at 0x08036AC0, which sets the volume of level 2, 96. The table at
+    0x08FC9BF4 gives each piece's module, mode and song."""
+    iwram = (0x08FC9D78, 0x1F80)
+    ewram = (0x08FCBCF8, 0x232C)
+    after_init = ((0x080400B4, (1,)), (0x08040400, (0x40080,)), (0x08040370, (2,)), (0x0804286C, (96, 0)))
+    play = 0x08041290
+    worker = 0x03001A50
+    after_tick = 0x03001B04
+    set_pos = 0x03000F60
+    dma_address = 0x08040208
+    frame_samples = 276
+    player = 0x020010C0
+    mixer = 0x030004F8
+    master = 0x03000A78
+    timer = 0x020010B8
+    music_volume = 0x020010BC
+    plays = 0x03000FE8
+    play_table = (0x08FC9BF4, 38)
+    module_table = None
+    jingles = ()
+
+
+class ScurgeHive(Build2004):
+    """BHVE (Scurge: Hive): the 2005-04-21 build of Krawall. The start-up code copies the library's code and the game's
+    data to RAM."""
+    iwram = (0x08F976B8, 0x4EB0)
+    copies = ((0x08F9C568, 0x738, 0x030052D0),)
+    ewram = (0x08F9CCA0, 0x30C64)
+    after_init = ((0x0803A094, (1,)), (0x0803C84C, (128, 0)))  # kragInit(1), then krapSetMusicVol(128, 0)
+    play = 0x0803B270
+    worker = 0x0300455C
+    after_tick = 0x03004610
+    set_pos = 0x03003A6C
+    dma_address = 0x0803A1E8
+    frame_samples = 276
+    player = 0x0201CC98
+    mixer = 0x03003004
+    master = 0x03003584
+    timer = 0x0201CC90
+    music_volume = 0x0201CC94
+    plays = 0x03003AF4
+    module_table = None
+    jingles = ()
+
+
+class ShrekSuperSlam(Build2004):
+    """B4UE (Shrek SuperSlam): the 2005-04-21 build of Krawall. The sound init at 0x08031476 calls
+    kramSetMasterVol(0x40080). The boot sets the music volume to 255 at frame 50. agbsf2 keeps 128, as for The Sims:
+    Bustin' Out. The table at 0x087C44DC gives each piece's module, mode and song."""
+    iwram = (0x087C46A8, 0x1B48)
+    ewram = (0x087C61F0, 0x232C)
+    after_init = ((0x080359B4, (1,)), (0x08035D00, (0x40080,)), (0x08035C70, (0,)))
+    play = 0x08036B90
+    worker = 0x03001618
+    after_tick = 0x030016CC
+    set_pos = 0x03000B28
+    dma_address = 0x08035B08
+    frame_samples = 276
+    player = 0x020010C0
+    mixer = 0x030000C0
+    master = 0x03000640
+    timer = 0x020010B8
+    music_volume = 0x020010BC
+    plays = 0x03000BB0
+    play_table = (0x087C44DC, 15)
+    module_table = None
+    jingles = ()
+
+
+GAMES = {b'ASIE': TheSims, b'B63E': BigMuthaTruckers, b'BBVE': Babar, b'BC5P': CocotoKartRacer,
+         b'BC8P': CocotoPlatformJumper, b'BCZP': StreetRacingSyndicate, b'BDGE': DigimonRacing,
+         b'BEFE': LetsRideFriendsForever, b'BEME': MmsBreakEm, b'BENE': Eragon, b'BFLE': FranklinsGreatAdventures,
+         b'BHTE': HarryPotter, b'BJBE': EverythingOrNothing, b'BJKE': Juka, b'BL9E': LetsRideDreamer,
+         b'BNPE': PrincessNatasha, b'BRWP': RacingFever, b'BYPP': HorseAndPonyLetsRide2, b'BYXE': PuppyLuv,
+         b'B3AE': ThirdAge, b'B4UE': ShrekSuperSlam, b'BAKE': KoalaBrothers, b'BEAE': CareBears,
+         b'BFKE': FranklinTheTurtle, b'BHVE': ScurgeHive, b'BLOE': LandBeforeTime, b'BOCE': Urbz, b'BQCE': CrashOfTheTitans,
+         b'BRTE': Robots, b'MGBA': Build1_2_2_10, b'0000': Build1_2_2_15, bytes(4): Build1_2_2_17}
 
 
 def addresses_for(rom):
@@ -498,6 +891,7 @@ class KrawallEmulator:
         copies = [(a.iwram, a.iwram_at), (a.ewram, 0x02000000)]
         if a.vram:
             copies.append((a.vram[:2], a.vram[2]))
+        copies += [(copy[:2], copy[2]) for copy in a.copies]
         for (source, size), destination in copies:
             uc.mem_write(destination, bytes(rom[source - ROM_BASE:source - ROM_BASE + size]))
         for address, value in a.settings:
@@ -505,11 +899,15 @@ class KrawallEmulator:
         if a.heap:
             uc.mem_write(a.heap[0], struct.pack('<I', a.heap[1]))
 
-        # getDmaAddress(&left, &right) stores the buffers' addresses and returns the frame's samples.
+        # getDmaAddress(&left, &right) stores the buffers' addresses and returns the frame's samples, as a movs and an
+        # lsls by 1 or more.
         if a.dma_address:
-            assert a.frame_samples % 2 == 0 and a.frame_samples >> 1 < 256
-            stub = struct.pack('<8H2I', 0x4A03, 0x6002, 0x4A03, 0x600A, 0x2000 | (a.frame_samples >> 1), 0x0040,
-                               0x4770, 0x46C0, LEFT, RIGHT)
+            shift = 1
+            while a.frame_samples >> shift >= 256:
+                shift += 1
+            assert (a.frame_samples >> shift) << shift == a.frame_samples
+            stub = struct.pack('<8H2I', 0x4A03, 0x6002, 0x4A03, 0x600A, 0x2000 | (a.frame_samples >> shift),
+                               shift << 6, 0x4770, 0x46C0, LEFT, RIGHT)
             uc.mem_write(a.dma_address, stub)
         self.translate = None
         uc.hook_add(UC_HOOK_MEM_UNMAPPED, self._unmapped)
@@ -579,10 +977,20 @@ class KrawallEmulator:
         With `model_module`, agbsf2's address of a music file's module, the records give the addresses in the unpacked
         data as agbsf2 does."""
         a = self.addr
+        if a.play_entry:
+            # The game's routine sets the mode and the music volume of the module's first entry.
+            n = 0
+            while struct.unpack('<I', self.read(a.module_table + 4 * n, 4))[0] != address:
+                n += 1
+            self.call(a.play_entry, (n,))
+            return address
         if not a.play_file:
             self.call(a.play, (address, mode, song))
             for at, value in a.after_play:
                 self.uc.mem_write(at, bytes((value,)))
+            volume = a.music_volumes.get((address, song), a.music_volumes.get(address))
+            if volume is not None:
+                self.call(a.set_music_vol, (volume, 0))
             return address
 
         self.call(a.play_file, (address, 0 if mode & MODE_JINGLE else 1))
@@ -708,7 +1116,9 @@ def song_plays(rom, modules, files=None):
         song = seen.get(module, 0)
         seen[module] = song + 1
         if song_count(rom, module):
-            plays[n] = (module, MODE_LOOP | MODE_SONG, song)
+            plays[n] = (module, a.once.get((module, song), MODE_LOOP | MODE_SONG), song)
+        elif module in a.once:
+            plays[n] = (module, a.once[module], 0)
         else:
             plays[n] = (module, MODE_JINGLE if module in jingles else MODE_LOOP, 0)
     return plays

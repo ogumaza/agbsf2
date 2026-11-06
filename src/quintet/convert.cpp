@@ -1172,10 +1172,11 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
 
     // The SoundFont's presets, in the song's file or the shared one, in the banks and programs that it gives the song.
     // In a SoundFont for this song alone, the presets go in song 0's banks and programs.
-    SoundfontBuilder own(rom);
+    SoundfontBuilder own(rom, 1, PsgRate(info.revision));
     SoundfontBuilder& sf = shared ? *shared : own;
     const int count = int(maker.Programs().size());
-    const std::vector<BankProgram> slots = sf.Banks().Place(shared ? song : 0, count);
+    const int number = info.first_song + song;
+    const std::vector<BankProgram> slots = sf.Banks().Place(shared ? number : 0, count);
     if (int(slots.size()) < count)
     {
         report.warnings.push_back("needs " + std::to_string(count) +
@@ -1188,7 +1189,7 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
         report.warnings.push_back(w);
     }
 
-    const std::string title = rom.Title() + " #" + SongNumber(song, 0);
+    const std::string title = rom.Title() + " #" + SongNumber(number, 0);
     char about[160];
     const int effect = EffectIndex(info, song);
     if (effect >= 0)
@@ -1202,7 +1203,7 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
         std::snprintf(about, sizeof about, "%s (%s) song %d, header at 0x%08X, converted by %s", rom.Title().c_str(),
                       rom.GameCode().c_str(), song, unsigned(SongAddress(info, song)), kProgramName);
     }
-    const std::string stem = SongStem(settings, SongNumber(song, 0));
+    const std::string stem = SongStem(settings, SongNumber(number, 0));
 
     std::string error;
     report.midi_path = stem + ".mid";

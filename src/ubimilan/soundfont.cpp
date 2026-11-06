@@ -22,10 +22,35 @@ namespace agbsf2::ubimilan
 namespace
 {
 
-// The level of a PSG channel at full volume against a full-scale sample. The driver sets SOUNDCNT_L's PSG volume to 3
-// of 7. A channel at volume 15 then swings 60 either side of its middle, out of a full scale of -512 to 512. The mixer
-// gives a full-scale sample at velocity 64 the whole scale.
-constexpr double kPsgLevel = 60.0 / 512;
+// The rate of the noise's drums: the PSG's under SOUNDBIAS. The sound init sets its bit 14, which plays the PSG at
+// 65536 Hz.
+constexpr uint32_t kNoiseRate = 65536;
+
+// The entries of the frequency table in both games with the driver. The wave table follows it.
+constexpr int kFrequencyEntries = 104;
+
+// The keys below the first entry of the frequency table on the squares and on the wave channel.
+constexpr int kSquareBaseKey = 36;
+constexpr int kWaveBaseKey = 12;
+
+// Returns the pitch of MIDI key `key` in equal temperament, in Hz.
+double KeyHz(int key)
+{
+    return kMiddleC * std::pow(2.0, (key - 60) / 12.0);
+}
+
+// Returns the cents from `hz` to the pitch of a square channel at entry `index` of the frequency table, or 0 for an
+// entry past the table's ends or one that doesn't play.
+int TableCents(const Rom& rom, const DriverInfo& info, int index, double hz)
+{
+    if (index < 0 || index >= kFrequencyEntries || !info.frequency_table)
+    {
+        return 0;
+    }
+
+    const int setting = rom.U16(info.frequency_table + 2 * uint32_t(index)) & 0x7FF;
+    return setting ? SettingCents(setting, hz) : 0;
+}
 
 // The SoundFont's samples, each added the first time a zone uses it.
 class SampleCache
@@ -84,90 +109,18 @@ public:
         return kit_[address] = int(file_.samples.size()) - 1;
     }
 
-    // Returns the index of a square wave of duty `duty`, a cycle of 64 points at middle C.
-    int Square(int duty)
+    // Returns the PSG's samples, which the cache makes on first use.
+    PsgSamples& Psg()
     {
-        const auto cached = squares_.find(duty);
-        if (cached != squares_.end())
-        {
-            return cached->second;
-        }
-
-        sf2::Sample s;
-        s.name = SquareName(duty);
-        s.data = SquareCycle(duty, int16_t(std::lround(32767 * kPsgLevel)));
-        Cycle(s);
-        file_.samples.push_back(s);
-
-        return squares_[duty] = int(file_.samples.size()) - 1;
-    }
-
-    // Returns the index of the wave channel's program `program`: both banks of the wave RAM, 64 points of 4 bits, high
-    // half first, at middle C.
-    int Wave(int program)
-    {
-        const auto cached = waves_.find(program);
-        if (cached != waves_.end())
-        {
-            return cached->second;
-        }
-
-        const uint32_t address = info_.wave_table + 32 * uint32_t(program);
-        if (!info_.wave_table || !rom_.Contains(address, 32))
-        {
-            return waves_[program] = -1;
-        }
-
-        sf2::Sample s;
-        char name[24];
-        std::snprintf(name, sizeof name, "Wave %d", program);
-        s.name = name;
-        for (uint32_t i = 0; i < 64; i++)
-        {
-            const uint8_t byte = rom_.U8(address + i / 2);
-            const int point = i % 2 ? byte & 0xF : byte >> 4;
-            s.data.push_back(int16_t(std::lround((point - 7.5) * 32767 / 7.5 * kPsgLevel)));
-        }
-        Cycle(s);
-        file_.samples.push_back(s);
-
-        return waves_[program] = int(file_.samples.size()) - 1;
-    }
-
-    // Returns the index of the noise generator's whole sequence, a point for each step, looped: the 15-bit one, or the
-    // 7-bit one repeated so that its loop isn't too short.
-    int Noise(bool narrow)
-    {
-        const auto cached = noises_.find(narrow);
-        if (cached != noises_.end())
-        {
-            return cached->second;
-        }
-
-        file_.samples.push_back(NoiseSequence(narrow, kPsgLevel));
-
-        return noises_[narrow] = int(file_.samples.size()) - 1;
+        return psg_;
     }
 
 private:
-    // Makes `s` a looped cycle at middle C, with the guard points after it.
-    static void Cycle(sf2::Sample& s)
-    {
-        const uint32_t points = uint32_t(s.data.size());
-        s.sample_rate = uint32_t(std::lround(points * kMiddleC));
-        s.original_key = 60;
-        s.loop_start = 0;
-        s.loop_end = points;
-        AddLoopGuard(s);
-    }
-
     const Rom& rom_;
     const DriverInfo& info_;
     Sf2File& file_;
     std::map<uint32_t, int> kit_;
-    std::map<int, int> squares_;
-    std::map<int, int> waves_;
-    std::map<bool, int> noises_;
+    PsgSamples psg_{kNoiseRate};
 };
 
 // Returns a zone for keys `lo` to `hi` that plays sample `sample` with its root at key `root`, and `cents` sharper. Its
@@ -193,17 +146,6 @@ sf2::Zone InstantReleaseZone(int lo, int hi, int sample, int root, int cents, bo
     return z;
 }
 
-// Returns the cents by which a noise sample at kNoiseSequenceRate has to be raised to step at the clock that NR43 sets.
-// The clock is 524288 Hz divided by NR43's divisor and by 2 to the power of one more than its shift. A divisor of 0
-// stands for a half.
-int NoiseCents(uint8_t control)
-{
-    const int divisor = control & 7;
-    const int shift = control >> 4;
-    const double clock = 524288.0 / (divisor ? divisor : 0.5) / std::pow(2.0, shift + 1);
-    return int(std::lround(1200 * std::log2(clock / kNoiseSequenceRate)));
-}
-
 } // namespace
 
 const char* ChannelName(int channel)
@@ -213,14 +155,40 @@ const char* ChannelName(int channel)
     return channel == kKitChannel ? "Kit" : kPsgNames[channel];
 }
 
-void InstrumentSet::AddKitKey(int program, int key, uint32_t sample)
+int SquareCents(const Rom& rom, const DriverInfo& info, int key)
 {
-    kit_keys_[program][key] = sample;
+    return TableCents(rom, info, key - kSquareBaseKey, KeyHz(key));
 }
 
-void InstrumentSet::AddNoiseKey(int program, int key, uint8_t control)
+int WaveCents(const Rom& rom, const DriverInfo& info, int key, int offset)
 {
-    noise_keys_[program][key] = control;
+    // The zone plays the wave's 64 steps at the pitch of key `key` - `offset`. The channel plays them at a quarter of a
+    // square's pitch at the same setting.
+    return TableCents(rom, info, key - kWaveBaseKey, 4 * KeyHz(key - offset));
+}
+
+WaveShape ProgramWave(const Rom& rom, const DriverInfo& info, int program)
+{
+    WaveShape shape;
+    const uint32_t address = info.wave_table + 32 * uint32_t(program);
+    for (uint32_t i = 0; i < 32; i++)
+    {
+        const uint8_t byte = rom.U8(address + i);
+        shape.steps.push_back(uint8_t(byte >> 4));
+        shape.steps.push_back(uint8_t(byte & 15));
+    }
+
+    return shape;
+}
+
+void InstrumentSet::AddKitKey(int program, int key, uint32_t sample, uint32_t skip)
+{
+    kit_keys_[program][key] = {sample, skip};
+}
+
+int InstrumentSet::AddNoise(const NoiseSound& sound)
+{
+    return noises_.try_emplace(sound, int(noises_.size())).first->second;
 }
 
 void InstrumentSet::AddSquare(int channel, int program, uint8_t duty)
@@ -238,46 +206,29 @@ std::vector<std::string> InstrumentSet::Build(const Rom& rom, const DriverInfo& 
     std::vector<std::string> warnings;
     SampleCache samples(rom, info, file);
 
-    // Each of the kit's offsets: a preset whose keys play their samples at the rate the mixer plays them, or the noise.
-    std::set<int> offsets;
+    // Each of the kit's offsets: a preset whose keys play their samples at the rate the mixer plays them.
     for (const auto& [program, keys] : kit_keys_)
-    {
-        offsets.insert(program);
-    }
-    for (const auto& [program, keys] : noise_keys_)
-    {
-        offsets.insert(program);
-    }
-
-    for (int program : offsets)
     {
         char name[24];
         std::snprintf(name, sizeof name, "%s %d", ChannelName(kKitChannel), program);
         sf2::Instrument si = MakeInstrument(name);
-
-        const auto noise = noise_keys_.find(program);
-        if (noise != noise_keys_.end())
+        for (const auto& [key, source] : keys)
         {
-            for (const auto& [key, control] : noise->second)
+            const int sample = samples.Kit(source.first);
+            if (sample < 0)
             {
-                si.zones.push_back(
-                    InstantReleaseZone(key, key, samples.Noise(control & 8), key, NoiseCents(control), true));
+                continue;
             }
-        }
 
-        const auto kit = kit_keys_.find(program);
-        if (kit != kit_keys_.end())
-        {
-            for (const auto& [key, address] : kit->second)
+            sf2::Zone zone = InstantReleaseZone(key, key, sample, key, 0, Looped(file.samples[size_t(sample)]));
+            if (source.second)
             {
-                const int sample = samples.Kit(address);
-                if (sample < 0)
-                {
-                    continue;
-                }
-
-                si.zones.push_back(InstantReleaseZone(key, key, sample, key, 0, Looped(file.samples[size_t(sample)])));
+                zone.generators.insert(
+                    zone.generators.begin() + 1,
+                    {sf2::Generator::Value(sf2::kStartAddrsOffset, int(source.second % 32768)),
+                     sf2::Generator::Value(sf2::kStartAddrsCoarseOffset, int(source.second / 32768))});
             }
+            si.zones.push_back(zone);
         }
 
         if (si.zones.size() < 2)
@@ -291,9 +242,9 @@ std::vector<std::string> InstrumentSet::Build(const Rom& rom, const DriverInfo& 
             MakePreset(name, uint16_t(PresetBank(kKitChannel)), uint16_t(program), int(file.instruments.size()) - 1));
     }
 
-    // Each PSG instrument, the squares' and then the wave's: its square's duty or its wave, over all the keys, at the
-    // pitch that the key's frequency setting gives.
-    const auto add_psg = [&](int channel, int program, int sample)
+    // Each PSG instrument, first the squares, then the wave: a square of its duty or its wave at full volume, over all
+    // the keys, at the pitch of the frequency setting for each key. CC11 sets the volume of each frame.
+    const auto add_psg = [&](int channel, int program, int sample, const KeyTuning& tuning)
     {
         char name[32];
         std::snprintf(name, sizeof name, "%s %d", ChannelName(channel), program);
@@ -304,18 +255,63 @@ std::vector<std::string> InstrumentSet::Build(const Rom& rom, const DriverInfo& 
         }
 
         sf2::Instrument si = MakeInstrument(name);
-        si.zones.push_back(InstantReleaseZone(0, 127, sample, 60, 0, true));
+        for (const auto& [lo, hi] : TuningRuns(tuning))
+        {
+            const int root = file.samples[size_t(sample)].original_key;
+            si.zones.push_back(InstantReleaseZone(lo, hi, sample, root, tuning[size_t(lo)], true));
+        }
         file.instruments.push_back(si);
         file.presets.push_back(
             MakePreset(name, uint16_t(PresetBank(channel)), uint16_t(program), int(file.instruments.size()) - 1));
     };
+    KeyTuning square_tuning;
+    for (int key = 0; key < int(square_tuning.size()); key++)
+    {
+        square_tuning[size_t(key)] = SquareCents(rom, info, key);
+    }
     for (const auto& [which, duty] : squares_)
     {
-        add_psg(which.first, which.second, samples.Square((duty >> 6) & 3));
+        add_psg(which.first, which.second, samples.Psg().Square(file, (duty >> 6) & 3), square_tuning);
     }
     for (int program : waves_)
     {
-        add_psg(kWaveChannel, program, samples.Wave(program));
+        const uint32_t address = info.wave_table + 32 * uint32_t(program);
+        if (!info.wave_table || !rom.Contains(address, 32))
+        {
+            add_psg(kWaveChannel, program, -1, square_tuning);
+            continue;
+        }
+
+        const WaveShape shape = ProgramWave(rom, info, program);
+        KeyTuning tuning;
+        for (int key = 0; key < int(tuning.size()); key++)
+        {
+            tuning[size_t(key)] = WaveCents(rom, info, key, WaveKeyOffset(shape));
+        }
+        add_psg(kWaveChannel, program, samples.Psg().Wave(file, shape), tuning);
+    }
+
+    // The noise's drums: each sound that a noise note makes, with the channel's volume, its envelope and its length.
+    std::vector<const NoiseSound*> drums(noises_.size());
+    for (const auto& [sound, number] : noises_)
+    {
+        drums[size_t(number)] = &sound;
+    }
+    for (size_t first = 0; first < drums.size(); first += kKitDrums)
+    {
+        const int program = int(first) / kKitDrums;
+        char name[24];
+        std::snprintf(name, sizeof name, program ? "Noise drums %d" : "Noise drums", program);
+        sf2::Instrument si = MakeInstrument(name);
+        for (size_t i = first; i < drums.size() && i < first + kKitDrums; i++)
+        {
+            const int sample = samples.Psg().Noise(file, *drums[i]);
+            const int key = kFirstDrumKey + int(i - first);
+            si.zones.push_back(InstantReleaseZone(key, key, sample, key, 0, Looped(file.samples[size_t(sample)])));
+        }
+        file.instruments.push_back(si);
+        file.presets.push_back(
+            MakePreset(name, uint16_t(kNoiseBank), uint16_t(program), int(file.instruments.size()) - 1));
     }
 
     return warnings;

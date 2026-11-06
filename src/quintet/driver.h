@@ -27,6 +27,7 @@ enum class Revision : uint8_t
 {
     kA, // Super Robot Taisen A's, which D and R have too
     kJ, // Super Robot Taisen J's: kRevisionTraits gives how it differs
+    kS, // Star Communicator's: the A revision with notes of two bytes and the commands numbered from 80
 };
 
 // How each revision of the driver behaves where the two differ. The fields follow the rows of the documentation's table
@@ -48,9 +49,14 @@ struct RevisionTraits
     int dma_clear_size = 0;                 // the bytes that a FIFO start writes to clear the DMA's count
     bool timers_at_frame_end = false;       // timer settings wait for the end of the frame
     bool clears_missing_macro = false;      // a noise macro without a table clears the channel's macro
+    bool rest_clears_step = false;          // after a rest, a square channel's hardware envelope has a step of 0
+    bool byte_notes = false;                // a note is a byte for its pitch and a byte for its note value
+    int soundbias_resolution = 0;           // the resolution that the play routine's reset gives SOUNDBIAS
+    uint32_t sample_trim = 0;               // the bytes of a sample's size that the driver doesn't play
+    bool range_end_loops = false;           // E7 with its loop at its end loops from the end
 };
 
-inline constexpr RevisionTraits kRevisionTraits[2] = {
+inline constexpr RevisionTraits kRevisionTraits[3] = {
     // The A revision.
     {
         .banks = false,
@@ -67,6 +73,11 @@ inline constexpr RevisionTraits kRevisionTraits[2] = {
         .dma_clear_size = 2,
         .timers_at_frame_end = false,
         .clears_missing_macro = false,
+        .rest_clears_step = true,
+        .byte_notes = false,
+        .soundbias_resolution = 1,
+        .sample_trim = 0x40,
+        .range_end_loops = false,
     },
     // The J revision.
     {
@@ -84,6 +95,33 @@ inline constexpr RevisionTraits kRevisionTraits[2] = {
         .dma_clear_size = 4,
         .timers_at_frame_end = true,
         .clears_missing_macro = true,
+        .rest_clears_step = true,
+        .byte_notes = false,
+        .soundbias_resolution = 1,
+        .sample_trim = 0x40,
+        .range_end_loops = false,
+    },
+    // The S revision.
+    {
+        .banks = false,
+        .start_tempo = 150,
+        .start_envelope_up = 1,
+        .reseeds = false,
+        .wave_levels = 4,
+        .wave_codes = {0, 3, 2, 1},
+        .envelope_wave_mask = 0x6000,
+        .envelope_wave_above = 1,
+        .envelope_holds = false,
+        .idle_after_rest = false,
+        .pcm_offset_factor = 2,
+        .dma_clear_size = 2,
+        .timers_at_frame_end = false,
+        .clears_missing_macro = false,
+        .rest_clears_step = false,
+        .byte_notes = true,
+        .soundbias_resolution = 3,
+        .sample_trim = 0x100,
+        .range_end_loops = true,
     },
 };
 
@@ -91,6 +129,12 @@ inline constexpr RevisionTraits kRevisionTraits[2] = {
 inline const RevisionTraits& TraitsOf(Revision revision)
 {
     return kRevisionTraits[size_t(revision)];
+}
+
+// Returns the rate at which the PSG plays after the play routine's reset of SOUNDBIAS, in Hz.
+inline uint32_t PsgRate(Revision revision)
+{
+    return 32768u << TraitsOf(revision).soundbias_resolution;
 }
 
 // The entries of the driver's frequency table and of its PCM pitch table. The frequency table has one for each note
@@ -105,7 +149,7 @@ struct DriverInfo
     Revision revision = Revision::kA;
     uint32_t play = 0;                    // the driver's play-song routine (Thumb), or 0 if it wasn't found
     uint32_t play_effect = 0;             // the driver's routine that plays a sound effect, or 0
-    uint32_t length_table = 0;            // 13 bytes: the note values that a note's length index picks
+    uint32_t length_table = 0;            // 13 bytes: the note values that a note's length index picks, or 0 in S
     uint32_t frequency_table = 0;         // 84 halfwords: the square and wave channels' frequency setting for each note
     uint32_t pcm_pitch_table = 0;         // 53 halfwords: each note's PCM rate change in 1/1000s of the sample's rate
     uint32_t lfo_table = 0;               // 256 signed bytes: one cycle of the LFO's sine
@@ -120,13 +164,22 @@ struct DriverInfo
     // Each sample's header, as the driver's sample tables hold them.
     std::array<std::vector<uint32_t>, 2> sample_addresses;
 
+    // A game whose driver loads its tables from a music file can have several. The fields above hold one file's songs,
+    // sound effects and tables. The conversion numbers each file's songs and sound effects after the previous file's.
+    std::vector<uint32_t> music_files; // each file's first word, or none if the game has no such files
+    int first_song = 0;                // the number that the conversion gives this file's first song
+
     std::vector<std::string> log;      // detection results for --info
     std::vector<std::string> warnings; // assumptions detection had to make
 };
 
 // Finds the driver in `rom`. Returns false and sets `error` if the driver's tables can't be read, or returns false with
-// `error` empty if the game shows no sign of the driver.
+// `error` empty if the game shows no sign of the driver. In a game with several music files, `info` holds the first.
 bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& info, std::string& error);
+
+// Reads the music file whose first word is at `file`, as the driver's loader does: its songs, its sound effects and the
+// tables it gives the driver. Sets them in `info`. Returns false, leaving `info` as it was, if it isn't a music file.
+bool ReadMusicFile(const Rom& rom, uint32_t file, DriverInfo& info);
 
 // agbsf2 numbers the songs first and then the sound effects. Returns the number of both.
 inline int SongCount(const DriverInfo& info)

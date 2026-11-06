@@ -13,10 +13,11 @@ makes), and captures what the engine produces:
     driver_emu.py ROM trace SONG FRAMES
     driver_emu.py ROM render SONG FRAMES OUT.wav [--tracks 0,3]
 
-The routine addresses are chosen by the ROM's game code. Those of Pokemon Emerald (BPEE), The Legend of Zelda: A Link
-to the Past & Four Swords (AZLE), The Legend of Zelda: The Minish Cap (BZME), Kingdom Hearts: Chain of Memories (B8CE),
-Super Robot Taisen: Original Generation 2 (B2RE) and Golden Sun: The Lost Age (AGFE), whose version of the engine
-Camelot changed, are built in. Another game needs its own values; see GAMES and docs/mp2k.md.
+The routine addresses are chosen by the ROM's game code. Those of Pokemon Emerald (BPEE), Pokemon Ruby (AXVE), The
+Legend of Zelda: A Link to the Past & Four Swords (AZLE), The Legend of Zelda: The Minish Cap (BZME), Kingdom Hearts:
+Chain of Memories (B8CE), Super Robot Taisen: Original Generation 2 (B2RE), Pokemon Mystery Dungeon: Red Rescue Team
+(B24E) and Golden Sun: The Lost Age (AGFE), whose version of the engine Camelot changed, are built in. For another game,
+add its values to GAMES (see docs/mp2k.md).
 """
 import argparse
 import struct
@@ -54,6 +55,17 @@ class Addresses:
     vsync = 0x082dfa10       # m4aSoundVSync, which the VCount interrupt calls
     song_table = 0x086b49f0
     player_table = 0x086b49c0
+    song_setup = None  # a routine of the game's that sets the driver up for a song up to 127 before it starts: r0 = song
+
+
+class AddressesAXVE(Addresses):
+    """AXVE (Pokemon Ruby), with an older build of the SDK's library than BPEE's."""
+    init = 0x081dde50
+    song_start = 0x081ddf10
+    main = 0x081ddf04
+    vsync = 0x081dd7f0
+    song_table = 0x084554a0
+    player_table = 0x08455470
 
 
 class AddressesAZLE(Addresses):
@@ -96,6 +108,16 @@ class AddressesB2RE(Addresses):
     player_table = 0x0847309c
 
 
+class AddressesB24E(Addresses):
+    """B24E (Pokemon Mystery Dungeon: Red Rescue Team), from Chunsoft, with 5 DirectSound channels at 18157 Hz."""
+    init = 0x080aef24
+    song_start = 0x080aefa8
+    main = 0x080aef9c
+    vsync = 0x080ae8c8
+    song_table = 0x09e866bc
+    player_table = 0x09e8665c
+
+
 class AddressesAGFE(Addresses):
     """AGFE (Golden Sun: The Lost Age), with Camelot's sequencer and mixer, which CamelotEmulator runs."""
     init = 0x081c0c1c        # the game's sound init: m4aSoundInit, then the mixer's rate
@@ -115,8 +137,54 @@ class AddressesAGFE(Addresses):
     dma_counter = 0x03001139  # where the VBlank handler copies the DMA counter for SoundMain
 
 
-GAMES = {b'BPEE': Addresses, b'AZLE': AddressesAZLE, b'BZME': AddressesBZME, b'B8CE': AddressesB8CE,
-         b'B2RE': AddressesB2RE, b'AGFE': AddressesAGFE}
+class AddressesAFEJ(Addresses):
+    """AFEJ (Fire Emblem: The Binding Blade)."""
+    init = 0x0809c7dc
+    song_start = 0x0809c860
+    main = 0x0809c854
+    vsync = 0x0809c180
+    song_table = 0x083994d8
+    player_table = 0x0839946c
+
+
+class AddressesAE7E(Addresses):
+    """AE7E (Fire Emblem, The Blazing Blade in Japan). The game's routine that starts a song up to 127 calls the
+    routine at 0x08003FC0 first. That routine gives songs 41, 42, 90, 92, 95 and 116 8 DirectSound channels, and the
+    others 7."""
+    init = 0x080be510
+    song_start = 0x080be594
+    main = 0x080be588
+    vsync = 0x080bdeb4
+    song_table = 0x0869d6e0
+    player_table = 0x0869d668
+    song_setup = 0x08003fc0
+
+
+class AddressesBE8E(Addresses):
+    """BE8E (Fire Emblem: The Sacred Stones). The game's routine that starts a song up to 127 calls the routine at
+    0x080028FC first. That routine gives songs 1, 2, 64, 66, 67, 86 and 116 8 DirectSound channels, and the others 7."""
+    init = 0x080d0178
+    song_start = 0x080d01fc
+    main = 0x080d01f0
+    vsync = 0x080cfb1c
+    song_table = 0x08224470
+    player_table = 0x08224404
+    song_setup = 0x080028fc
+
+
+class AddressesAGLJ(Addresses):
+    """AGLJ (Tomato Adventure), with 7 DirectSound channels at 15768 Hz."""
+    init = 0x08092dec
+    song_start = 0x08092e70
+    main = 0x08092e64
+    vsync = 0x08092790
+    song_table = 0x084b11a4
+    player_table = 0x084b115c
+
+
+GAMES = {b'BPEE': Addresses, b'AXVE': AddressesAXVE, b'AZLE': AddressesAZLE, b'BZME': AddressesBZME,
+         b'B8CE': AddressesB8CE, b'B2RE': AddressesB2RE, b'B24E': AddressesB24E, b'AGFE': AddressesAGFE,
+         b'AFEJ': AddressesAFEJ, b'AE7E': AddressesAE7E, b'BE8E': AddressesBE8E, b'AGLJ': AddressesAGLJ}
 
 
 def addresses_for(rom):
@@ -189,10 +257,15 @@ class EngineEmulator:
         uc.hook_add(UC_HOOK_CODE, self._mute, begin=psg_routine, end=psg_routine)
         # The mono mixer's init sends FIFO A to both sides and leaves FIFO B out of the sound control register.
         self.mono = not self.u16(0x04000082) & 0x3000
+        # An entry of zeros is a player with no tracks, and the table goes on after it, as in Advance Wars and Kingdom
+        # Hearts: Chain of Memories.
         self.players = []
         for i in range(64):
             entry = addr.player_table + 12 * i
             player, tracks, count = self.u32(entry), self.u32(entry + 4), rom[entry + 8 - ROM_BASE]
+            if player == 0 and tracks == 0 and self.u32(entry + 8) == 0:
+                self.players.append((0, 0, 0))
+                continue
             if not 0x02000000 <= player < 0x03008000:
                 break
             self.players.append((player, tracks, count))
@@ -261,6 +334,8 @@ class EngineEmulator:
 
     def play(self, song):
         """Starts `song` on its music player, which plays it from the next frame."""
+        if self.addr.song_setup and song < 128:
+            self.call(self.addr.song_setup, (song,))
         self.call(self.addr.song_start, (song,))
         entry = self.addr.song_table + 8 * song - ROM_BASE
         self.player = self.players[struct.unpack('<H', self.rom[entry + 4:entry + 6])[0]]

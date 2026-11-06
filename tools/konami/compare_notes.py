@@ -3,11 +3,14 @@
 
 """Compare agbsf2's MIDI files and SoundFonts with the game's driver, note by note.
 
-    compare_notes.py ROM AGBSF2 FOLDER [--songs 0-22]
+    compare_notes.py ROM AGBSF2 FOLDER [--songs 0-22] [--live]
 
 FOLDER holds AGBSF2's conversion of ROM: NAME_NN.mid and NAME_NN.sf2
 for song NN, or NAME_konami_NN.mid and NAME_konami_NN.sf2 if another driver
-was detected first. Events in these MIDI files follow the song's beat and
+was detected first. A song that a game's live stage plays also has
+NAME_NN_live.mid and NAME_NN_live.sf2. The script checks them against the
+driver with the live stage's request. With --live, the script checks only
+those. Events in these MIDI files follow the song's beat and
 may be up to a frame and a half from the driver's timing. The script
 converts ROM again with --frame-timing to keep events on the driver's
 frames. Both conversions must have identical SoundFonts and the same notes,
@@ -27,9 +30,11 @@ that MIDI file plays through its SoundFont:
   channel restarts it, as in AYDE, a PSG note can also start on any frame that
   writes its channel.
 * A sample note plays the driver's sample, with the same data and loop, at the
-  driver's pitch. The driver's pitch is a whole number of steps, so a
-  difference of up to two steps (a few cents) is allowed. Where a FIFO plays
-  its voices at its timer's rate, as in AYDE, the difference can be 2 cents.
+  driver's pitch. The data of a packed sample is what the driver's mixer plays
+  from it at one sample of the data for each sample of the mix. The driver's
+  pitch is a whole number of steps, so a difference of up to two steps (a few
+  cents) is allowed. Where a FIFO plays its voices at its timer's rate, as in
+  AYDE, the difference can be 2 cents.
 * A PSG note plays the driver's duty cycle, wave RAM image or noise setting,
   within one step of the frequency register the driver wrote.
 * CC10 and CC11 give the driver's level on each side to within 1.5 dB, and
@@ -295,10 +300,11 @@ class Psg:
         self.on[2] = bool(self.reg.get(0x04000070, 0) & 0x80) and self.wave_volume() > 0
 
 
-def run_driver(rom, song, frames):
-    """Runs the driver for `frames` frames of `song`. Returns per frame: the voice records, the echo bus records, the
-    voices that started a note, and the PSG state with the channels triggered; the mixer rate, or None for a driver
-    whose FIFOs play at their voices' rates; and the game's addresses and settings in driver_emu.py."""
+def run_driver(rom, song, frames, live=False):
+    """Runs the driver for `frames` frames of `song`. With `live`, the game's live stage requests the song. Returns per
+    frame: the voice records, the echo bus records, the voices that started a note, and the PSG state with the channels
+    triggered; the mixer rate, or None for a driver whose FIFOs play at their voices' rates; and the game's addresses
+    and settings in driver_emu.py."""
     emu = DriverEmulator(rom)
     addr = emu.addr
     voices, record_size = addr.voices, addr.voice_size
@@ -317,7 +323,7 @@ def run_driver(rom, song, frames):
         psg.write(address, size, value, set())
     emu.io_writes.clear()
 
-    emu.play(song)
+    emu.play(song, live)
     starts.clear()
     out = []
     for _ in range(frames):
@@ -396,13 +402,28 @@ class Report:
 
 
 def sample_header(rom, sample_table, index, addr):
-    """Returns the address of sample `index`'s data, its length and its loop start (-1 for none)."""
+    """Returns the address of sample `index`'s data, its length, its loop start (-1 for none) and whether it's
+    packed."""
     if addr.sample_entry_size == 8:
         data, word = struct.unpack_from('<II', rom, sample_table - ROM_BASE + 8 * index)
-        return data, (word >> 20) * 16, -1
+        return data, (word >> 20) * 16, -1, False
     header = struct.unpack_from('<I', rom, sample_table - ROM_BASE + 4 * index)[0]
     _, length, loop = struct.unpack_from('<Iii', rom, header - ROM_BASE)
-    return header + 12, length, loop
+    if length < 0 and addr.packed_flag is not None:
+        # The note start takes the low 24 bits of a packed sample's length. A table of 32 pairs of samples comes
+        # between the header and the data.
+        return header + 0x4C, length & 0xFFFFFF, loop, True
+    return header + 12, length, loop, False
+
+
+PACKED_PCM = {}
+
+
+def packed_pcm(rom, data, length):
+    """Returns the samples that the driver's mixer plays from the packed sample at `data`, in the SoundFont's units."""
+    if (data, length) not in PACKED_PCM:
+        PACKED_PCM[data, length] = [v * 256 for v in DriverEmulator(rom).unpack_sample(data, length)]
+    return PACKED_PCM[data, length]
 
 
 def zone(soundfont, note, report, where):
@@ -413,8 +434,9 @@ def zone(soundfont, note, report, where):
     return z
 
 
-def check_sample_track(rom, sample_table, soundfont, voice, midi, driver, rate, addr, report, name):
-    """Checks the MIDI track that plays DirectSound voice `voice`, frame by frame. Returns how many notes it plays."""
+def check_sample_track(rom, tables, soundfont, voice, midi, driver, rate, addr, report, name):
+    """Checks the MIDI track that plays DirectSound voice `voice`, frame by frame. Returns how many notes it plays.
+    `tables` holds the sample table and the second sample table (None if the game has none)."""
     notes = 0
     for f, ((started, note, bend, cc10, cc11, cc91), (records, buses, starts, state, _)) in enumerate(
             zip(midi, driver)):
@@ -447,11 +469,17 @@ def check_sample_track(rom, sample_table, soundfont, voice, midi, driver, rate, 
             continue
         if started:
             notes += 1
-            index = int(z['name'].split()[1])
-            data, length, loop = sample_header(rom, sample_table, index, addr)
+            # agbsf2 names a sample of the second sample table "Live sample N". Its sample number has bit 15 set.
+            words = z['name'].split()
+            live = words[0] == 'Live'
+            index = 0x8000 | int(words[2]) if live else int(words[1])
+            data, length, loop, packed = sample_header(rom, tables[live], index & 0xFFF, addr)
             if data != pointer or index & 0xFF != record[addr.voice_sample_at]:
                 report.differ(where, '%s, driver plays the sample at %08X' % (z['name'], pointer))
-            pcm = [((b ^ 0x80) - 0x80) * 256 for b in rom[data - ROM_BASE:data - ROM_BASE + length]]
+            if packed:
+                pcm = packed_pcm(rom, data, length)
+            else:
+                pcm = [((b ^ 0x80) - 0x80) * 256 for b in rom[data - ROM_BASE:data - ROM_BASE + length]]
             if list(z['pcm'][:length]) != pcm:
                 report.differ(where, '%s holds different data from the ROM' % z['name'])
             looped = 0 <= loop < length
@@ -585,6 +613,7 @@ def main():
     p.add_argument('rom', metavar='ROM', help='the game (.gba) or a GSF rip of it')
     p.add_argument('agbsf2', metavar='AGBSF2', help="the agbsf2 program, for the sample table's address")
     p.add_argument('folder', metavar='FOLDER', help='the conversion to check')
+    p.add_argument('--live', action='store_true', help="check only the songs' versions in a live stage")
     p.add_argument('--songs', help='the songs to check, such as 0-22 or 1,4,9 (default: every song that --info '
                                    'lists or FOLDER has a MIDI file for)')
     a = p.parse_args()
@@ -592,42 +621,50 @@ def main():
     info = subprocess.run([a.agbsf2, '--driver', 'konami', '--info', a.rom], capture_output=True,
                           encoding='utf-8', check=True).stdout
     sample_table = int(re.search(r'sample table 0x([0-9A-F]{8})', info).group(1), 16)
-    midi_files = dict(conversion.midi_files(a.folder, 'konami'))
+    second = re.search(r'second sample table 0x([0-9A-F]{8})', info)
+    tables = (sample_table, int(second.group(1), 16) if second else None)
+    midi_files = {(song, version): path for song, version, path in conversion.midi_files(a.folder, 'konami', True)}
     if not midi_files:
         raise SystemExit('found no MIDI files to check in %s' % a.folder)
 
     # The songs --info lists, each with its length in frames, which --info gives in minutes and seconds.
-    lengths = {int(m.group(1)): round((int(m.group(2)) * 60 + float(m.group(3))) / FRAME_SECONDS)
-               for m in re.finditer(r'^\s+(\d+)\s+0x[0-9A-F]{8}\s+\d+\s+(\d+):(\d+\.\d+)', info, re.M)}
+    # A song's first line is the song as a request leaves it.
+    lengths = {}
+    for m in re.finditer(r'^\s+(\d+)\s+0x[0-9A-F]{8}\s+\d+\s+(\d+):(\d+\.\d+)', info, re.M):
+        lengths.setdefault(int(m.group(1)), round((int(m.group(2)) * 60 + float(m.group(3))) / FRAME_SECONDS))
     if not lengths:
         raise SystemExit('found no songs in the song list of agbsf2 --info')
-    songs = parse_range(a.songs) if a.songs else sorted(set(lengths) | set(midi_files))
+    songs = parse_range(a.songs) if a.songs else sorted(set(lengths) | {s for s, _ in midi_files})
 
     # The same conversion with each event on the driver's frame.
     temporary = tempfile.TemporaryDirectory()
-    on_frames = conversion.frame_timed(a.agbsf2, a.rom, 'konami', temporary.name, a.songs)
+    conversion.frame_timed(a.agbsf2, a.rom, 'konami', temporary.name, a.songs)
+    on_frames = {(song, version): path for song, version, path in conversion.midi_files(temporary.name, 'konami', True)}
 
+    # Each song as a request leaves it, and the song's version in a live stage if FOLDER has one.
     total = Report()
     checked = 0
-    for song in songs:
+    versions = {(s, '') for s in songs} | {k for k in midi_files if k[0] in songs}
+    for song, version in sorted(v for v in versions if not a.live or v[1] == 'live'):
         report = Report()
-        midi_path = midi_files.get(song)
+        label = 'song %2d%s' % (song, ' ' + version if version else '')
+        midi_path = midi_files.get((song, version))
         if midi_path is not None:
-            framed = on_frames.get(song)
+            framed = on_frames.get((song, version))
             if framed is None:
-                report.differ('song %d' % song, 'the conversion with --frame-timing has no MIDI file')
+                report.differ(label, 'the conversion with --frame-timing has no MIDI file')
                 midi_path = None
             else:
                 problems, worst = conversion.compare_timing(midi_path, framed, FRAME_SECONDS, MAX_SHIFT)
                 if midi_path.with_suffix('.sf2').read_bytes() != framed.with_suffix('.sf2').read_bytes():
                     problems.append('the SoundFonts differ')
                 for problem in problems:
-                    report.differ('song %d on the beat' % song, problem)
+                    report.differ('%s on the beat' % label, problem)
                 report.deviation('move onto the beat (frames)', worst, '')
         if midi_path is not None:
             soundfont = SoundFont(midi_path.with_suffix('.sf2'))
             tracks, frames = read_midi(framed)  # the song ends, and its notes are released, on the last tick
-            driver, rate, addr = run_driver(rom, song, frames)
+            driver, rate, addr = run_driver(rom, song, frames, version == 'live')
             track_names = list(PSG_TRACKS) + ['Voice %d' % v for v in range(addr.voice_count)]
             present = dict(tracks[1:])
             # The tracks are checked by name, so notes on the first track, on a track of another name, or on one whose
@@ -638,7 +675,7 @@ def main():
                 if any(e[1] == 0x90 and e[3] for e in events):
                     why = ('a later track has the same name' if i and name in track_names else
                            'it stands for none of the driver\'s voices and channels')
-                    report.differ('song %d' % song, 'MIDI track %d (%s) has notes, but %s' % (i, name, why))
+                    report.differ(label, 'MIDI track %d (%s) has notes, but %s' % (i, name, why))
             notes = 0
             for name in track_names:
                 if name not in present:
@@ -649,10 +686,10 @@ def main():
                     notes += check_psg_track(soundfont, PSG_TRACKS[name], midi, driver, addr, report, name)
                 else:
                     voice = int(name.split()[1])
-                    notes += check_sample_track(rom, sample_table, soundfont, voice, midi, driver, rate, addr,
+                    notes += check_sample_track(rom, tables, soundfont, voice, midi, driver, rate, addr,
                                                 report, name)
             played = '%5d notes' % notes
-        elif song in lengths:
+        elif song in lengths and not version:
             # agbsf2 writes no files for a song that plays no notes.
             frames = max(1, lengths[song])
             driver, _, addr = run_driver(rom, song, frames)
@@ -664,13 +701,12 @@ def main():
             continue
 
         checked += 1
-        print('song %2d: %5d frames, %s, %d differences' % (song, frames, played, len(report.differences)),
-              flush=True)
+        print('%s: %5d frames, %s, %d differences' % (label, frames, played, len(report.differences)), flush=True)
         for d in report.differences[:10]:
             print('    ' + d)
         total.differences += report.differences
         for what, (value, where) in report.worst.items():
-            total.deviation(what, value, 'song %d %s' % (song, where))
+            total.deviation(what, value, '%s %s' % (label, where))
 
     temporary.cleanup()
     if not checked:

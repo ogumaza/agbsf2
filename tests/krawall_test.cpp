@@ -12,6 +12,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "seqlib/testing/check.h"
@@ -127,15 +128,17 @@ public:
     }
 
     // Writes a module of `channels` channels, at the S3M module's speed and tempo, with `cells` in its one pattern of
-    // `rows` rows, and adds it to the game's table of modules if `listed`. Returns its header's address.
-    uint32_t Module(int channels, int rows, const std::vector<Cell>& cells, bool listed = true)
+    // `rows` rows, and adds it to the game's table of modules if `listed`. The header goes at `at`, if given, as in a
+    // game. Returns its header's address.
+    uint32_t Module(int channels, int rows, const std::vector<Cell>& cells, bool listed = true, uint32_t at = 0)
     {
-        return Module(channels, {{rows, cells}}, listed);
+        return Module(channels, {{rows, cells}}, listed, at);
     }
 
     // Writes a module of `channels` channels, at the S3M module's speed and tempo, whose orders play `patterns` in
-    // turn, and adds it to the game's table of modules if `listed`. Returns its header's address.
-    uint32_t Module(int channels, const std::vector<Pattern>& patterns, bool listed = true)
+    // turn, and adds it to the game's table of modules if `listed`. The header goes at `at`, if given, as in a game.
+    // Returns its header's address.
+    uint32_t Module(int channels, const std::vector<Pattern>& patterns, bool listed = true, uint32_t at = 0)
     {
         std::vector<uint32_t> addresses;
         uint32_t header = next_module_;
@@ -143,6 +146,13 @@ public:
         {
             addresses.push_back(header);
             header = WritePattern(header, p);
+        }
+        const uint32_t next = header;
+        if (at)
+        {
+            header = at;
+            size_ = std::max<size_t>(size_, at - kRomBase + kModulePatterns + 4 * patterns.size() + 0x100);
+            Resize(size_);
         }
 
         // The header: an order for each pattern, the pans, the global volume, speed and tempo, and the patterns'
@@ -161,7 +171,8 @@ public:
         {
             Put32(header + kModulePatterns + 4 * uint32_t(i), addresses[i]);
         }
-        next_module_ = (header + kModulePatterns + 4 * uint32_t(patterns.size()) + 0xFF) & ~0xFFu;
+        const uint32_t end = at ? next : header + kModulePatterns + 4 * uint32_t(patterns.size());
+        next_module_ = (end + 0xFF) & ~0xFFu;
         if (listed)
         {
             Put32(kModuleTable + 4 * uint32_t(listed_++), header);
@@ -225,6 +236,28 @@ public:
             Put32(entry, entries[i][0]);
             Put8(entry + 4, uint8_t(entries[i][1]));
             Put8(entry + 5, uint8_t(entries[i][2]));
+        }
+    }
+
+    // Writes the game's routine that plays entry n of its table of modules, in the form of Franklin's Great
+    // Adventures': push {r4, lr}; adds r4, r0, #0; ldr r0, =modules; lsls r1, r4, #2; adds r0, r1, r0; ldr r0, [r0];
+    // ldr r3, =modes; adds r1, r1, r3; ldr r1, [r1]; bl krapPlay; ldr r0, =volumes; adds r0, r4, r0; ldrb r0, [r0];
+    // movs r1, #0; bl krapSetMusicVol. The routine reads the table of modules at `modules`. The table of modes holds
+    // a word for each entry, and the table of volumes a byte.
+    void ModuleSettings(uint32_t modules, const std::vector<uint32_t>& modes, const std::vector<uint8_t>& volumes)
+    {
+        PutHalfwords(kPlayEntry, {0xB510, 0x1C04, 0x4807, 0x00A1, 0x1808, 0x6800, 0x4B06, 0x18C9, 0x6809});
+        PutBl(kPlayEntry + 18, kPlay);
+        PutHalfwords(kPlayEntry + 22, {0x4805, 0x1820, 0x7800, 0x2100});
+        PutBl(kPlayEntry + 30, kPlayEntry + 34);
+        Put16(kPlayEntry + 34, 0x4770);
+        Put32(kPlayEntry + 36, modules);
+        Put32(kPlayEntry + 40, kPlayTable);
+        Put32(kPlayEntry + 44, kPlayTable + 0x100);
+        for (size_t i = 0; i < modes.size(); i++)
+        {
+            Put32(kPlayTable + 4 * uint32_t(i), modes[i]);
+            Put8(kPlayTable + 0x100 + uint32_t(i), volumes[i]);
         }
     }
 
@@ -376,6 +409,7 @@ private:
     }
 
     uint32_t next_module_ = kModules;
+    size_t size_ = 0x10000;
     int listed_ = 0;
 };
 
@@ -443,6 +477,50 @@ void TestDetection()
                                      "found Krawall, but not a build that agbsf2 supports ($Id: Krawall $Id: "
                                      "version.h 8 2005-04-21 12:24:45Z seb $)");
     SEQLIB_CHECK(!found_blank && blank_error.empty());
+
+    // Franklin's Great Adventures holds the ramp's first values in other data before the player's tables. The ramp
+    // follows the sine. BFKE's ARM start-up code sets kragInit()'s argument after it loads the routine's address:
+    // ldr r3, =kragInit|1; mov r0, #0; mov lr, pc; bx r3.
+    Cart franklin;
+    franklin.Module(1, 4, {{0, 0, 49, 3, -1, -1, 0}});
+    for (uint32_t i = 0; i < 16; i++)
+    {
+        franklin.Put16(kRomBase + 0x800 + 2 * i, uint16_t(8 * i));
+    }
+    for (uint32_t i = 0; i < 6; i += 2)
+    {
+        franklin.Put16(kGameInit + i, 0);
+    }
+    franklin.Put32(kRomBase + 0x900, 0xE59F3008);
+    franklin.Put32(kRomBase + 0x904, 0xE3A00000);
+    franklin.Put32(kRomBase + 0x908, 0xE1A0E00F);
+    franklin.Put32(kRomBase + 0x90C, 0xE12FFF13);
+    franklin.Put32(kRomBase + 0x910, kInit | 1);
+
+    const DriverInfo franklin_info = Detect(franklin.ToRom());
+
+    SEQLIB_CHECK_EQ(franklin_info.ramp, kRampTable);
+    SEQLIB_CHECK_EQ(franklin_info.square, kSquareTable);
+    SEQLIB_CHECK(!franklin_info.stereo);
+    SEQLIB_CHECK(franklin_info.warnings.empty());
+
+    // Harry Potter and the Prisoner of Azkaban gives the music 12 times its options' default level of 10.
+    Cart potter;
+    potter.Module(1, 4, {{0, 0, 49, 3, -1, -1, 0}});
+    potter.PutString(kRomBase + 0xAC, "BHTE");
+
+    SEQLIB_CHECK_EQ(info.music_volume, 128);
+    SEQLIB_CHECK_EQ(Detect(potter.ToRom()).music_volume, 120);
+
+    // Shrek SuperSlam's pause calls kramSetMasterVol(0x40020), before its sound init in the ROM. The master volume is
+    // the sound init's, from the call that follows the game's call of kragInit().
+    Cart shrek;
+    shrek.Module(1, 4, {{0, 0, 49, 3, -1, -1, 0}});
+    shrek.Put16(kRomBase + 0xE0, 0x4803);
+    shrek.PutBl(kRomBase + 0xE2, kMaster);
+    shrek.Put32(kRomBase + 0xF0, 0x40020);
+
+    SEQLIB_CHECK_EQ(Detect(shrek.ToRom()).master_volume, 0x40080);
 }
 
 // The player starts a note at the rate its period gives and the volume its sample or the volume column gives, a volume
@@ -830,6 +908,91 @@ void TestSharedMidiChannel()
     }
 }
 
+// With more than 15 channels that play notes, the channels whose settings clash least share a MIDI channel, even if
+// their notes sound at once. A note ends where the mixer holds its levels at 0. Another track's expression could make
+// it sound again. A note whose levels stay 0 throughout goes. With fewer channels, a note runs on through that silence.
+void TestMidiChannelsFollowSettings()
+{
+    // Channels 1 to 14 hold notes on one key at full volume. Channels 15 and 16 hold notes on other keys at half
+    // volume. Channel 4's levels go to 0 at row 2 and channel 15's at row 4. Channel 17's stay at 0.
+    std::vector<Cell> cells;
+    for (int c = 0; c < 14; c++)
+    {
+        cells.push_back({0, c, 49, 1, 0x50});
+    }
+    cells.push_back({0, 14, 53, 1, 0x30});
+    cells.push_back({0, 15, 56, 1, 0x30});
+    cells.push_back({0, 16, 49, 1, 0x10});
+    cells.push_back({2, 3, -1, 0, 0x10});
+    cells.push_back({4, 14, -1, 0, 0x10});
+    Cart cart;
+    cart.Module(17, 6, cells);
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+    ConvertSettings opt;
+    opt.out_dir = test::g_temp.string();
+    opt.base_name = "krawall_settings";
+    Cart few;
+    few.Module(2, 6, {{0, 0, 49, 1}, {0, 1, 53, 1}, {2, 1, -1, 0, 0x10}});
+    const Rom few_rom = few.ToRom();
+    ConvertSettings few_opt = opt;
+    few_opt.base_name = "krawall_settings_few";
+
+    const SongReport report = ConvertSong(rom, info, 0, opt, nullptr);
+    const SongReport few_report = ConvertSong(few_rom, Detect(few_rom), 0, few_opt, nullptr);
+
+    SEQLIB_REQUIRE(report.ok && few_report.ok);
+    SEQLIB_CHECK(report.warnings.empty());
+    SEQLIB_CHECK_EQ(report.tracks, 16);
+    const auto note_of = [](const test::MidiEvents& midi, const std::string& name)
+    {
+        const std::vector<std::string> names = seqlib::midi::TrackNames(midi);
+        const size_t t = size_t(std::find(names.begin(), names.end(), name) - names.begin());
+        std::array<uint64_t, 3> note{0, 0, 0}; // the first note on's status, and the end of the first note
+        if (t >= midi.tracks.size())
+        {
+            return note;
+        }
+        for (const seqlib::midi::Event& e : midi.tracks[t].events)
+        {
+            if ((e.bytes[0] & 0xF0) == 0x90 && !note[0])
+            {
+                note[0] = e.bytes[0];
+            }
+            if ((e.bytes[0] & 0xF0) == 0x80 && !note[1])
+            {
+                note[1] = 1;
+                note[2] = e.tick;
+            }
+        }
+        return note;
+    };
+    const test::MidiEvents midi = ReadMidi(report.midi_path);
+    const auto first = note_of(midi, "Channel 1");
+    const auto faded = note_of(midi, "Channel 4");
+    const auto fifteenth = note_of(midi, "Channel 15");
+    const auto sixteenth = note_of(midi, "Channel 16");
+    SEQLIB_CHECK(fifteenth[0] != 0 && fifteenth[0] == sixteenth[0]);
+    SEQLIB_CHECK(first[0] != fifteenth[0]);
+    SEQLIB_CHECK_EQ(note_of(midi, "Channel 17")[0], 0u);
+    SEQLIB_CHECK(faded[2] > 0 && faded[2] < first[2]);
+
+    // Where channel 15's note ends, channel 16's note sets its expression again.
+    const std::vector<std::string> names = seqlib::midi::TrackNames(midi);
+    const size_t sharer = size_t(std::find(names.begin(), names.end(), "Channel 16") - names.begin());
+    SEQLIB_REQUIRE(sharer < midi.tracks.size());
+    int set_again = 0;
+    for (const seqlib::midi::Event& e : midi.tracks[sharer].events)
+    {
+        set_again += (e.bytes[0] & 0xF0) == 0xB0 && e.bytes[1] == 11 && e.tick == fifteenth[2] ? 1 : 0;
+    }
+    SEQLIB_CHECK(fifteenth[2] > 0 && fifteenth[2] < sixteenth[2]);
+    SEQLIB_CHECK_EQ(set_again, 1);
+
+    const test::MidiEvents few_midi = ReadMidi(few_report.midi_path);
+    SEQLIB_CHECK_EQ(note_of(few_midi, "Channel 2")[2], note_of(few_midi, "Channel 1")[2]);
+}
+
 // --dump lists the header, the orders and the rows, --trace gives the records that change each frame, and Music names
 // Krawall.
 void TestMusic()
@@ -979,6 +1142,231 @@ void TestPlayTableModeZero()
     SEQLIB_CHECK_EQ(ReadMidi(first.midi_path).Find(0x90).size(), 1u);
 }
 
+// Franklin's Great Adventures plays each entry of its table of modules in the mode and at the music volume of its
+// tables. Its start-up code copies the table of modules to RAM. The entry that repeats one is left out. The player
+// sets the music volume after it starts the module, as krapSetMusicVol() does.
+void TestModuleSettings()
+{
+    Cart cart;
+    const uint32_t looped = cart.Module(1, 4, {{0, 0, 49, 1}});
+    const uint32_t once = cart.Module(1, 4, {{0, 0, 49, 1}});
+    cart.Put32(kModuleTable + 8, looped);
+    cart.ModuleSettings(0x03006050, {kModeLoop, 0, kModeLoop}, {90, 70, 90});
+    Cart bad;
+    bad.Module(1, 4, {{0, 0, 49, 1}});
+    bad.ModuleSettings(kModuleTable, {8}, {90});
+    const Rom rom = cart.ToRom();
+    const DriverInfo info = Detect(rom);
+    const DriverInfo bad_info = Detect(bad.ToRom());
+    SEQLIB_REQUIRE(info.songs.size() == 2);
+    const Player player(rom, info, info.songs[0]);
+    const Player full(rom, info, looped);
+
+    SEQLIB_CHECK(info.songs == (std::vector<ModuleSong>{{looped, -1, false, kModeLoop, 90}, {once, -1, false, 0, 70}}));
+    SEQLIB_CHECK(std::find(info.log.begin(), info.log.end(),
+                           "the game's routine at 0x08000380 plays each module in the mode of the table at "
+                           "0x08002800 and at the music volume of the table at 0x08002900") != info.log.end());
+    SEQLIB_CHECK(std::find(info.log.begin(), info.log.end(), "songs whose mode doesn't loop: 1") != info.log.end());
+    SEQLIB_CHECK_EQ(player.Globals()[8], 90);
+    SEQLIB_CHECK_EQ(full.Globals()[8], 128);
+    SEQLIB_CHECK_EQ(player.Globals()[0] * 128, full.Globals()[0] * 90);
+    SEQLIB_CHECK(bad_info.songs == (std::vector<ModuleSong>{{bad_info.modules[0], -1, false}}));
+}
+
+// Care Bears: Care Quest plays song 1 of its module at 0x08360B0C at a music volume of 64, and song 2 once, in the song
+// mode. Franklin the Turtle plays its module at 0x08335F60 only as a jingle. The Koala Brothers plays its music at 64,
+// The Lord of the Rings: The Third Age at 153, Crash of the Titans at 96 and Digimon Racing at 180. A piece that no
+// row names keeps the mode that the song and jingle give and the game's music volume.
+void TestSongSettings()
+{
+    Cart bears;
+    bears.PutString(kRomBase + 0xAC, "BEAE");
+    const uint32_t module =
+        bears.Module(1, {{4, {{0, 0, 49, 1}}}, {4, {{0, 0, 49, 1}}}, {4, {{0, 0, 49, 1}}}}, true, 0x08360B0C);
+    bears.Songs(module, {{0}, {1}, {2}});
+    Cart franklin;
+    franklin.PutString(kRomBase + 0xAC, "BFKE");
+    const uint32_t piece = franklin.Module(1, 4, {{0, 0, 49, 1}}, true, 0x08334368);
+    const uint32_t jingle = franklin.Module(1, 4, {{0, 0, 49, 1}}, true, 0x08335F60);
+    const uint32_t other = franklin.Module(1, 4, {{0, 0, 49, 1}});
+    Cart koalas;
+    koalas.PutString(kRomBase + 0xAC, "BAKE");
+    koalas.Module(1, 4, {{0, 0, 49, 1}});
+    Cart third_age;
+    third_age.PutString(kRomBase + 0xAC, "B3AE");
+    third_age.Module(1, 4, {{0, 0, 49, 1}});
+    Cart crash;
+    crash.PutString(kRomBase + 0xAC, "BQCE");
+    crash.Module(1, 4, {{0, 0, 49, 1}});
+    Cart digimon;
+    digimon.PutString(kRomBase + 0xAC, "BDGE");
+    digimon.Module(1, 4, {{0, 0, 49, 1}});
+    Cart digimon_japan;
+    digimon_japan.PutString(kRomBase + 0xAC, "BDJJ");
+    digimon_japan.Module(1, 4, {{0, 0, 49, 1}});
+    const Rom rom = bears.ToRom();
+    const DriverInfo info = Detect(rom);
+    const DriverInfo franklin_info = Detect(franklin.ToRom());
+    SEQLIB_REQUIRE(info.songs.size() == 3);
+    const Player first(rom, info, info.songs[0]);
+    const Player second(rom, info, info.songs[1]);
+    ConvertSettings opt;
+    opt.out_dir = test::g_temp.string();
+    opt.base_name = "krawall_song_settings";
+
+    const SongReport once = ConvertSong(rom, info, 2, opt, nullptr);
+
+    SEQLIB_CHECK(info.songs ==
+                 (std::vector<ModuleSong>{{module, 0}, {module, 1, false, -1, 64}, {module, 2, false, kModeSong}}));
+    const auto logged = [&info](const std::string& line)
+    {
+        return std::find(info.log.begin(), info.log.end(), line) != info.log.end();
+    };
+    SEQLIB_CHECK(logged("the game plays song 1 at a music volume of 64"));
+    SEQLIB_CHECK(logged("the game plays song 2 in mode 2"));
+    SEQLIB_CHECK_EQ(first.Globals()[8], 128);
+    SEQLIB_CHECK_EQ(second.Globals()[8], 64);
+    SEQLIB_CHECK_EQ(second.Globals()[0] * 128, first.Globals()[0] * 64);
+    SEQLIB_REQUIRE(once.ok);
+    SEQLIB_CHECK(once.loop_start < 0 && once.loop_end < 0);
+    SEQLIB_CHECK(
+        franklin_info.songs ==
+        (std::vector<ModuleSong>{{piece, -1, false, -1, 64}, {jingle, -1, false, kModeJingle}, {other, -1, false}}));
+    SEQLIB_CHECK_EQ(Detect(koalas.ToRom()).music_volume, 64);
+    SEQLIB_CHECK_EQ(Detect(third_age.ToRom()).music_volume, 153);
+    SEQLIB_CHECK_EQ(Detect(crash.ToRom()).music_volume, 96);
+    SEQLIB_CHECK_EQ(Detect(digimon.ToRom()).music_volume, 180);
+    SEQLIB_CHECK_EQ(Detect(digimon_japan.ToRom()).music_volume, 180);
+
+    // The other releases of the games with rows.
+    const auto release = [](const char* game_code)
+    {
+        Cart cart;
+        cart.PutString(kRomBase + 0xAC, game_code);
+        cart.Module(1, 4, {{0, 0, 49, 1}});
+        return Detect(cart.ToRom());
+    };
+    SEQLIB_CHECK_EQ(release("BENP").music_volume, 161);
+    SEQLIB_CHECK_EQ(release("BHTJ").music_volume, 120);
+    SEQLIB_CHECK_EQ(release("BJKP").music_volume, 128);
+    SEQLIB_CHECK_EQ(release("BJKP").music_fade_in, 2);
+    SEQLIB_CHECK_EQ(release("BAKP").music_volume, 64);
+    SEQLIB_CHECK_EQ(release("B3AJ").music_volume, 153);
+    SEQLIB_CHECK_EQ(release("BQCP").music_volume, 96);
+    SEQLIB_CHECK_EQ(release("BDGP").music_volume, 180);
+    for (const char* game_code : {"B63P", "BCZE"})
+    {
+        const DriverInfo modified = release(game_code);
+        SEQLIB_CHECK(modified.stereo);
+        SEQLIB_CHECK_EQ(modified.quality, 0x21);
+    }
+    SEQLIB_CHECK_EQ(release("B63P").music_volume, 100);
+    SEQLIB_CHECK_EQ(release("BCZE").music_volume, 64);
+    const std::pair<const char*, uint32_t> kEurope[] = {
+        {"B4MP", 64}, {"BBAP", 60}, {"BKFX", 64}, {"BU5P", 80}, {"BU7P", 85}, {"BUIP", 48}, {"BUQP", 80},
+    };
+    for (const auto& [code, volume] : kEurope)
+    {
+        SEQLIB_CHECK_EQ(release(code).music_volume, volume);
+    }
+    SEQLIB_CHECK_EQ(int(release("BU7P").quality), 1);
+
+    Cart bears_europe;
+    bears_europe.PutString(kRomBase + 0xAC, "BEAP");
+    const uint32_t bears_module = bears_europe.Module(
+        1, {{4, {{0, 0, 49, 1}}}, {4, {{0, 0, 49, 1}}}, {4, {{0, 0, 49, 1}}}, {4, {{0, 0, 49, 1}}}}, true, 0x08361B28);
+    bears_europe.Songs(bears_module, {{0}, {1}, {2}, {3}});
+    SEQLIB_CHECK(Detect(bears_europe.ToRom()).songs == (std::vector<ModuleSong>{{bears_module, 0},
+                                                                                {bears_module, 1, false, -1, 64},
+                                                                                {bears_module, 2},
+                                                                                {bears_module, 3, false, kModeSong}}));
+    for (const uint32_t revision_jingle : {0x08331178u, 0x08336D64u, 0x08335F60u})
+    {
+        Cart franklin_europe;
+        franklin_europe.PutString(kRomBase + 0xAC, "BFKP");
+        const uint32_t jingle_europe = franklin_europe.Module(1, 4, {{0, 0, 49, 1}}, true, revision_jingle);
+        SEQLIB_CHECK(Detect(franklin_europe.ToRom()).songs ==
+                     (std::vector<ModuleSong>{{jingle_europe, -1, false, kModeJingle}}));
+    }
+    for (const uint32_t revision_piece : {0x0832F580u, 0x0833516Cu, 0x08334368u})
+    {
+        Cart franklin_europe;
+        franklin_europe.PutString(kRomBase + 0xAC, "BFKP");
+        const uint32_t piece_europe = franklin_europe.Module(1, 4, {{0, 0, 49, 1}}, true, revision_piece);
+        SEQLIB_CHECK(Detect(franklin_europe.ToRom()).songs ==
+                     (std::vector<ModuleSong>{{piece_europe, -1, false, -1, 64}}));
+    }
+
+    // The music volumes that the games' code sets.
+    const std::pair<const char*, uint32_t> volumes[] = {
+        {"B2WE", 254}, {"B3UE", 96}, {"B46E", 180}, {"B4ME", 64}, {"B8QE", 140}, {"BBAE", 60}, {"BC4E", 96},
+        {"BJXE", 80},  {"BKFE", 64}, {"BU5E", 80},  {"BU7E", 85}, {"BUIE", 48},  {"BUQE", 80}, {"BXPE", 77},
+    };
+    for (const auto& [code, volume] : volumes)
+    {
+        Cart game;
+        game.PutString(kRomBase + 0xAC, code);
+        game.Module(1, 4, {{0, 0, 49, 1}});
+        SEQLIB_CHECK_EQ(Detect(game.ToRom()).music_volume, volume);
+    }
+    Cart spyro;
+    spyro.PutString(kRomBase + 0xAC, "BU7E");
+    spyro.Module(1, 4, {{0, 0, 49, 1}});
+    SEQLIB_CHECK_EQ(int(Detect(spyro.ToRom()).quality), 1);
+
+    // The Bee Game plays its modules in the song mode.
+    Cart bee;
+    bee.PutString(kRomBase + 0xAC, "BKFE");
+    const uint32_t bee_module = bee.Module(1, 4, {{0, 0, 49, 1}}, true, 0x08380B3C);
+    SEQLIB_CHECK(Detect(bee.ToRom()).songs == (std::vector<ModuleSong>{{bee_module, -1, false, kModeSong}}));
+    Cart bee_europe;
+    bee_europe.PutString(kRomBase + 0xAC, "BKFX");
+    const uint32_t bee_europe_module = bee_europe.Module(1, 4, {{0, 0, 49, 1}}, true, 0x0837B0D4);
+    SEQLIB_CHECK(Detect(bee_europe.ToRom()).songs ==
+                 (std::vector<ModuleSong>{{bee_europe_module, -1, false, kModeSong}}));
+
+    // Postman Pat's table gives each entry of the game's table of modules a music volume.
+    Cart pat;
+    pat.PutString(kRomBase + 0xAC, "BROP");
+    const uint32_t pat_first = pat.Module(1, 4, {{0, 0, 49, 1}});
+    const uint32_t pat_second = pat.Module(1, 4, {{0, 0, 49, 1}});
+    pat.Resize(0x40000);
+    pat.Put8(0x08032C48, 128);
+    pat.Put8(0x08032C49, 90);
+    SEQLIB_CHECK(Detect(pat.ToRom()).songs ==
+                 (std::vector<ModuleSong>{{pat_first, -1, false, -1, 128}, {pat_second, -1, false, -1, 90}}));
+}
+
+// Cocoto Kart Racer plays its module at 0x0826181C at a music volume of 100. Cocoto Platform Jumper plays its module at
+// 0x0802DE90 at 73. A piece that no row names keeps the game's music volume, and a row counts only for its game.
+void TestCocotoSongSettings()
+{
+    Cart kart;
+    kart.PutString(kRomBase + 0xAC, "BC5P");
+    const uint32_t race = kart.Module(1, 4, {{0, 0, 49, 1}}, true, 0x0826181C);
+    const uint32_t menu = kart.Module(1, 4, {{0, 0, 49, 1}});
+    Cart jumper;
+    jumper.PutString(kRomBase + 0xAC, "BC8P");
+    const uint32_t level = jumper.Module(1, 4, {{0, 0, 49, 1}}, true, 0x0802DE90);
+    Cart other;
+    other.PutString(kRomBase + 0xAC, "ZZZZ");
+    const uint32_t same_place = other.Module(1, 4, {{0, 0, 49, 1}}, true, 0x0802DE90);
+    const Rom rom = kart.ToRom();
+    const DriverInfo info = Detect(rom);
+    SEQLIB_REQUIRE(info.songs.size() == 2);
+
+    SEQLIB_CHECK(info.songs == (std::vector<ModuleSong>{{race, -1, false, -1, 100}, {menu, -1, false}}));
+    SEQLIB_CHECK(Detect(jumper.ToRom()).songs == (std::vector<ModuleSong>{{level, -1, false, -1, 73}}));
+    SEQLIB_CHECK(Detect(other.ToRom()).songs == (std::vector<ModuleSong>{{same_place, -1, false}}));
+    SEQLIB_CHECK(std::find(info.log.begin(), info.log.end(), "the game plays song 0 at a music volume of 100") !=
+                 info.log.end());
+    const Player raced(rom, info, info.songs[0]);
+    const Player unlisted(rom, info, info.songs[1]);
+    SEQLIB_CHECK_EQ(raced.Globals()[8], 100);
+    SEQLIB_CHECK_EQ(unlisted.Globals()[8], 128);
+    SEQLIB_CHECK_EQ(raced.Globals()[0] * 128, unlisted.Globals()[0] * 100);
+}
+
 // A sample of 20 points that loops forwards over its last 6 gets its loop repeated 6 times: 36 points, the first length
 // of kMinLoop points or more.
 void TestShortLoop()
@@ -1015,11 +1403,15 @@ void RunTests()
     TestLoopStartsAtSecondPass();
     TestManyChannels();
     TestSharedMidiChannel();
+    TestMidiChannelsFollowSettings();
     TestMusic();
     TestJingles();
     TestLoopingJingleMode();
     TestPlayTable();
     TestPlayTableModeZero();
+    TestModuleSettings();
+    TestSongSettings();
+    TestCocotoSongSettings();
     TestShortLoop();
 }
 

@@ -23,7 +23,6 @@
 
 #include "beat_grid.h"
 #include "files.h"
-#include "inflate.h"
 #include "music.h"
 #include "rom.h"
 #include "sf2.h"
@@ -118,56 +117,6 @@ void WriteGsf(const fs::path& path, uint32_t address, const std::vector<uint8_t>
     }
 
     std::ofstream(path, std::ios::binary).write(reinterpret_cast<const char*>(f.data()), std::streamsize(f.size()));
-}
-
-void TestInflate()
-{
-    static const uint8_t kStored[] = {0x78, 0x01, 0x01, 0x15, 0x00, 0xEA, 0xFF, 0x47, 0x42, 0x41, 0x20,
-                                      0x73, 0x6F, 0x75, 0x6E, 0x64, 0x20, 0x64, 0x72, 0x69, 0x76, 0x65,
-                                      0x72, 0x20, 0x74, 0x65, 0x73, 0x74, 0x4E, 0xB2, 0x07, 0xA0};
-    static const uint8_t kFixed[] = {0x78, 0x01, 0x73, 0x77, 0x72, 0x54, 0x28, 0xCE, 0x2F, 0xCD,
-                                     0x4B, 0x51, 0x48, 0x29, 0xCA, 0x2C, 0x4B, 0x2D, 0x52, 0x28,
-                                     0x49, 0x2D, 0x2E, 0x01, 0x00, 0x4E, 0xB2, 0x07, 0xA0};
-    static const uint8_t kDynamic[] = {
-        0x78, 0xDA, 0x4D, 0xCD, 0x41, 0x0E, 0x80, 0x30, 0x08, 0x04, 0xC0, 0xAF, 0xEC, 0xD7, 0x6A, 0xE5, 0x60,
-        0x6C, 0x0B, 0x51, 0xE2, 0xFB, 0x8D, 0x0B, 0x89, 0x5C, 0x08, 0x81, 0x61, 0x59, 0xEA, 0x02, 0xBF, 0x5A,
-        0x3F, 0x71, 0xB7, 0x69, 0x43, 0xF0, 0xE8, 0xD1, 0x05, 0x43, 0xD5, 0xE0, 0x32, 0x4D, 0xB1, 0x3E, 0xB2,
-        0xC9, 0xDA, 0xD3, 0x05, 0x48, 0xCD, 0x25, 0x31, 0x3B, 0x96, 0x38, 0xE3, 0x45, 0x0D, 0xAB, 0x4F, 0x4A,
-        0x26, 0x71, 0x38, 0x4E, 0x53, 0x04, 0xFF, 0x93, 0x4B, 0x5C, 0x88, 0x17, 0x22, 0x42, 0x44, 0xB8};
-    const std::string kText = "GBA sound driver test";
-    const std::string kWords =
-        "note track sample voice loop tempo note bend track voice sample note loop note note tempo bend voice loop "
-        "track sample note bend tempo voice note sample track loop note bend voice sample";
-
-    // A dynamic block holding "A", with a distance code that no symbol uses: a single code, one bit long.
-    static const uint8_t kOneBitDistance[] = {0x78, 0x01, 0x05, 0xC0, 0x01, 0x09, 0x00, 0x00, 0x00, 0x80,
-                                              0xA0, 0x6D, 0xFE, 0x3F, 0xA5, 0x02, 0x00, 0x42, 0x00, 0x42};
-
-    std::vector<uint8_t> out;
-    std::string err;
-
-    SEQLIB_CHECK(ZlibDecompress(kStored, sizeof kStored, out, err));
-    SEQLIB_CHECK(std::string(out.begin(), out.end()) == kText);
-    SEQLIB_CHECK(ZlibDecompress(kFixed, sizeof kFixed, out, err));
-    SEQLIB_CHECK(std::string(out.begin(), out.end()) == kText);
-    SEQLIB_CHECK(ZlibDecompress(kDynamic, sizeof kDynamic, out, err));
-    SEQLIB_CHECK(std::string(out.begin(), out.end()) == kWords);
-
-    std::vector<uint8_t> bad(kDynamic, kDynamic + sizeof kDynamic);
-    bad.back() ^= 1; // Adler-32 mismatch
-
-    SEQLIB_CHECK(!ZlibDecompress(bad.data(), bad.size(), out, err));
-    SEQLIB_CHECK(!ZlibDecompress(kDynamic, 20, out, err));                  // truncated
-    SEQLIB_CHECK(!ZlibDecompress(kDynamic, sizeof kDynamic - 4, out, err)); // no Adler-32
-
-    // A single code that doesn't fill its code space has to be one bit long, as zlib and puff require. The same block
-    // with a distance code of two bits is corrupt.
-    std::vector<uint8_t> two_bit(kOneBitDistance, kOneBitDistance + sizeof kOneBitDistance);
-    two_bit[14] = 0x65;
-
-    SEQLIB_CHECK(ZlibDecompress(kOneBitDistance, sizeof kOneBitDistance, out, err));
-    SEQLIB_CHECK(std::string(out.begin(), out.end()) == "A");
-    SEQLIB_CHECK(!ZlibDecompress(two_bit.data(), two_bit.size(), out, err));
 }
 
 void TestSf2Writer()
@@ -346,7 +295,8 @@ void TestNoDriver()
     SEQLIB_CHECK(all == any && all_mp2k == mp2k);
     SEQLIB_CHECK(
         any ==
-        "no Konami, Rare, Quintet, Nintendo R&D2, Brownie Brown, Ubisoft Milan, Krawall or MP2K sound driver found: "
+        "no Konami, Rare, Quintet, Nintendo R&D1, Nintendo R&D2, AlphaDream, Brownie Brown, Ubisoft Milan, Krawall "
+        "or MP2K sound driver found: "
         "this game's music uses another engine, or a driver version that agbsf2 doesn't support");
     SEQLIB_CHECK(konami ==
                  "no Konami sound driver found: this game's music uses another engine, or a driver version "
@@ -721,7 +671,6 @@ int Run()
     }
 
     TestFileNames();
-    TestInflate();
     TestSf2Writer();
     TestGsfLoading();
     TestNoDriver();
@@ -744,6 +693,8 @@ int Run()
     brownie::RunTests();
     krawall::RunTests();
     ubimilan::RunTests();
+    rd1::RunTests();
+    alphadream::RunTests();
 
     std::error_code ec;
     fs::remove_all(g_temp, ec);

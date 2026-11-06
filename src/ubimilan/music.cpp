@@ -51,6 +51,12 @@ public:
         return true;
     }
 
+    // A song that the game starts with channel 9's kit switched off has a second version with the kit.
+    std::vector<SongVersion> Versions(int song) const override
+    {
+        return SongVersions(info_, song);
+    }
+
     // The report gives the address of the song's piece of music. Only InspectSong() gives a song's address.
     SongReport InspectSong(int song, const ConvertSettings& settings) const override
     {
@@ -86,11 +92,11 @@ public:
         return ubimilan::DumpSong(rom_, info_, song, path, error);
     }
 
-    // Writes the model's state after each frame: the frame's writes to the PSG's registers, the track, and each voice
-    // that the mixer plays.
+    // Writes the model's state after each frame of the song's first version: the frame's writes to the PSG's registers,
+    // the track, and each voice that the mixer plays.
     bool Trace(int song, long long frames, std::FILE* out, std::vector<std::string>& warnings) const override
     {
-        Sequencer seq(rom_, info_, song);
+        Sequencer seq(rom_, info_, song, KitPlays(info_, song, 0));
         if (!seq.Valid())
         {
             return false;
@@ -140,10 +146,10 @@ std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std
     ov.song_count = overrides.song_count;
 
     // Without --driver ubimilan, a game whose code doesn't have the driver isn't taken to have it, whatever sound bank
-    // it's given.
+    // it's given. The error for a game with the older build stays.
     DriverInfo info;
     const bool found = DetectDriver(rom, ov, info, error);
-    if (!info.step_routine && overrides.driver != Driver::kUbiMilan)
+    if (!info.step_routine && !info.older_bank && overrides.driver != Driver::kUbiMilan)
     {
         error.clear();
         return nullptr;

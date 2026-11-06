@@ -43,6 +43,15 @@ def listed(tool, driver_name, rom_path):
     return [(int(n), int(a, 16)) for n, a in re.findall(r'^\s+(\d+)\s+0x([0-9A-F]{8})', text, re.MULTILINE)]
 
 
+def listed_versions(tool, driver_name, rom_path):
+    """Returns the number and name of each version of a song after its first that `agbsf2 --info` lists: a line of the
+    song list whose name follows the loop in brackets."""
+    text = subprocess.run([tool, '--driver', driver_name, '--info', rom_path], capture_output=True, encoding='utf-8',
+                          check=True).stdout
+    lines = re.findall(r'^\s+(\d+)\s+0x[0-9A-F]{8}\s.*\(([^()]+)\)$', text, re.MULTILINE)
+    return [(int(n), name) for n, name in lines]
+
+
 def listed_songs(tool, driver_name, rom_path):
     """Returns the numbers of the songs that `agbsf2 --info` lists. Exits if the list is empty."""
     songs = [n for n, _ in listed(tool, driver_name, rom_path)]
@@ -83,11 +92,11 @@ def first_difference(driver, model, context=0):
 
 
 def compare_all(compare, jobs, workers):
-    """Returns compare(job) for each job, in order. With more than one worker, that many jobs run at once."""
-    if workers > 1:
-        with multiprocessing.Pool(workers) as pool:
-            return pool.map(compare, jobs)
-    return [compare(job) for job in jobs]
+    """Returns compare(job) for each job, in order. `workers` jobs run at once. Each job runs in a fresh process. A job's
+    traces and emulator can stay in memory until its process ends: 13 modules in one process reached 4 GB, where the
+    largest takes 1.5 GB alone."""
+    with multiprocessing.Pool(workers, maxtasksperchild=1) as pool:
+        return pool.map(compare, jobs, chunksize=1)
 
 
 def report(songs, results, label, units, frames):

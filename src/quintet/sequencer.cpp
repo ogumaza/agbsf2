@@ -328,7 +328,7 @@ void Sequencer::ResetPsg()
     image_[kNr50] = 0xFF77;
     image_[kSoundcntH] = 0x730E;
     shadow_ = image_;
-    Write(kSoundbias, 2, (soundbias_ & 0x3FFF) | 0x4000);
+    Write(kSoundbias, 2, (soundbias_ & 0x3FFF) | uint32_t(traits_.soundbias_resolution) << 14);
 }
 
 void Sequencer::ReadNotes(int c)
@@ -348,23 +348,45 @@ void Sequencer::ReadNotes(int c)
             return;
         }
 
-        // A note's low nibble is its pitch, or 12 to play again or 13 to rest, and its high nibble picks its length.
+        // A note's low nibble is its pitch, or 12 to play again or 13 to rest, and its high nibble picks its length. In
+        // the S revision, a note's first byte gives the pitch and its second the note value.
         const uint8_t b = rom_.U8(ch.position++);
-        const int note = b & 15;
-        const int length = b >> 4;
-        if (note > 13 || length > 12)
+        int note = b & 15;
+        int value = 0;
+        if (traits_.byte_notes)
         {
-            RunCommand(c, b);
-            continue;
+            if (b >= kFirstCommandS)
+            {
+                ch.position += b == kSkipByteS ? 1 : 0;
+                RunCommand(c, CommandOfS(b));
+                continue;
+            }
+
+            note = b <= 11 ? b : b == kPlayAgainS ? 12 : b == kRestS ? 13 : -1;
+            value = rom_.U8(ch.position++);
+        }
+        else
+        {
+            const int length = b >> 4;
+            if (note > 13 || length > 12)
+            {
+                RunCommand(c, b);
+                continue;
+            }
+
+            value = rom_.U8(info_.length_table + uint32_t(length));
         }
 
         // A note, a "play again" or a rest: its start, its length with any dot and ties, the effects, the event and the
-        // wait for the next note.
+        // wait for the next note. A note of the S revision that only waits has no event.
         StartNote(c, note);
-        const uint16_t ticks = NoteTicks(ch, note, length);
+        const uint16_t ticks = NoteTicks(ch, b, value);
         RestartEffects(ch, note);
-        const Event::Kind kind = note <= 11 ? Event::kNote : note == 12 ? Event::kPlayAgain : Event::kRest;
-        AddEvent(c, kind, NoteIndex(ch, note, c >= kPcmA ? kPcmPitchEntries : kFrequencyEntries));
+        if (note >= 0)
+        {
+            const Event::Kind kind = note <= 11 ? Event::kNote : note == 12 ? Event::kPlayAgain : Event::kRest;
+            AddEvent(c, kind, NoteIndex(ch, note, c >= kPcmA ? kPcmPitchEntries : kFrequencyEntries));
+        }
         ticks_[size_t(c)] += ticks;
         WaitTicks(ch, ticks);
         return;
@@ -420,7 +442,7 @@ void Sequencer::StartNote(int c, int note)
     const bool pcm = c >= kPcmA;
     ch.sounding = 1;
     ch.sliding = 0;
-    if (note <= 11)
+    if (note >= 0 && note <= 11)
     {
         // After D4 the note slides from the pitch of the note before.
         const uint16_t before = ch.pitch;
@@ -448,7 +470,7 @@ void Sequencer::StartNote(int c, int note)
             PcmNoteOn(c);
         }
     }
-    else
+    else if (note == 13)
     {
         ch.level = 0;
         ch.sounding = 0;
@@ -461,27 +483,44 @@ void Sequencer::StartNote(int c, int note)
     ch.slide_next = 0;
 }
 
-uint16_t Sequencer::NoteTicks(Channel& ch, int note, int length)
+uint16_t Sequencer::NoteTicks(Channel& ch, uint8_t first, int value)
 {
-    // D1 makes the note dotted. D4 followed by a note of the same pitch ties another length to it. The driver adds the
-    // lengths up in the channel's countdown. The countdown is a halfword.
-    uint16_t ticks = uint16_t(Divide(kWholeNote, rom_.U8(info_.length_table + uint32_t(length))));
-    if (rom_.U8(ch.position) == 0xD1)
+    // D1 makes the note dotted. D4 followed by a note of the same pitch ties another length to it: in the S revision,
+    // a note with the same first byte. The driver adds the lengths up in the channel's countdown. The countdown is a
+    // halfword.
+    const uint8_t dot = traits_.byte_notes ? kDotS : 0xD1;
+    const uint8_t tie = traits_.byte_notes ? kTieS : 0xD4;
+    uint16_t ticks = uint16_t(Divide(kWholeNote, value));
+    if (rom_.U8(ch.position) == dot)
     {
         ch.position++;
         ticks = uint16_t(ticks + Half(int16_t(ticks)));
     }
-    while (rom_.U8(ch.position) == 0xD4)
+    while (rom_.U8(ch.position) == tie)
     {
         const uint8_t next = rom_.U8(ch.position + 1);
-        if ((next & 15) != note || (next >> 4) > 12)
+        int32_t add = 0;
+        if (traits_.byte_notes)
         {
-            break;
-        }
+            if (next != first)
+            {
+                break;
+            }
 
-        int32_t add = Divide(kWholeNote, rom_.U8(info_.length_table + uint32_t(next >> 4)));
-        ch.position += 2;
-        if (rom_.U8(ch.position) == 0xD1)
+            add = Divide(kWholeNote, rom_.U8(ch.position + 2));
+            ch.position += 3;
+        }
+        else
+        {
+            if ((next & 15) != (first & 15) || (next >> 4) > 12)
+            {
+                break;
+            }
+
+            add = Divide(kWholeNote, rom_.U8(info_.length_table + uint32_t(next >> 4)));
+            ch.position += 2;
+        }
+        if (rom_.U8(ch.position) == dot)
         {
             ch.position++;
             add += Half(add);
@@ -866,7 +905,7 @@ void Sequencer::UpdateImage(int c)
     case kSquare1:
     case kSquare2:
         {
-            const int step = ch.sounding ? ch.envelope_step : 0;
+            const int step = ch.sounding || !traits_.rest_clears_step ? ch.envelope_step : 0;
             if (c == kSquare1)
             {
                 image_[kNr10] = uint16_t(ch.sweep_shift | ch.sweep_down << 3 | ch.sweep_time << 4);
@@ -1523,9 +1562,10 @@ void Sequencer::LoadSample(int f, uint32_t sample)
         return;
     }
 
-    // A sample's header holds its size, header included, and its rate. The driver plays 64 bytes fewer, less 0.6%.
+    // A sample's header holds its size, header included, and its rate. The driver plays 64 bytes fewer, less 0.6%: 256
+    // bytes fewer in the S revision.
     const uint32_t size = rom_.U32(sample);
-    const uint32_t length = DivideUnsigned((size - 0x40) * 994, 1000);
+    const uint32_t length = DivideUnsigned((size - traits_.sample_trim) * 994, 1000);
     fifo.end = length;
     fifo.length = length;
     fifo.base_rate = rom_.U16(sample + 4);
@@ -1560,7 +1600,8 @@ void Sequencer::SetRate(uint16_t pitch, int f)
 
 void Sequencer::SetRange(int start, int end, int loop, int f)
 {
-    // E7 plays the part of the sample from `start`% to `end`%, then loops back to `loop`% unless that's the end.
+    // E7 plays the part of the sample from `start`% to `end`%, then loops back to `loop`% unless that's the end. The S
+    // revision loops back there too.
     Fifo& fifo = fifos_[size_t(f)];
     if (start == 0 && end == 0 && loop == 0)
     {
@@ -1577,7 +1618,7 @@ void Sequencer::SetRange(int start, int end, int loop, int f)
     fifo.loop_position = back * 60;
     fifo.end = to;
     fifo.next_start = fifo.sample + from;
-    fifo.loop = loop != end ? fifo.sample + back : 0;
+    fifo.loop = loop != end || traits_.range_end_loops ? fifo.sample + back : 0;
 }
 
 void Sequencer::StartFifo(uint32_t data, int f)

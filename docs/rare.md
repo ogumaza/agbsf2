@@ -505,10 +505,24 @@ The mixer gives each voice a level from 0 to 128:
 Each step is truncated, so the level is linear in the volume, the velocity and
 the envelope, and a note at full volume and velocity has a level of 128.
 
-The init sets the music volume to 128. *Donkey Kong Country 3*'s code sets it
-again after it requests a tune, through a routine at `0x080AF270`. Most tunes
-play at a music volume of 69. `agbsf2` models every tune of that game at
-69.
+The init sets the music volume to 128. Most games set it again after they
+request a tune. The level scales every note of the tune alike. `agbsf2` holds
+the volume at which each listed game starts each tune, with its options as
+they start, and gives every channel of the tune's MIDI file that volume as
+expression. Expression can't go above 127. A volume above 128 plays at 128.
+
+| Game | Music volume |
+|---|---|
+| *Donkey Kong Country* (`A5NE`) | 0x7F for most tunes, from the game's calls of the setter at `0x08032734`. The level music comes from the switch at `0x0801B08C`, at 0x7F, and at 0x96 for tune 25. After tune 21 ends, `0x080003D0` starts tune 22 at 0x8C, and then plays it again at 0x7F. `agbsf2` takes 0x8C. Tune 24 starts at 0x8C, tune 33 at 0x5A, tune 3 at 0x73, tunes 5 and 13 at 0x69, tune 18 at 0x77, and tunes 26, 27, 29 to 32 and 34 at 0x6E. The sound test plays every tune at 0x7F. |
+| *Donkey Kong Country 2* (`B2DE`) | `0x08027B88` gives each tune a volume from 0x50 to 0x7F and multiplies it by the options' music level / 256. The options start at 0xB3 (`0x08020B42`), and the tunes at 55 to 88. |
+| *Donkey Kong Country 3* (`BDQE`) | `0x08085B98` gives tune 2 a volume of 40, tunes 3 and 4 80 and the rest 70, times the options' music level / 256. `0x0807ADDC` sets the level from the music slider: the slider × 25.5, rounded down. At boot the slider is at 10, a level of 255. The tunes then start at 39, 79 and 69. The options' reset at `0x080A3BA8` sets the level to 256. After boot, the level is still 255 when the first tune starts. The setter is at `0x080AF270`. |
+| *Sabre Wulf* (`AWUE`) | 0x7F for most tunes. Tunes 5, 7 and 35 start at 0x50 and tune 29 at 0x3C. The game's scripts start tunes through their table at `0x0828A40C`: tunes 2 and 1 at 0x50, the others at 0x7F. A new game's intro starts tune 1 from a script at 0x50, before `0x080279DE` starts it at 0x7F. `agbsf2` takes 0x50. The level-music switch at `0x08016170` starts tune 2 at 0x7F in seven levels. Tune 4 starts at 0x7F at `0x08012534` and from the scripts, and at 0x50 at `0x08068852`. Nobody has found which start of tunes 2, 4, 5 and 7 comes first in normal play. `agbsf2` takes the volume that more of their starts give: 0x7F for tunes 2 and 4, and 0x50 for tunes 5 and 7. |
+| *Banjo-Pilot* (`BAJE`) | `0x08016094` starts a tune at the options' music level × 100 / 256, and `0x080300A4` at the level × 127 / 256. The options start at 0x80: 50 and 63. Tunes 24 to 26 and 28 to 30 start through the second, and the rest at 50. Tune 3 starts through both. `agbsf2` takes 50. |
+| *Banjo-Kazooie: Grunty's Revenge* (`BKZX`) | The options' music level runs from 0 to 9 and starts at 4 (`0x08040C96`). The table at `0x080BF604` gives it a volume of 56, for every tune. |
+| *It's Mr. Pants* (`BPIE`) | The init's 128. The game doesn't set it. |
+
+A game or build that isn't listed plays at 128, except in *Donkey Kong
+Country 3*'s revision, where it plays at 69.
 
 ### Voices
 
@@ -520,8 +534,9 @@ frame. Note slots are in channel order, so when more than 8 voices play, the
 mixer leaves out released notes before notes that are on, and notes on higher
 channels before those on lower ones. In *Donkey Kong Country 3*'s revision, a
 note whose level is 0 before its velocity and envelope count isn't mixed and
-doesn't count towards the limit. At a music volume of 69, that's every note of
-a channel at volume 0.
+doesn't count towards the limit. At *Donkey Kong Country 3*'s music volume of
+69, that's every note of a channel at volume 0. At tune 2's 39, it's every note
+of a channel at volume 2 or less.
 So is every note of a channel that the game holds at a level of 0 (see
 [Donkey Kong Country 3's channel levels](#donkey-kong-country-3s-channel-levels)).
 

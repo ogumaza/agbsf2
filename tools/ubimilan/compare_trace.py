@@ -9,6 +9,9 @@ For every piece of music, the script runs `AGBSF2 --trace` and the driver under 
 comparison covers every write to the PSG's registers, in order, the track, and each voice that the mixer plays. It
 reports the first difference in each piece that has one.
 
+A piece that agbsf2 --info lists with a version "with the kit" is one that the game starts with channel 9's kit
+switched off. agbsf2 --trace follows a piece's first version, so the driver then starts the piece with the kit off.
+
 A key of channel 9 outside its kit makes the driver read a sample from past the end of the sound bank's resource table,
 which lands in a mirror of the ROM, at 0x0A000000 or above. The model leaves such a note out, so the driver's voices
 that play there aren't compared; each piece that has them says how many frames they play for.
@@ -24,10 +27,10 @@ from gbarom import load_rom
 MIRROR = 0x0A000000
 
 
-def driver_lines(rom_path, song, frames):
+def driver_lines(rom_path, song, frames, kit):
     """Returns the driver's trace, and the number of its voice lines that play from a mirror of the ROM, left out."""
     kept, skipped = [], 0
-    for line in traces.printed_lines(driver_emu.trace, load_rom(rom_path), song, frames):
+    for line in traces.printed_lines(driver_emu.trace, load_rom(rom_path), song, frames, kit):
         fields = line.split()
         if fields[1].startswith('v') and int(fields[2], 16) >= MIRROR:
             skipped += 1
@@ -39,22 +42,27 @@ def driver_lines(rom_path, song, frames):
 def compare(job):
     """Returns a description of the first difference in one piece, or None if there's none, and the driver's voice
     lines that play from a mirror of the ROM."""
-    tool, rom_path, song, frames = job
-    driver, skipped = driver_lines(rom_path, song, frames)
+    tool, rom_path, song, frames, kit = job
+    driver, skipped = driver_lines(rom_path, song, frames, kit)
     model = traces.model_lines(tool, 'ubimilan', rom_path, song, frames)
     return traces.first_difference(driver, model, context=3), skipped
 
 
 def main():
     a = traces.parse_args(__doc__, 'piece', 'pieces', '0-13')
+    # The samples that play as music follow the pieces. They have no sequence for the driver to play.
+    pieces = len(driver_emu.DriverEmulator(load_rom(a.rom)).songs())
     songs = traces.parse_range(a.songs) if a.songs else traces.listed_songs(a.agbsf2, 'ubimilan', a.rom)
-    results = traces.compare_all(compare, [(a.agbsf2, a.rom, s, a.frames) for s in songs], a.jobs)
+    songs = [s for n, s in enumerate(songs) if s < pieces and s not in songs[:n]]
+    kit_off = {s for s, name in traces.listed_versions(a.agbsf2, 'ubimilan', a.rom) if name == 'with the kit'}
+    jobs = [(a.agbsf2, a.rom, s, a.frames, s not in kit_off) for s in songs]
+    results = traces.compare_all(compare, jobs, a.jobs)
 
     failed = 0
     for song, (result, skipped) in zip(songs, results):
         if result:
             failed += 1
-            print('music %d: %s' % (song, result))
+            print('music %d%s: %s' % (song, ' without the kit' if song in kit_off else '', result))
         if skipped:
             print('music %d: agbsf2 leaves out a voice that plays from a mirror of the ROM for %d frames' %
                   (song, skipped))

@@ -27,16 +27,27 @@ namespace
 class QuintetMusic : public Music
 {
 public:
-    // Keeps a reference to `rom`, which has to outlive this.
-    QuintetMusic(const Rom& rom, DriverInfo info)
-        : Music("Quintet's sound driver", info.log, info.warnings), rom_(rom), info_(std::move(info))
+    // Keeps a reference to `rom`, which has to outlive this. A game with several music files gets a DriverInfo for
+    // each, numbered after the one before.
+    QuintetMusic(const Rom& rom, const DriverInfo& info)
+        : Music("Quintet's sound driver", info.log, info.warnings), rom_(rom)
     {
+        infos_.push_back(info);
+        for (size_t f = 1; f < info.music_files.size(); f++)
+        {
+            DriverInfo next = info;
+            if (ReadMusicFile(rom, info.music_files[f], next))
+            {
+                next.first_song = infos_.back().first_song + quintet::SongCount(infos_.back());
+                infos_.push_back(std::move(next));
+            }
+        }
     }
 
-    // The songs, then the sound effects.
+    // Each file's songs, then its sound effects.
     int SongCount() const override
     {
-        return quintet::SongCount(info_);
+        return infos_.back().first_song + quintet::SongCount(infos_.back());
     }
 
     bool HasSong(int) const override
@@ -47,21 +58,23 @@ public:
     // Works out the song's length, loop points and channels with notes, using the conversion settings.
     SongReport InspectSong(int song, const ConvertSettings& settings) const override
     {
-        SongReport r = quintet::InspectSong(rom_, info_, song, settings);
-        r.address = SongAddress(info_, song);
+        const DriverInfo& info = InfoOf(song);
+        SongReport r = quintet::InspectSong(rom_, info, song - info.first_song, settings);
+        r.address = SongAddress(info, song - info.first_song);
 
         return r;
     }
 
     SongReport ConvertSong(int song, const ConvertSettings& settings) override
     {
-        return quintet::ConvertSong(rom_, info_, song, settings, shared_.get());
+        const DriverInfo& info = InfoOf(song);
+        return quintet::ConvertSong(rom_, info, song - info.first_song, settings, shared_.get());
     }
 
     // SongBanks gives each song's presets their bank and programs in the shared SoundFont.
     void ShareSoundfont(const ConvertSettings&) override
     {
-        shared_ = std::make_unique<SoundfontBuilder>(rom_, SongCount());
+        shared_ = std::make_unique<SoundfontBuilder>(rom_, SongCount(), PsgRate(infos_.front().revision));
     }
 
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
@@ -74,13 +87,15 @@ public:
 
     bool DumpSong(int song, const std::string& path, std::string& error) const override
     {
-        return quintet::DumpSong(rom_, info_, song, path, error);
+        const DriverInfo& info = InfoOf(song);
+        return quintet::DumpSong(rom_, info, song - info.first_song, path, error);
     }
 
     // Writes every register write the model makes, frame by frame, starting with the play routine's at frame -1.
     bool Trace(int song, long long frames, std::FILE* out, std::vector<std::string>& warnings) const override
     {
-        Sequencer seq(rom_, info_, song);
+        const DriverInfo& info = InfoOf(song);
+        Sequencer seq(rom_, info, song - info.first_song);
         if (!seq.Valid())
         {
             return false;
@@ -108,8 +123,22 @@ public:
     }
 
 private:
+    // Returns the DriverInfo of the music file that has song `song`, or the last if none has it.
+    const DriverInfo& InfoOf(int song) const
+    {
+        for (const DriverInfo& info : infos_)
+        {
+            if (song < info.first_song + quintet::SongCount(info))
+            {
+                return info;
+            }
+        }
+
+        return infos_.back();
+    }
+
     const Rom& rom_;
-    DriverInfo info_;
+    std::vector<DriverInfo> infos_;
     std::unique_ptr<SoundfontBuilder> shared_;
 };
 
@@ -135,7 +164,7 @@ std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std
         return nullptr;
     }
 
-    return std::make_unique<QuintetMusic>(rom, std::move(info));
+    return std::make_unique<QuintetMusic>(rom, info);
 }
 
 } // namespace agbsf2::quintet

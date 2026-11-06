@@ -32,17 +32,20 @@ struct Note
     uint32_t off = 0;     // the frame its sound stops on, if `ended`
     bool ended = false;   // false while it still sounds
     uint32_t sample = 0;  // a kit note's sample resource
+    uint32_t skip = 0;    // the sample's points before the note's first
     uint8_t duty = 0;     // a square note's NRx1, whose top 2 bits are the duty
     uint8_t envelope = 0; // the volume: a square's or the noise's NRx2, with its envelope, or the wave's NR32
     uint8_t control = 0;  // a noise note's NR43
+    bool legato = false;  // a PSG note that goes on from the note before it, without a restart
 };
 
 // The driver playing one piece of music, frame by frame.
 class Sequencer
 {
 public:
-    // Keeps references to `rom` and `info`, which have to outlive this. Starts song `song` as the game does.
-    Sequencer(const Rom& rom, const DriverInfo& info, int song);
+    // Keeps references to `rom` and `info`, which have to outlive this. Starts song `song` as the game does. With `kit`
+    // false, the game's switch of channel 9's kit is off: the kit's notes and note-offs don't play.
+    Sequencer(const Rom& rom, const DriverInfo& info, int song, bool kit = true);
 
     // Returns false if the song can't be played: its list of sequences or its first sequence isn't in the ROM.
     bool Valid() const
@@ -117,14 +120,42 @@ private:
         int note = -1; // the note it plays, or -1
     };
 
-    // A PSG channel's state.
+    // The modulation of an instrument, as the driver keeps it for a PSG channel: a triangle in cents after a delay.
+    // The value counts the delay down, then contains the triangle in 16.16 fixed point.
+    struct Modulation
+    {
+        uint32_t state = 0; // 0 off, 1 the delay, 2 and 3 rising, 4 falling
+        int32_t value = 0;
+        int32_t step = 0;  // the change each frame, in 16.16 fixed point
+        int32_t depth = 0; // the cents at which the triangle turns
+    };
+
+    // An instrument's pitch mode, as the driver keeps it for a PSG channel: a glide in cents from one note's pitch to
+    // the next.
+    struct PitchMode
+    {
+        uint32_t state = 0; // 0 off, 1 a note's pitch, 2 gliding, 3 at the glide's end
+        int32_t frames = 0; // the frames that a glide takes
+        int32_t step = 0;   // the change each frame, in cents
+        int32_t current = 0;
+        int32_t target = 0;
+        int32_t previous = 0; // the target before the last
+    };
+
+    // A PSG channel's state, as the driver keeps it. The driver's init clears it. A piece's start doesn't.
     struct PsgChannel
     {
         int program = 0;
-        int index = 0; // the place in the frequency table of its last note's key
+        int index = 0;        // the place in the frequency table of its last note's key
+        bool playing = false; // a note-on has started the channel, and no note-off has stopped it
+        Modulation modulation;
+        PitchMode pitch;
         int note = -1; // the note that sounds, or -1
     };
 
+    void StartSamplePiece(int song);
+    void NextSamplePass(Voice& voice);
+    void StartVoice(Voice& voice, const GameSample& sample, int velocity);
     void SequencerStep();
     void SoundUpdate();
     void MixerRun();
@@ -136,7 +167,14 @@ private:
     void NoiseNoteOn(int key, int velocity);
     void NoiseNoteOff(int key);
     void PsgNoteOn(int channel, int key, int velocity);
+    void PsgStart(int channel, int index, int velocity);
+    void PsgLegato(int channel, int index);
+    void Glide(PitchMode& pitch, uint32_t inst, int32_t target) const;
     void PsgNoteOff(int channel, int key);
+    void PsgUpdate();
+    uint32_t Instrument(int channel, int program) const;
+    uint16_t Frequency(int index) const;
+    uint16_t FineFrequency(int32_t cents) const;
     void Program(int channel, int program);
     Note NewNote(int channel, int key, int velocity, int program) const;
     void EndNote(int index, uint32_t frame);
@@ -173,6 +211,7 @@ private:
     int index_ = 0; // the sequence of the piece that plays
 
     // The kit, its voices and the PSG.
+    bool kit_on_ = true; // the game's switch of the kit, the word at +0x138 of the track
     int kit_program_ = 0;
     bool kit_voice_fixed_ = false;
     int kit_voice_ = 0;

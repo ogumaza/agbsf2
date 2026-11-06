@@ -859,9 +859,10 @@ std::vector<uint8_t> KeyPressureMuteMessage(int ch)
     return {0xF0, 0x7F, 0x7F, 0x09, 0x02, uint8_t(ch), 0x02, 0x00, 0xF7};
 }
 
-// Writes a channel's settings at the start: the driver's volume (unless the tune sets one at the start), no pan,
-// effects or expression, and the bend range.
-void WriteChannelSetup(MidiTrack& mt, int ch, int range, int bank, bool volume_at_start)
+// Writes a channel's settings at the start: the driver's volume (unless the tune sets one at the start), no pan or
+// effects, the bend range, and the game's music volume, out of 128, as expression. The mixer scales every note by the
+// music volume. Expression can't go above 127. A music volume above 128 plays at 128.
+void WriteChannelSetup(MidiTrack& mt, int ch, int range, int bank, bool volume_at_start, int music_volume)
 {
     if (bank)
     {
@@ -872,7 +873,7 @@ void WriteChannelSetup(MidiTrack& mt, int ch, int range, int bank, bool volume_a
         mt.Control(0, ch, cc::kVolume, 127);
     }
     mt.Control(0, ch, cc::kPan, 64);
-    mt.Control(0, ch, cc::kExpression, 127);
+    mt.Control(0, ch, cc::kExpression, SquareRootValue(std::min(music_volume, 128), 128, 0));
     mt.Control(0, ch, cc::kReverb, 0);
     mt.Control(0, ch, cc::kChorus, 0);
     if (range > 0)
@@ -1070,7 +1071,7 @@ void WriteBends(const Simulation& sim, const SongPlan& plan, const std::array<Mi
 bool WriteMidi(const std::string& path, const std::string& title, const std::string& about, const TuneHeader& header,
                const Simulation& sim, const SongPlan& plan, const std::vector<Note>& notes,
                const std::vector<MuteChange>& pressures, const std::array<int, kChannels>& range, int bank,
-               std::string& error)
+               int music_volume, std::string& error)
 {
     MidiFile midi(uint16_t(header.ticks_per_quarter));
     MidiTrack& conductor = midi.AddTrack();
@@ -1155,7 +1156,8 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
     {
         if (home[size_t(ch)])
         {
-            WriteChannelSetup(*home[size_t(ch)], ch, range[size_t(ch)], bank, volume_at_start[size_t(ch)]);
+            WriteChannelSetup(*home[size_t(ch)], ch, range[size_t(ch)], bank, volume_at_start[size_t(ch)],
+                              music_volume);
         }
     }
 
@@ -1272,7 +1274,7 @@ void WriteTune(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
     std::string error;
     report.midi_path = stem + ".mid";
     if (!WriteMidi(report.midi_path, title, about, header, sim, plan, notes, pressures, BendRanges(rom, sim), bank,
-                   error))
+                   MusicVolume(info, song), error))
     {
         report.warnings.push_back(error);
         return;

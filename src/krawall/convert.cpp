@@ -558,37 +558,166 @@ Timing MakeTiming(const Simulation& sim)
 // The MIDI channels other than the drum channel.
 constexpr size_t kMelodicChannels = 15;
 
-// Returns the mixer's samples in which the notes of two channels sound at once. A channel plays one note at a time, so
-// each list is in order and its notes don't overlap.
-uint64_t Overlap(const Simulation& sim, const std::vector<Note>& a, const std::vector<Note>& b)
+// The steps of CC10 or CC11, and the semitones of bend, by which two notes' settings can differ on one MIDI channel.
+constexpr int kSettingTolerance = 3;
+constexpr double kBendTolerance = 0.05;
+
+// What a track sets for a note at a tick: its key, its pan and expression, and its bend. A key of -1 means no note.
+struct TickState
+{
+    int key = -1;
+    int pan = 64;
+    int expression = 0;
+    double bend = 0;
+};
+
+// Returns the settings that the channel's notes set at each tick up to the module's end.
+std::vector<TickState> TickStates(const Simulation& sim, const std::vector<Note>& notes)
+{
+    std::vector<TickState> states(sim.plan.end);
+    for (const Note& n : notes)
+    {
+        for (const Sound& s : n.sounds)
+        {
+            TickState& state = states[s.tick];
+            state.key = n.key;
+            LevelsToControllers(s.left, s.right, state.pan, state.expression);
+            state.bend = s.bend;
+        }
+    }
+
+    return states;
+}
+
+// Returns whether two notes at a tick need settings that one MIDI channel can't give both: another pan, expression or
+// bend, or the same key, whose note off would end both.
+bool Clashes(const TickState& a, const TickState& b)
+{
+    return a.key == b.key || std::abs(a.pan - b.pan) > kSettingTolerance ||
+           std::abs(a.expression - b.expression) > kSettingTolerance || std::fabs(a.bend - b.bend) > kBendTolerance;
+}
+
+// Returns the mixer's samples in which two channels' notes sound at once with settings that clash.
+uint64_t Clash(const Simulation& sim, const std::vector<TickState>& a, const std::vector<TickState>& b)
 {
     uint64_t total = 0;
-    size_t i = 0;
-    size_t j = 0;
-    while (i < a.size() && j < b.size())
+    for (size_t i = 0; i < a.size(); i++)
     {
-        const uint64_t start = sim.ticks[std::max(a[i].on, b[j].on)].time;
-        const uint64_t end = sim.ticks[std::min(a[i].off, b[j].off)].time;
-        total += end > start ? end - start : 0;
-        if (a[i].off < b[j].off)
+        if (a[i].key >= 0 && b[i].key >= 0 && Clashes(a[i], b[i]))
         {
-            i++;
-        }
-        else
-        {
-            j++;
+            total += sim.ticks[i + 1].time - sim.ticks[i].time;
         }
     }
 
     return total;
 }
 
-// Returns each channel's MIDI channel, from the channels other than the drum channel. In a module with up to 15
-// channels, channel c takes the c-th. In a module with more, channels share them. A MIDI channel's controllers and bend
-// apply to all its notes. The sharing therefore follows the notes. The 15 channels whose notes last longest take one
-// each, in the channels' order. Each other channel then takes, longest first, the one whose notes it overlaps least. A
-// tie goes to the lower channel.
-std::vector<int> MidiChannels(const Simulation& sim, const std::vector<std::vector<Note>>& notes)
+// Returns the notes without the silence at their ends: the ticks from which the mixer holds both of a note's levels at
+// 0. The game's output has nothing of the note then. On a shared MIDI channel, another track's expression would make
+// the note sound again. A note whose levels stay 0 throughout goes.
+std::vector<Note> WithoutFinalSilence(const std::vector<Note>& notes)
+{
+    std::vector<Note> kept;
+    for (Note n : notes)
+    {
+        size_t end = n.sounds.size();
+        while (end > 0 && n.sounds[end - 1].left == 0 && n.sounds[end - 1].right == 0)
+        {
+            end--;
+        }
+        if (end == 0)
+        {
+            continue;
+        }
+        if (end < n.sounds.size())
+        {
+            n.off = n.sounds[end].tick;
+            n.sounds.resize(end);
+        }
+        kept.push_back(std::move(n));
+    }
+
+    return kept;
+}
+
+// Returns each channel's MIDI channel, from the channels other than the drum channel. With up to 15 channels that play
+// notes, each takes one. With more, channels share them. A MIDI channel's controllers and bend act on all its notes.
+// Each channel starts in a group of its own. The two groups that clash least then merge until 15 are left. A tie goes
+// to the lower channels. The groups take MIDI channels in the order of their lowest channels. `notes` holds the notes
+// without their final silence.
+std::vector<int> SharedMidiChannels(const Simulation& sim, const std::vector<std::vector<Note>>& notes)
+{
+    std::vector<size_t> playing;
+    std::vector<std::vector<TickState>> states;
+    for (size_t c = 0; c < notes.size(); c++)
+    {
+        if (!notes[c].empty())
+        {
+            playing.push_back(c);
+            states.push_back(TickStates(sim, notes[c]));
+        }
+    }
+
+    const size_t count = playing.size();
+    std::vector<std::vector<uint64_t>> clash(count, std::vector<uint64_t>(count));
+    for (size_t a = 0; a < count; a++)
+    {
+        for (size_t b = a + 1; b < count; b++)
+        {
+            clash[a][b] = clash[b][a] = Clash(sim, states[a], states[b]);
+        }
+    }
+
+    std::vector<std::vector<size_t>> groups(count);
+    for (size_t a = 0; a < count; a++)
+    {
+        groups[a] = {a};
+    }
+    while (groups.size() > kMelodicChannels)
+    {
+        size_t best_a = 0;
+        size_t best_b = 1;
+        uint64_t least = UINT64_MAX;
+        for (size_t a = 0; a < groups.size(); a++)
+        {
+            for (size_t b = a + 1; b < groups.size(); b++)
+            {
+                uint64_t added = 0;
+                for (size_t x : groups[a])
+                {
+                    for (size_t y : groups[b])
+                    {
+                        added += clash[x][y];
+                    }
+                }
+                if (added < least)
+                {
+                    best_a = a;
+                    best_b = b;
+                    least = added;
+                }
+            }
+        }
+        groups[best_a].insert(groups[best_a].end(), groups[best_b].begin(), groups[best_b].end());
+        groups.erase(groups.begin() + std::ptrdiff_t(best_b));
+    }
+
+    std::vector<int> midi(notes.size(), MelodicChannel(0));
+    for (size_t g = 0; g < groups.size(); g++)
+    {
+        for (size_t x : groups[g])
+        {
+            midi[playing[x]] = MelodicChannel(int(g));
+        }
+    }
+
+    return midi;
+}
+
+// Returns each channel's MIDI channel in a module where every channel that plays notes gets one. In a module with up to
+// 15 channels, channel c takes the c-th. In a module with more, the 15 channels whose notes last longest take one each,
+// in the channels' order.
+std::vector<int> SeparateMidiChannels(const Simulation& sim, const std::vector<std::vector<Note>>& notes)
 {
     std::vector<int> midi(notes.size());
     if (notes.size() <= kMelodicChannels)
@@ -615,34 +744,9 @@ std::vector<int> MidiChannels(const Simulation& sim, const std::vector<std::vect
 
     std::vector<size_t> first(order.begin(), order.begin() + kMelodicChannels);
     std::sort(first.begin(), first.end());
-    std::vector<std::vector<size_t>> groups;
-    for (size_t c : first)
+    for (size_t k = 0; k < first.size(); k++)
     {
-        midi[c] = MelodicChannel(int(groups.size()));
-        groups.push_back({c});
-    }
-
-    for (size_t k = kMelodicChannels; k < order.size(); k++)
-    {
-        const size_t c = order[k];
-        size_t best = 0;
-        uint64_t least = UINT64_MAX;
-        for (size_t g = 0; g < groups.size(); g++)
-        {
-            uint64_t overlap = 0;
-            for (size_t other : groups[g])
-            {
-                overlap += Overlap(sim, notes[c], notes[other]);
-            }
-            if (overlap < least)
-            {
-                best = g;
-                least = overlap;
-            }
-        }
-
-        midi[c] = MelodicChannel(int(best));
-        groups[best].push_back(c);
+        midi[first[k]] = MelodicChannel(int(k));
     }
 
     return midi;
@@ -719,9 +823,11 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
         mt.Name("Channel " + std::to_string(c + 1));
         mt.SetEnd(end);
 
-        // The pitch bend range covers the largest bend of the channels on the MIDI channel.
+        // The pitch bend range covers the largest bend of the channels on the MIDI channel. The ticks at which another
+        // channel's note ends are those from which this channel's note sets its settings again.
         double widest = 0;
         bool shared = false;
+        std::vector<char> other_ends(plan.end + 1, 0);
         for (size_t other = 0; other < notes.size(); other++)
         {
             if (channels[other] != ch || notes[other].empty())
@@ -732,6 +838,7 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
             shared = shared || other != c;
             for (const Note& n : notes[other])
             {
+                other_ends[n.off] = other_ends[n.off] || other != c;
                 for (const Sound& s : n.sounds)
                 {
                     widest = std::max(widest, std::fabs(s.bend));
@@ -756,6 +863,10 @@ bool WriteMidi(const std::string& path, const std::string& title, const std::str
             for (const Sound& s : n.sounds)
             {
                 const uint32_t at = timing.ticks[s.tick];
+                if (other_ends[s.tick])
+                {
+                    writer.SetSettingsAgain();
+                }
                 writer.SetLevels(at, s.left, s.right);
                 writer.SetBend(at, s.bend);
             }
@@ -806,20 +917,41 @@ SongReport Run(const Rom& rom, const DriverInfo& info, int song, const ConvertSe
         }
     }
 
-    // In a module with more than 15 channels, channels share MIDI channels. Only notes that sound at once matter.
-    const std::vector<int> midi = MidiChannels(sim, notes);
-    for (size_t a = 0; a < notes.size(); a++)
+    // With more than 15 channels that play notes, channels share MIDI channels.
+    std::vector<int> midi;
+    const auto playing =
+        size_t(std::count_if(notes.begin(), notes.end(), [](const auto& list) { return !list.empty(); }));
+    if (playing <= kMelodicChannels)
     {
-        for (size_t b = a + 1; b < notes.size(); b++)
+        midi = SeparateMidiChannels(sim, notes);
+    }
+    else
+    {
+        report.tracks = 0;
+        for (std::vector<Note>& list : notes)
         {
-            const uint64_t overlap = midi[a] == midi[b] ? Overlap(sim, notes[a], notes[b]) : 0;
-            if (overlap > 0)
+            list = WithoutFinalSilence(list);
+            report.tracks += list.empty() ? 0 : 1;
+        }
+        midi = SharedMidiChannels(sim, notes);
+        std::vector<std::vector<TickState>> states;
+        for (const std::vector<Note>& list : notes)
+        {
+            states.push_back(TickStates(sim, list));
+        }
+        for (size_t a = 0; a < notes.size(); a++)
+        {
+            for (size_t b = a + 1; b < notes.size(); b++)
             {
-                char text[128];
-                std::snprintf(text, sizeof text,
-                              "channels %zu and %zu share a MIDI channel, and their notes overlap for %.1f s", a + 1,
-                              b + 1, double(overlap) / sim.mix_rate);
-                report.warnings.push_back(text);
+                const uint64_t clash = midi[a] == midi[b] ? Clash(sim, states[a], states[b]) : 0;
+                if (clash > 0)
+                {
+                    char text[128];
+                    std::snprintf(text, sizeof text,
+                                  "channels %zu and %zu share a MIDI channel, and their notes clash for %.1f s", a + 1,
+                                  b + 1, double(clash) / sim.mix_rate);
+                    report.warnings.push_back(text);
+                }
             }
         }
     }

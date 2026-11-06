@@ -1,20 +1,21 @@
 # agbsf2
 
 `agbsf2` converts the music of Game Boy Advance games that use Konami's,
-Rare's, Quintet's, Nintendo R&D2's, Brownie Brown's or Ubisoft Milan's sound
-driver, Nintendo's MP2K, or Krawall, to MIDI files and SoundFonts.
+Rare's, Quintet's, Nintendo R&D1's, Nintendo R&D2's, AlphaDream's, Brownie
+Brown's or Ubisoft Milan's sound driver, Nintendo's MP2K, or Krawall, to MIDI
+files and SoundFonts.
 
 MP2K, often called the "Sappy" engine, is the sound driver in most GBA games.
 Konami's, Rare's and Quintet's games, *The Legend of Zelda: A Link to the Past*,
 *Super Mario Advance 2*, *Sword of Mana*, *Magical Vacation* and *Tomb Raider:
 The Prophecy* use drivers of their own, and others play tracker modules with
 Krawall, a player of XM and S3M modules, none of which the usual MP2K tools such
-as Sappy, gba-mus-ripper and agbplay can read. `agbsf2` finds the game's
-driver in a ROM, plays each song through a model of that driver, and converts it
-to a Standard MIDI File with a matching SoundFont built from the game's samples
-and instruments. For Konami's, Quintet's, Nintendo R&D2's, Brownie Brown's and
-Ubisoft Milan's drivers and MP2K, the SoundFonts also include Game Boy PSG
-waveforms.
+as Sappy, gba-mus-ripper and agbplay can read. `agbsf2` finds the game's driver
+in a ROM, plays each song through a model of that driver, and converts it to a
+Standard MIDI File with a matching SoundFont built from the game's samples and
+instruments. For Konami's, Quintet's, Nintendo R&D1's, Nintendo R&D2's,
+AlphaDream's, Brownie Brown's and Ubisoft Milan's drivers and MP2K, the
+SoundFonts also include Game Boy PSG waveforms.
 
 ## Supported games
 
@@ -27,6 +28,9 @@ World Championship Tournament 2006*, and it supports these games too:
 * *Shaman King: Master of Spirits 2*
 * *Yu-Gi-Oh! Day of the Duelist: World Championship Tournament 2005*
 * *Yu-Gi-Oh! GX: Duel Academy*
+* *Animal Yokochou: Doki Doki Kyuushutsu Daisakusen no Maki*
+* *Tennis no Ouji-sama 2004: Glorious Gold* and *Stylish Silver*
+* *Mermaid Melody Pichi Pichi Pitch: Pichi Pichitto Live Start!*
 
 These games use variants of the *Ultimate Masters Edition* driver.
 
@@ -34,10 +38,27 @@ The following games use older driver revisions with different commands.
 These are supported too:
 
 * *Yu-Gi-Oh! World Championship Tournament 2004*
+* *Mermaid Melody Pichi Pichi Pitch*
 * *Rave Master: Special Attack Force*
+* *Groove Adventure Rave: Hikari to Yami no Daikessen 2*
+* *Hikaru no Go 2*
 * *Yu-Gi-Oh! The Eternal Duelist Soul*
 * *Yu-Gi-Oh! Worldwide Edition: Stairway to the Destined Duel*
+* *Hikaru no Go*
+* *Yu-Gi-Oh! Duel Monsters 6 Expert 2*
 * *Yu-Gi-Oh! Dungeon Dice Monsters*
+* *GetBackers Dakkanya: Jigoku no Scaramouche*
+* *Yu-Gi-Oh! Duel Monsters 5 Expert 1*
+* *Tennis no Ouji-sama*
+* *Kami no Kijutsu: Illusion of the Evil Eyes*
+* *Captain Tsubasa: Eikou no Kiseki*
+* *Groove Adventure Rave*
+* *Yu-Gi-Oh! Double Pack 2* (*Dungeon Dice Monsters*)
+* *Hunter X Hunter: Minna Tomodachi Daisakusen!!*
+* *Tennis no Ouji-sama 2003: Passion Red* and *Cool Blue*
+* *Tennis no Ouji-sama: Aim at the Victory!*
+* *Gegege no Kitarou: Kikiippatsu! Youkai Rettou*
+* *Minna no Ouji-sama*
 
 The tool reports unrecognised revisions of Konami's driver.
 
@@ -57,6 +78,22 @@ The tool reports unrecognised revisions of Konami's driver.
 * *Super Robot Taisen D*
 * *Super Robot Taisen R*
 * *Super Robot Taisen J*, which has a later revision of the driver
+* *Suta Komi: Star Communicator*, whose revision of the driver reads another
+  song format
+
+These games have the later revision too. They keep their music in music files:
+
+* *Blender Bros.*, with the music of the three programs that it sends to
+  another Game Boy Advance
+* *Robopon 2: Ring Version* and *Cross Version*, each with the music of the
+  program that it sends to another Game Boy Advance
+* *Bouken Yuuki Plaston GP*
+* *Bouken Yuuki Densetsu Plaston Gate*
+* *Bouken Yuuki PlaStar World: Densetsu no Plust Gate EX*
+* *Legend of Dynamic: Goushouden*
+* *Doubutsu no Shima no Chobi Gurumi*
+* *Gachasute! Dyna Device Red* and *Blue*
+* *Magical Fengshen*
 
 The sound effects of these games are converted with their music.
 
@@ -67,18 +104,27 @@ The sound effects of these games are converted with their music.
 * *Super Mario Advance 2: Super Mario World*, which has an older revision of
   the driver
 * *Super Mario Advance 3: Yoshi's Island*
+* *Super Mario Advance 4: Super Mario Bros. 3*, with the same revision of the
+  driver as *Super Mario Advance 3*
 
 The sound effects of these games are converted with their music.
 
 ### MP2K
 
 * *Pokémon Emerald*
+* *Pokémon Ruby Version*
 * the game selection and *Four Swords* in *The Legend of Zelda: A Link to the
   Past & Four Swords*
 * *The Legend of Zelda: The Minish Cap*
 * *Kingdom Hearts: Chain of Memories*
 * *Super Robot Taisen: Original Generation 2*
+* *Pokémon Mystery Dungeon: Red Rescue Team*
 * *Golden Sun: The Lost Age*, with Camelot's version of the driver
+* *Fire Emblem: The Binding Blade*
+* *Fire Emblem*, released in Japan as *The Blazing Blade*
+* *Fire Emblem: The Sacred Stones*
+* *Metroid Fusion* and *Metroid: Zero Mission*, with their rework of the
+  driver's sequencer
 
 ### Brownie Brown's driver
 
@@ -90,11 +136,17 @@ The sound effects of these games are converted with their music.
 
 * *Racing Fever*, with build 1.2.2.14 of Krawall's `player.c`, dated 2002/09/12
 * *007: Everything or Nothing*, with build 1.4 of `player.c`, dated 2003/03/19
-* *Digimon Racing*, with the build of Krawall dated 2003/09/01
+* *Digimon Racing*, *The Lord of the Rings: The Third Age*, *The Urbz: Sims
+  in the City*, *Robots* and *Franklin the Turtle*, with the build of Krawall
+  dated 2003/09/01
 * *The Sims: Bustin' Out*, with the same build, played with interpolation
 * *Juka and the Monophonic Menace*, with the build dated 2004/09/17
-* *Babar to the Rescue*, with the build dated 2004/11/14
-* *Eragon*, with the build dated 2005-04-21
+* *Babar to the Rescue*, *Care Bears: Care Quest*, *The Koala Brothers:
+  Outback Adventures* and *The Land Before Time: Into the Mysterious Beyond*,
+  with the build dated 2004/11/14
+* *Eragon*, *Cocoto Kart Racer*, *Cocoto Platform Jumper*, *Let's Ride!
+  Friends Forever*, *Let's Ride! Dreamer*, *Crash of the Titans*, *Scurge:
+  Hive* and *Shrek SuperSlam*, with the build dated 2005-04-21
 * *Puppy Luv: Spa and Resort*, with a build that has no version string
 * *Big Mutha Truckers*, *Street Racing Syndicate*, *M&M's Break 'Em* and
   *Princess Natasha*, with a changed form of the build dated 2005-04-21 that
@@ -106,10 +158,33 @@ Homebrew games and a prototype use them.
 A game with another build of Krawall that has a version string gets an error
 that gives the string.
 
+### Nintendo R&D1's driver
+
+* *WarioWare, Inc.: Mega Microgame$!*
+* *Rhythm Tengoku*
+
+Their songs are Standard MIDI Files. The driver plays them with the
+instruments of the game's banks. The sound effects of these games are converted with their music.
+
+### AlphaDream's driver
+
+* *Mario & Luigi: Superstar Saga*. The main game's music plays with this
+  driver. The two copies of *Mario Bros. Classic* in the game play theirs with
+  MP2K, and `agbsf2` converts those as well.
+* *Tottoko Hamtaro 4: Nijiiro Daikoushin Dechu* and *Tottoko Hamtaro: Hamu-Hamu
+  Sports*. They play their music with two other versions of the driver.
+
 ### Ubisoft Milan's driver
 
-* *Tomb Raider: The Prophecy*. Only its sequenced music is converted, not the
-  samples that the game plays on their own, outside its sequences.
+* *Tomb Raider: The Prophecy*. Songs 0-13 are its sequenced pieces. Songs 14-22
+  are nine samples that the game plays as music, with no sequence. The game's
+  sound effects and its other background loops aren't converted.
+* *The Mummy*. Songs 0-25 are its pieces, mostly on the PSG. Song 17 plays no
+  note, and `agbsf2` writes no files for it. Songs 1-15 have a second version
+  with the drum kit (see below).
+* *The Sum of All Fears* and *Rogue Spear* have an older build of the driver.
+  Their music is recorded samples, with no sequences. `agbsf2` reports that and
+  converts nothing.
 
 ### Other games
 
@@ -130,9 +205,10 @@ clang-cl. Other platforms and compilers aren't supported.
 
 You need Git, a C++20 compiler and CMake 3.20 or later. The MIDI and
 SoundFont code comes from seqlib. The PSF container reader, the file and
-console code and the parsing of numbers come from xsflib. The repository
-holds both as Git submodules, in `externals/seqlib` and `externals/xsflib`.
-There are no other dependencies.
+console code and the parsing of numbers come from xsflib. The ROM and GSF
+reader, MP2K, Konami's driver and their conversions come from ntdlib. The
+repository holds the three as Git submodules, in `externals/seqlib`,
+`externals/xsflib` and `externals/ntdlib`. There are no other dependencies.
 
 * **Windows x64:** Visual Studio 2022 with the "Desktop development with C++"
   workload and its "C++ Clang tools for Windows" component. The workload
@@ -192,7 +268,11 @@ Conversion includes all songs in the ROM, regardless of the GSF's selected song.
 
 Use a ROM if you have one. A GSF rip keeps only the bytes used during playback,
 so a song that the rip didn't play may be missing. If every song cuts a
-sample short, the unused part is silent in the SoundFont.
+sample short, the unused part is silent in the SoundFont. A sample played at a
+high pitch can have gaps too. At a high pitch the game skips some of the
+sample's bytes. The rip keeps only the bytes that the game read. A SoundFont
+player then plays silence in the gaps. agbsf2 can't restore the missing bytes.
+It doesn't fill the gaps with a guess.
 
 ### Drag and drop
 
@@ -219,15 +299,16 @@ Each file's results go in a folder next to it, as above.
 | `--frame-timing` | put each event on the frame the game plays it in, rather than on the song's beat (see [Output](#output)) |
 | `--dump` | also write a text listing of every command of each song (`NAME_NN.txt`) |
 | `--info` | print each driver found, with its tables and a list of its songs, then exit. The track count, length and loop reflect the current conversion options. A song that the game plays in two versions gets a line for each |
-| `--driver NAME` | use only `konami`, `rare`, `quintet`, `rd2`, `brownie`, `ubimilan`, `krawall` or `mp2k`, instead of every driver detection finds |
+| `--driver NAME` | use only `konami`, `rare`, `quintet`, `rd1`, `rd2`, `alphadream`, `brownie`, `ubimilan`, `krawall` or `mp2k`, instead of every driver detection finds |
 | `--song-table ADDR`, `--song-count N` | override detection: the song table's address (hex), or for Nintendo R&D2's driver the address of the game's settings for it, for Ubisoft Milan's driver the sound bank, and for Krawall a table of the game's modules, and the number of songs |
 | `--sample-table ADDR`, `--mix-rate HZ` | override detection in Konami's driver: the sample table's address (hex) and the mixer's rate |
 | `-q, --quiet` | only print warnings and errors |
 | `--trace SONG`, `--trace-frames N` | print the driver model's state after each frame (for the driver's `compare_trace.py` in `tools/`) |
 
 Detection checks for Rare's driver first, followed by Quintet's, Nintendo
-R&D2's, MP2K, Brownie Brown's, Krawall and Ubisoft Milan's. These are identified
-from their code alone. Konami's is checked last.
+R&D2's, Nintendo R&D1's, AlphaDream's, MP2K, Brownie Brown's, Krawall and
+Ubisoft Milan's. These are identified from their code alone. Konami's is
+checked last.
 If a game has several drivers, each driver's songs are converted. The first
 driver uses the usual file names; the others add the driver's name after the
 base name, as in `game_mp2k_000.mid`. Messages also include the driver's
@@ -254,6 +335,13 @@ fluidsynth -ni -F song10.wav game/game_10.sf2 game/game_10.mid
 * On Windows, the console window waits for Enter even when the output is
   redirected, the console's code page isn't restored afterwards, and redirected
   output and error messages can come out in a different order.
+* With `--single-sf2`, the instruments of some games don't fit in one
+  SoundFont. The format allows at most 65535 zones, generators and modulators.
+  `agbsf2` then stops with "soundfont too large". Among these games are
+  *Pokémon Ruby Version*, *Pokémon FireRed Version*, *Pokémon Emerald*, *Mario
+  Kart: Super Circuit*, *Groove Adventure Rave*, *Hikaru no Go*, *Yu-Gi-Oh! The
+  Eternal Duelist Soul*, *Yu-Gi-Oh! Duel Monsters 6 Expert 2* and *Rhythm
+  Tengoku*. Convert them without the option.
 
 ## Output
 
@@ -284,6 +372,11 @@ Quintet's driver also discards fractional frames when a track loops. If this
 would make a looping player play a note at the loop's start twice, the marked
 loop moves to the second pass as well. A player that silences its notes when it
 repeats the loop also cuts short any note held across the loop's start.
+
+A song without a loop can end long after its last sound. A track can wait, or
+change a controller, after its last note. When the song's end lies more than
+10 s after its last sound has died away, the file ends where that sound dies
+away. Nothing after that point can be heard.
 
 When a loop sets a track's program, volume, pan, expression, reverb or pitch
 bend, the MIDI file writes that setting even if its value hasn't changed.
@@ -354,6 +447,17 @@ pitch bend of the current note. A series of these notes can span more than
 In the Dungeon Dice Monsters revision, songs set separate left and right PSG
 volumes. These are included in each PSG track's CC10 and CC11 values.
 
+Two games play some songs both in a live stage and elsewhere, and the live
+stage changes how they sound. *Mermaid Melody Pichi Pichi Pitch* plays songs
+0-8 that way. Its live stage silences track 12 from a point in each song. In
+songs 1 and 4-7 it also swaps some notes of track 13 for other samples, some
+of them many seconds long. *Mermaid Melody Pichi Pichitto Live Start!* plays songs 0-2, 4-8,
+13 and 17-20 that way. Its live stage silences track 12 or 14 from a point in
+songs 2, 4 and 17-20. In songs 0, 1, 4-8 and 13 it swaps some notes of track
+14 for such samples. Each of these songs gets two pairs of files:
+`game_02.mid` and `game_02.sf2` as the game plays it elsewhere, and
+`game_02_live.mid` and `game_02_live.sf2` as the live stage plays it.
+
 ### SoundFont from Konami's driver
 
 Each song's SoundFont contains exactly the instruments that song uses.
@@ -390,6 +494,12 @@ velocity or volume (controller 7) of v is written as 127 × √(v/127). Each
 source track that plays notes gets a MIDI track named `Track 0`, `Track 1`
 and so on. A separate first track holds the tempo and loop markers.
 
+The game's code sets a music volume for each tune. The volume scales every
+note of the tune alike. Each channel starts with that volume, out of 128, as
+expression (controller 11): 127 × √(volume/128). The games start their tunes at
+39 to 150 (`docs/rare.md` lists them). Expression can't go above 127. The few
+tunes above 128 therefore play at 128, up to 1.4 dB quieter than in the game.
+
 The driver counts each frame as 1/60 s, but the GBA shows 59.73 frames a
 second, so the games play every tune 0.46% slower than its tempo says. The
 MIDI file's tempos are slowed down to match.
@@ -415,14 +525,14 @@ tune's commands:
   notes. A player that ignores key pressure, or both the modulator and the
   message, plays every note. Where the mixer takes one note of a key and leaves
   out another on the same channel, the MIDI file plays both. In *Donkey Kong
-  Country 3*, the mixer also leaves out the notes of a channel at volume 0.
-  Those notes don't count towards the limit. A file whose SoundFont has the mute
-  modulator starts with a key pressure of 0 for each key that the file plays
-  before giving the key a pressure. A player that keeps key pressures from one
-  file to the next would otherwise mute the keys that the file before left
-  muted. With `--single-sf2`, the shared SoundFont has the modulator once any
-  tune of the set has mutes. Every file of the set then starts with those key
-  pressures.
+  Country 3*, the mixer also leaves out the notes of a channel at volume 0, and
+  in tune 2, at volume 2 or less. Those notes don't count towards the limit. A
+  file whose SoundFont has the mute modulator starts with a key pressure of 0
+  for each key that the file plays before giving the key a pressure. A player
+  that keeps key pressures from one file to the next would otherwise mute the
+  keys that the file before left muted. With `--single-sf2`, the shared
+  SoundFont has the modulator once any tune of the set has mutes. Every file of
+  the set then starts with those key pressures.
 * A note off releases only one note with that key on the channel. Since a
   MIDI channel can't play the same key twice at once, the conversion ends
   the older note when the newer one starts.
@@ -493,14 +603,15 @@ track for each of the song's channels that plays notes: `Square 1`,
 `Square 2`, `Wave`, `Noise`, `PCM A` and `PCM B`, on MIDI channels 1-6.
 
 The songs are numbered with the music file's songs first, then the sound
-effects. A sound effect has the songs' format. The game plays it on the
-driver's sound effect channels. A channel whose data starts with `FF` is left
-to the music. The MIDI file ends when the last of the sound effect's channels
-ends.
+effects. A game with several music files numbers each file's songs and sound
+effects after those of the file before. A sound effect has the songs' format.
+The game plays it on the driver's sound effect channels. A channel whose data
+starts with `FF` is left to the music. The MIDI file ends when the last of the
+sound effect's channels ends.
 
 The song's tempo comes from its first channel. A sound effect that leaves its
 first channel to the music keeps the driver's starting tempo: 90, or 120 in
-*Super Robot Taisen J*. The MIDI file has 3552 ticks
+the games with the later revision. The MIDI file has 3552 ticks
 per quarter note, or 37 per song tick. At tempo T, a driver frame lasts
 exactly T MIDI ticks. The driver plays each note at the start of the frame
 that its tick falls in, and the MIDI file keeps each note on its own tick,
@@ -585,8 +696,10 @@ sides. The MIDI files of those games keep CC10 at 64 on every track that the
 PSG's rule doesn't cover.
 
 In Camelot's version of the driver, in *Golden Sun: The Lost Age*, the mixer
-has an echo in place of the reverb, the same in every song, so every track gets
-a reverb send of 53, the driver's reverb that comes closest to it.
+has an echo in place of the reverb, the same in every song. Every track has a
+reverb send of 53, the driver reverb setting closest to the echo. The later
+version, in *Mario Tennis: Power Tour*, has a weaker echo, and its tracks have
+a reverb send of 32, the echo level.
 
 The MIDI file follows what the driver plays, where that differs from the
 song's commands:
@@ -594,10 +707,22 @@ song's commands:
 * The driver plays a note on one of a few DirectSound channels, or on the
   PSG channel its voice uses, and drops a note that finds none it can take.
   The MIDI file leaves such notes out, and ends a note where a later note takes
-  its channel.
+  its channel. The number of DirectSound channels is the one that the game
+  gives the song. *Fire Emblem* and *Fire Emblem: The Sacred Stones* set 8 for
+  some songs and 7 for the others. The later version of Camelot's driver, in
+  *Mario Tennis: Power Tour*, mixes 12 whatever the game sets.
 * The MIDI file leaves out notes that the driver releases before they start,
   since they never sound. It also leaves out PSG notes whose volume rounds to
   silence on the PSG's 16 levels.
+* A PSG note plays at the level the PSG gives it. The driver gives the note a
+  whole level from 0 to 15: the channel's two volumes added up, / 16, rounded
+  down. The wave channel plays that level at one of NR32's five volumes:
+  silence, 25%, 50%, 75% or 100%. Below 100%, the hardware scales each point
+  of the wave's pattern and drops the fraction. The track's CC11 and the note's
+  velocity give the level before the rounding. So each PSG note's velocity is
+  scaled by the hardware's level against that level, over the note's frames
+  until its sound ends. A velocity can't go above 127, and a note that would
+  need more plays quieter than in the game.
 * Where a song changes the tempo, the driver has already counted part of the
   next tick at the old tempo, and the MIDI file's tempo for that tick does the
   same.
@@ -638,6 +763,10 @@ on channel 10.
   backwards.
 * **Fixed-pitch samples**, which the driver plays at its mixer's rate whatever
   the key, play at that rate on every key, and the pitch bend doesn't move them.
+* **Samples of 4-bit steps**, in the later version of Camelot's mixer, in
+  *Mario Tennis: Power Tour*, play for a fixed-pitch voice whose sample has a
+  negative size. The SoundFont contains the points that the mixer decodes from
+  the steps.
 * **Synth voices**, in Camelot's version of the driver, play waves that its
   mixer makes from a sample's data: a pulse wave whose duty moves up and down
   each frame, a saw wave through a filter, and a triangle wave. A pulse or saw
@@ -669,7 +798,8 @@ on channel 10.
   they're stretched to keep the loudness close.
 * **Velocity** scales the level in a straight line. The driver does the same.
   A SoundFont player squares the velocity by default. The MIDI file therefore
-  holds the square root of the driver's velocity.
+  holds the square root of the driver's velocity. A PSG note's velocity is
+  scaled to the PSG's level first (see [MIDI from MP2K](#midi-from-mp2k)).
   The driver's master volume scales the samples. Camelot's mixer leaves the
   master volume out. It plays the samples a little louder against the PSG.
   The samples themselves hold these levels and the PSG's. A zone's attenuation
@@ -882,13 +1012,16 @@ song mode. Each MIDI file
 has a conductor track for tempo and loop markers, plus a track for every
 module channel that plays notes. Tracks are named `Channel 1`, `Channel 2`
 and so on, using MIDI channels 1-9 and 11-16 to avoid the drum channel.
-A module can have up to 32 channels. In a module with more than 15, channels
-share MIDI channels. A MIDI channel's program, controllers and bend act on
-every note it plays. The 15 channels whose notes last longest then take a MIDI
-channel each. Each other channel shares the MIDI channel whose notes it
-overlaps least. On a shared MIDI channel, each note sets its program, pan,
-expression and bend again. Where notes of two channels on one MIDI channel
-sound at once, the converter warns and gives the time they overlap.
+A module can have up to 32 channels. In a module with more than 15 that play
+notes, channels share MIDI channels. A MIDI channel's program, controllers and
+bend act on every note it plays. The channels whose settings clash least share
+one. Two notes clash if they sound at once with another pan, expression or
+bend, or on the same key. On a shared MIDI channel, each note sets its program,
+pan, expression and bend again. It does so again where a note of another
+channel on the MIDI channel ends. A note ends where the game's mixer holds its
+levels at 0 for the rest of the note. Another channel's expression could
+otherwise make it sound again. Where notes on one MIDI channel clash, the
+converter warns and gives the time.
 
 A module defines tick lengths and ticks per row, but has no explicit beat. The
 converter chooses 1, 2, 4, 8 or more rows per quarter note, or per eighth note
@@ -916,6 +1049,11 @@ the form that *Digimon Racing* has. The MIDI file of a jingle plays the module
 to its end and stops, with no loop markers. Krawall plays a jingle that way
 while no other module plays. `--info` lists the jingles. In *Digimon Racing*,
 module 16 is a jingle.
+
+A game can also start a module with a direct call of `krapPlay()`. If no such
+call loops the module, the module plays once. Its MIDI file then plays to the
+module's end and stops. *Cocoto Kart Racer* plays five modules that way.
+`--info` lists them.
 
 A game can also play its music through a table of what it plays. Each entry
 gives a module, the mode for `krapPlay()` and a song. Detection reads such a
@@ -970,12 +1108,15 @@ order the modules first play them, with 128 to a bank.
 
 Each piece of music in the game's sound bank is converted as a song, in the
 order of the bank's resources. A piece plays a list of sequences one after
-another, and a piece that loops starts its list again. Each MIDI file has a
+another, and a piece that loops starts its list again. The samples that the game
+plays as music follow as songs of their own. Each has one track, `Kit`, with a
+note for each pass of the sample's loop, on a key from key 81 up. Each MIDI file has a
 conductor track with the tempo and loop markers, and a track for each channel
 that plays notes: `Square 1`, `Square 2` and `Wave` for sequence channels 0-2,
-on MIDI channels 1-3, and `Kit` for channel 9, on MIDI channel 11. Players treat
-notes on MIDI channel 10 as drums. Some ignore a drum's note-off or its
-sample's loop, and the kit's notes require both.
+on MIDI channels 1-3, `Kit` for the samples of channel 9, on MIDI channel 11,
+and `Noise` for the noise notes of channel 9, on MIDI channel 4. Players treat notes on MIDI
+channel 10 as drums. Some ignore a drum's note-off or its sample's loop, and the
+kit's notes require both.
 
 The driver counts time in frames, and has no tempo. The MIDI file has 480
 ticks per quarter note, and the tempos of the beat that `agbsf2` works
@@ -985,13 +1126,15 @@ silence comes before its first note.
 | Game | MIDI |
 |---|---|
 | note on channel 9 | note on MIDI channel 11: its key plays one of the kit's samples; a velocity of v is written as 127 × √(v/64) |
-| note on channels 0-2 | note at the square's or the wave's pitch; a square's starting volume of v is written as a velocity of 127 × √(v/15), and the wave's volume of 100%, 50% or 25% as 127, 90 or 64 |
+| note on channels 0-2 | a MIDI note for each run of frames in which the channel sounds, at full velocity; CC11 sets the level of each frame, 127 × √(v/127) for a square at volume v and 127 × √(30s/127) for the wave at a share s of its full volume; the pitch bend follows the modulation and the glides |
+| noise note on channel 9 | a note on MIDI channel 4 in bank 3: a drum that contains the noise sound from the note-on, at CC11 44, 127 × √(15/127) |
 | program on channel 9 | bank select 9 and program change: an offset into the kit. Key k plays the kit's entry k + offset |
 | program on channels 0-2 | bank select of the channel's number and program change: the channel's instrument |
 
 Each track starts with CC7 (volume) and CC11 (expression) at 127, CC10 (pan)
-at 64, and CC91 (reverb) and CC93 (chorus) at 0. The velocities hold the
-levels. The music is mono. The driver adds no reverb or chorus.
+at 64, and CC91 (reverb) and CC93 (chorus) at 0. The velocities of the kit
+notes and the CC11 values of the PSG tracks set the levels. The music is mono. The driver adds no reverb or
+chorus.
 
 Channel 9's keys up to 11 play the PSG's noise, and its keys above that the
 kit's samples. The mixer plays a sample at a fixed rate. A key chooses a
@@ -1001,6 +1144,13 @@ channel 9's notes takes a free voice, and a note-off stops the voice of its
 last note, whatever its key. The MIDI file ends that note there, and another
 note sounding then plays until its sample ends. Notes that the driver plays at
 volume 0 make no sound, and the MIDI file leaves them out.
+
+*The Mummy* switches channel 9's kit off before most of its levels start their
+music. Those levels play songs 1-15 without drums. Later, the game can switch
+the kit on. The drums then come in where the song is. Each of those songs
+therefore gets two pairs of files: `game_01.mid` and `game_01.sf2` without the
+kit, and `game_01_kit.mid` and `game_01_kit.sf2` with it. The game plays the
+other songs with the kit. Nobody has found where it plays songs 19 and 20.
 
 ### SoundFont from Ubisoft Milan's driver
 
@@ -1012,18 +1162,107 @@ Each song's SoundFont holds the instruments its notes play:
   The SoundFont widens the game's 8-bit points to 16 bits. The mixer moves
   through a sample 8 points at a time, and a loop lasts a whole number of 8
   points. As in the game, a note stops at once at its note-off.
-* **Noise keys** of the kit play the PSG's noise at the clock that the
-  driver's table gives the key.
+* **The noise drums** are in bank 3, from key 36. Each drum contains a sound
+  that the noise channel makes from a note-on: its envelope, its length and
+  any changes that the driver writes. The drums are rendered at 65536 Hz, the
+  PSG output rate in the game.
 * **The PSG's instruments** get a preset in the bank numbered after their
   channel: a square with the instrument's duty, or the wave program's 64
   points, tuned as the driver's frequency table is.
 
-As in the driver, velocity scales the level in a straight line. A SoundFont
-player squares the velocity by default. The MIDI file therefore holds the
+As in the driver, velocity and CC11 scale the level in a straight line. A
+SoundFont player squares them by default. The MIDI file therefore holds the
 square root of the driver's level. The driver sets the PSG's master volume to
-3 of 7. A PSG channel at full volume is therefore 60/512 as loud as a
-full-scale sample. With `--single-sf2`, the kit's presets and the PSG's
+3 of 7. A square at volume 15 is therefore 60/512 as loud as a full-scale
+sample. With `--single-sf2`, the kit's presets and the PSG's
 instruments of all the songs go in the one SoundFont.
+
+### MIDI from Nintendo R&D1's driver
+
+Each entry of the song table is a song. An empty entry is skipped. The driver
+plays the song's MIDI file. The conversion keeps its notes on the file's
+ticks, with as many MIDI ticks to each as make at least 480 to a quarter note.
+The tempo map gives those ticks the time that the driver gives them: the
+driver steps through a song at a whole number of beats a minute, a frame at a
+time. Each event comes at the start of a frame. The file's markers `[` and `]`
+become `loopStart` and `loopEnd`. A song without them plays once.
+
+The driver plays a track's events on the channel of the track's number. The
+conversion writes a track for each channel that plays notes, on the melodic
+MIDI channels in order. Each track starts with the song's bank and its first
+program, CC7 at 127, the first note's CC91 and CC93 at 0. The mixer echoes
+every sample note, and those notes send the echo's level to CC91. PSG notes
+play outside the mixer and send 0. The channel's level and pan go to CC11 and
+CC10 where the driver changes them, and its bend and pitch LFO to the pitch
+wheel. The driver plays a PSG note on the left side, both sides or the right
+side, by the channel's CC10. The conversion writes CC10 0, 64 or 127 for it.
+The velocities hold the notes' levels. A PSG note's velocity also follows the
+driver's PSG volume. That volume reaches its full 15 at about two thirds of a
+voice's level, and it moves in whole steps. The driver starts a PSG note's
+release a frame after the note's end. Where the release doesn't silence the
+note at once, the MIDI note ends there. A note on square 1 with a sweep bends
+with the sweep and keeps its first level. It ends where the sweep or the voice
+turns it off.
+
+### SoundFont from Nintendo R&D1's driver
+
+Each song's SoundFont has a preset for each program that its notes play, in
+the bank of the song's record. A sample's zone plays its points at its rate. A
+fixed sample, a record of type `0x46`, plays at the mixer's rate on every key.
+A PSG instrument plays a square of its duty, the wave channel's pattern, or
+the noise at the setting that the driver gives each key. The noise's samples
+are at 32768 Hz, the rate at which the GBA samples its PSG in these games. A
+drum kit or a key split gets a zone for each key that the song plays. The
+volume envelope follows the driver's straight steps of level each frame. The
+driver's release takes longer from a higher level, so a sample zone's release
+lasts as long as the driver's from the level at which the song's notes on it
+end, on average.
+
+### MIDI from AlphaDream's driver
+
+Each entry of the song table is a song. Song 0 plays no track and is skipped.
+The conversion plays a song on player 1, as the game starts its music. Each
+MIDI file has a conductor track with the tempo and loop markers, and a track
+for each of the driver's tracks that plays notes: `Track 0` to `Track 7` for
+the samples, then `Square 1`, `Square 2`, `Wave` and `Noise`. Each track plays
+on the MIDI channel of its number, without channel 10.
+
+The driver runs a track's ticks a frame at a time. The MIDI file has 480 ticks
+per quarter note, and the tempos of the beat that `agbsf2` works out from the
+notes (see [Output](#output)). A song loops when its tracks jump back. The
+loop starts where the last track first jumps back. It lasts as long as the most
+tracks fill with whole passes of their loops. In a looping player, a track
+whose loop has another length jumps at each repeat. Track 5 of *Superstar
+Saga*'s song 22 jumps by 18 frames.
+
+Each track starts with the bank and program of its first instrument. A sample
+track's instruments are in banks 0 to 3, a square's in banks 4 to 7, the
+wave's in banks 8 to 11 and the noise's in banks 12 to 15: 512 preset numbers
+for each kind of channel. The levels that the driver gives the channel's two
+sides go to CC10 (pan) and CC11 (expression), and its bend and fine tune to the
+pitch wheel. A tie changes the pitch of the note that sounds. The MIDI file
+bends that note to the new key. The driver gives the squares and the noise the
+hardware's envelope. Their notes last while the channel sounds, and each
+frame's CC11 is the hardware's mean volume over that frame. The bend of a
+square or the wave follows the frequency that the driver's pitch table gives,
+a few cents sharp. The driver gives notes below key 36 the setting 0, and a
+square plays them at 64 Hz. The wave plays at
+25, 50, 75 or 100%, by its volume at the note's start.
+
+### SoundFont from AlphaDream's driver
+
+Each song's SoundFont has a preset for each instrument that its notes play.
+Each of the instrument's regions that the song plays becomes a zone over the
+region's keys. A sample's zone plays its 8-bit points, widened to 16 bits, at
+the sample's rate at key 60. A region whose entry in the sample table is empty
+gets no zone. A sample with a fixed pitch plays at that rate on
+every key. The volume envelope follows the mixer's: the attack's straight
+rise, a frame at the full level, the sustain level, and the release. A square
+plays its region's duty, the wave its 32 points, and the noise the setting
+that the driver gives each key. Like the hardware, the wave plays an octave
+below a square at the same key. The squares and the noise release at once,
+because the MIDI file's CC11 already follows their envelopes. The wave releases
+at once too: the driver silences it at the note's end.
 
 ### Sequence listing (`--dump`)
 
@@ -1073,6 +1312,10 @@ SoundFonts.
   hardware's output capacitor removes the signal's DC offset. In the
   SoundFont, the wave channel's patterns have no DC offset. The square waves
   have one at duty cycles other than 50%.
+* **The game's samples.** *Hunter X Hunter: Minna Tomodachi Daisakusen!!*
+  requests some songs with a list or a table of samples that it builds as it
+  runs. In the game, notes of those songs play the samples that the game
+  chose. The conversion plays each song with the samples of its own notes.
 
 ### Rare's driver
 
@@ -1153,9 +1396,10 @@ SoundFonts.
   the voice's note at once.
 * **Echo.** The driver can add an echo to the voices of tracks with an echo
   send, but only the game's code turns it on, so the conversion leaves it out.
-  *Super Mario Advance 2* turns it on in some levels. No track of its music has
-  an echo send. In those levels the echo reaches only the sound effects.
-  `agbsf2` converts the effects without it.
+  *Super Mario Advance 2* and *Super Mario Advance 3* turn it on in some
+  levels. No track of their music has an echo send. In those levels the echo
+  reaches only the sound effects. `agbsf2` converts the effects without it.
+  *A Link to the Past* never turns it on.
 * **PSG.** The MIDI file changes a square's or the noise's CC11 at the start
   of a frame. The PSG's envelope steps the volume at 64 Hz. The hardware's step
   can then come up to a frame before the step in the MIDI file. The PSG's notes
@@ -1213,6 +1457,15 @@ SoundFonts.
   pitch until the track's next change. The MIDI file changes them all.
 * **Echo.** A track can give its notes a quiet echo after their release. The
   SoundFont's release doesn't include it.
+* **The wave below 100%.** The hardware drops the fraction of each point of
+  the wave's pattern at 25%, 50% and 75%. The SoundFont plays the pattern
+  unrounded, at the level of the rounded pattern. The game's wave sounds
+  coarser there, most of all at 25%.
+* **PSG notes above velocity 127.** A PSG note's velocity follows the level
+  that the hardware gives it, up to 127. A note that would need more plays at
+  127, quieter than in the game. The quietest notes lose most. At the PSG's
+  lowest level, the driver rounds a note's sustain up, and the note doesn't
+  decay.
 * **Reverb.** The driver's reverb is a short echo of its output. It's
   approximated with the reverb send.
 * **Changed voices.** A track can change its copy of a voice with extended
@@ -1235,7 +1488,9 @@ SoundFonts.
   triangle wave's single cycle leaves out the faint aliasing of the mixer's.
 * **Camelot's echo.** The mixer's echo comes back a frame and four frames
   later, and from the right side to the left after 704 points. The reverb send
-  only approximates it.
+  only approximates it. In *Mario Tennis: Power Tour*, the echo comes back a
+  frame and seven frames later, and from the right side to the left after 352
+  points.
 
 ### Brownie Brown's driver
 
@@ -1281,13 +1536,20 @@ SoundFonts.
   options. The conversion plays at the options' default. *The Sims: Bustin'
   Out* plays its music at 255. There the loudest notes of a few pieces would
   need more than a MIDI file's full loudness. The conversion plays it at 128,
-  6 dB quieter than the game, with the same balance. *Juka and the
+  6 dB quieter than the game, with the same balance. *The Urbz: Sims in the
+  City*, *Robots* and *Shrek SuperSlam* play their music at 255 too. Their
+  conversions also play at 128. *Juka and the
   Monophonic Menace* fades its music in from silence at each start. The
   conversion fades in the same way. Its marked loop then starts on the second
   pass. `agbsf2` contains the volumes that the games set and the fade-in for
-  one release of each game, by its game code. Another release, such as one
-  from another region, plays at 128 without a fade. A game that changes the
-  music's volume at other times does so outside the module.
+  the releases that its tables list, by game code. Another release, such
+  as one from another region, plays at 128 without a fade. *Cocoto Kart
+  Racer* and *Cocoto Platform Jumper* set a volume for each piece. The
+  conversion plays each piece at that volume. A piece that the game plays at
+  two volumes converts at one of them. *Cocoto Platform Jumper*'s level music
+  converts at 73, the volume after a level's tip. The game plays it at 88
+  after a lost life, 1.6 dB louder. A game that changes the music's volume at
+  other times does so outside the module.
 * **More than 15 channels.** MIDI has 15 channels besides the drum channel.
   Channels of a larger module share them (see [MIDI from
   Krawall](#midi-from-krawall)). Where two channels on one MIDI channel play
@@ -1312,16 +1574,46 @@ SoundFonts.
   point with the one before, and writes 8-bit output. A SoundFont player plays
   the same samples more cleanly and brighter: the averaging takes up to 3 dB
   off the top octave.
-* **The PSG.** A PSG note keeps its starting volume: the conversion leaves out
-  the hardware's envelope, and the vibrato and pitch modes that an instrument
-  can have, with a warning. A noise note ends at its note-off. In the game,
-  the noise's envelope and length run on.
+* **The PSG.** The conversion follows the PSG frame by frame: the envelopes,
+  the length counters, the square 1 sweep, the modulation and glides of the
+  instruments, and the noise. A note on an instrument with legato starts a new
+  MIDI note where the game continues without a restart. Neither game has such
+  an instrument. In the game, the modulation, glide and wave of a channel carry
+  over from one piece to the next. The conversion starts each piece from the
+  state after the driver init.
 * **A key outside the kit.** In the game, a note on a key that channel 9's kit
   has no sample for plays bytes from elsewhere in the cartridge, past the end
   of the sound bank's table, until its note-off. The conversion leaves the
   note out, with a warning.
 * **Sound effects** aren't converted. The game plays them straight from its
   samples.
+
+### Nintendo R&D1's driver
+
+* **What the game changes.** The conversion plays a song at its first state:
+  the tempo, pitch and volume that its file gives. *WarioWare, Inc.* speeds
+  a stage's music up as the stage goes on, and *Rhythm Tengoku*'s scripts
+  change the speed, the pitch and the volume, and silence groups of tracks
+  in some games.
+* **The echo.** The driver's mixer feeds its output back after 117 ms, so
+  every sample note has an echo. Those notes send the echo's level to CC91,
+  and the player's reverb stands in for the echo.
+* **Random pitches.** CC82 and CC83 give each note a random pitch or key in
+  the game. The conversion plays notes at their written pitch.
+* **Inverted sides.** CC75 inverts a voice's right side in the game, so the
+  voice sounds hollow on headphones and cancels in mono. The conversion plays
+  the voice as usual.
+
+### AlphaDream's driver
+
+* **What the game changes.** The game fades its music in and out, and plays it
+  at half volume in some scenes. In one cutscene it changes the tempo of song
+  29. Sound effects take a track from songs 7 and 40 while they play. The
+  conversion plays each song as the game starts it, at full volume and the
+  driver's tempo.
+* **Pitch.** The mixer moves in a straight line in frequency between
+  semitones. The MIDI file's bends follow a curve. They differ by up to 2
+  cents.
 
 ### FluidSynth
 
@@ -1368,9 +1660,10 @@ off.
 `docs/konami.md`, `docs/rare.md`, `docs/quintet.md`, `docs/rd2.md`,
 `docs/mp2k.md`, `docs/brownie.md`, `docs/krawall.md` and `docs/ubimilan.md`
 document the drivers and their data formats in full, including how the tool
-locates them. The code for each is in `src/konami/`, `src/rare/`,
-`src/quintet/`, `src/rd2/`, `src/mp2k/`, `src/brownie/`, `src/krawall/` and
-`src/ubimilan/`, behind the interface in `src/music.h`.
+locates them. The code for each is in `src/rare/`, `src/quintet/`,
+`src/rd2/`, `src/brownie/`, `src/krawall/` and `src/ubimilan/`, behind the
+interface in `src/music.h`. The code of MP2K and Konami's driver comes from
+ntdlib. `src/mp2k/` and `src/konami/` connect it to that interface.
 
 `tools/` holds the scripts used to reverse engineer the drivers and validate
 the conversion: a disassembler, harnesses that run each game's driver
@@ -1378,9 +1671,12 @@ under an ARM emulator, and comparison scripts. See `tools/README.md`.
 
 ## License
 
-`agbsf2` is released under the MIT License; see `LICENSE`. The DEFLATE
-decoder in `src/inflate.cpp` is adapted from Mark Adler's puff under the zlib
-license. Its notice is in that file and in `THIRD_PARTY_NOTICES`. The MIDI
+`agbsf2` is released under the MIT License; see `LICENSE`. The ROM and GSF
+reader, MP2K, Konami's driver and their conversions come from ntdlib, under
+the MIT License. ntdlib's notice is in `externals/ntdlib/LICENSE` and in
+`THIRD_PARTY_NOTICES`. ntdlib's DEFLATE decoder is adapted from Mark Adler's
+puff under the zlib license. Its notice is in ntdlib's `src/agb/inflate.cpp`
+and in `THIRD_PARTY_NOTICES`. The MIDI
 and SoundFont code comes from seqlib, under the MIT License. Its notice is in
 `externals/seqlib/LICENSE` and in `THIRD_PARTY_NOTICES`. The PSF container
 reader, the file and console code and the parsing of numbers come from

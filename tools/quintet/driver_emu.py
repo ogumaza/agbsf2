@@ -20,7 +20,8 @@ sound effects' file. The script plays a sound effect through the game's routine 
 playing. The sound effect channels then take the place of the music channels in the channel list.
 
 The routine and RAM addresses are chosen by the ROM's game code. Those of Super Robot Taisen A (ASRJ), R (AJ9J), D
-(A6SJ) and J (B6JJ) are built in. Another game needs its own values; see GAMES and docs/quintet.md.
+(A6SJ) and J (B6JJ) are built in, and those of the games whose driver loads a music file (LoadedFiles). Another game
+requires other values; see GAMES and docs/quintet.md.
 """
 import argparse
 import struct
@@ -56,6 +57,118 @@ class Addresses:
     effect_channels = 0x087F0F78  # the table of pointers to the 6 sound effect channel records
     songs = 38               # the number of songs in the music file. agbsf2 numbers the sound effects after them.
     countdown = 0x18         # the offset in a channel record of its frames left before its next note
+    init_calls = ()  # the driver's routines that the game calls after `sound_init`, before it plays: (routine, args)
+    loader = None    # the driver's routine that loads a music file into its tables, or None if the game gives them
+    files = ()       # the music files that the loader reads, in agbsf2's order: each file's first word
+    programs = ()    # the programs that the game sends to another console, each with its copy of the driver
+    image = None     # a program's copy in the ROM. It runs from EWRAM, where its routines' addresses are.
+
+
+class LoadedFiles(Addresses):
+    """The games whose driver of the J revision loads a music file: its songs, its sound effects and its tables. Their
+    `sound_init` is the driver's init. The game then calls the routine of `init_calls`. `play` and `play_effect` are
+    the driver's routines that play song n and sound effect n of the file that the loader read last. agbsf2 numbers
+    each file's songs and sound effects after those of the file before."""
+    countdown = 0x1A
+
+
+class AddressesA2PJ(LoadedFiles):
+    """A2PJ (Bouken Yuuki Plaston GP): the loader reads its music file from a literal."""
+    sound_init = 0x0803FB38
+    init_calls = ((0x08042784, ()),)
+    loader = 0x0803FE28
+    play = 0x0803FF18
+    play_effect = 0x0803FF54
+    frame = 0x08041C78
+    channels = 0x08747C34
+    effect_channels = 0x08747C4C
+    files = (0x084D611C,)
+
+
+class ProgramABRE1(LoadedFiles):
+    """The first of the three programs that ABRE sends to another console, at 0x08086F40. Its lookup gives its music
+    file, file 2 of archive 0."""
+    image = 0x08086F40
+    sound_init = 0x0200AD64
+    init_calls = ((0x0200D944, ()),)
+    loader = 0x0200B054
+    play = 0x0200B144
+    play_effect = 0x0200B180
+    frame = 0x0200CE38
+    channels = 0x02028154
+    effect_channels = 0x0202816C
+    files = (0x0809BA64,)
+
+
+class ProgramABRE2(ProgramABRE1):
+    """The second program that ABRE sends, at 0x080AF2E4."""
+    image = 0x080AF2E4
+    sound_init = 0x0200ABC4
+    init_calls = ((0x0200D7A4, ()),)
+    loader = 0x0200AEB4
+    play = 0x0200AFA4
+    play_effect = 0x0200AFE0
+    frame = 0x0200CC98
+    channels = 0x0201E3E4
+    effect_channels = 0x0201E3FC
+    files = (0x080C3C78,)
+
+
+class ProgramABRE3(ProgramABRE1):
+    """The third program that ABRE sends, at 0x080CD918."""
+    image = 0x080CD918
+    sound_init = 0x0200A77C
+    init_calls = ((0x0200D35C, ()),)
+    loader = 0x0200AA6C
+    play = 0x0200AB5C
+    play_effect = 0x0200AB98
+    frame = 0x0200C850
+    channels = 0x0201CE6C
+    effect_channels = 0x0201CE84
+    files = (0x080E1C84,)
+
+
+class AddressesABRE(LoadedFiles):
+    """ABRE (Blender Bros.): the game's lookups give its two music files, file 0x48 and file 0x49 of archive 0."""
+    sound_init = 0x0805E814
+    init_calls = ((0x080613F4, ()),)
+    loader = 0x0805EB04
+    play = 0x0805EBF4
+    play_effect = 0x0805EC30
+    frame = 0x080608E8
+    channels = 0x0863A278
+    effect_channels = 0x0863A290
+    files = (0x08117E28, 0x0818B648)
+    programs = (ProgramABRE1, ProgramABRE2, ProgramABRE3)
+
+
+class ProgramARPE(LoadedFiles):
+    """The program that ARPE sends to another console, at 0x08066F00. It has a copy of the driver and
+    loads its music file from 0x0200F734."""
+    image = 0x08066F00
+    sound_init = 0x02005118
+    init_calls = ((0x02007CF8, ()),)
+    loader = 0x02005408
+    play = 0x020054F8
+    play_effect = 0x02005534
+    frame = 0x020071EC
+    channels = 0x02010450
+    effect_channels = 0x02010468
+    files = (0x08076634,)
+
+
+class AddressesARPE(LoadedFiles):
+    """ARPE (Robopon 2: Ring Version): the game picks its music file by number from its table of files."""
+    sound_init = 0x08044FBC
+    init_calls = ((0x08047B9C, ()),)
+    loader = 0x080452AC
+    play = 0x0804539C
+    play_effect = 0x080453D8
+    frame = 0x08047090
+    channels = 0x0807BB38
+    effect_channels = 0x0807BB50
+    files = (0x0834674C,)
+    programs = (ProgramARPE,)
 
 
 class AddressesA6SJ(Addresses):
@@ -92,7 +205,141 @@ class AddressesB6JJ(Addresses):
     countdown = 0x1A
 
 
-GAMES = {b'ASRJ': Addresses, b'A6SJ': AddressesA6SJ, b'AJ9J': AddressesAJ9J, b'B6JJ': AddressesB6JJ}
+class AddressesAPJJ(LoadedFiles):
+    """APJJ (Bouken Yuuki Densetsu Plaston Gate): the loader reads its music file from a literal. The ROM holds another
+    music file, which no code of the game names."""
+    sound_init = 0x080D4864
+    init_calls = ((0x080D7444, ()),)
+    loader = 0x080D4B54
+    play = 0x080D4C44
+    play_effect = 0x080D4C80
+    frame = 0x080D6938
+    channels = 0x087FA198
+    effect_channels = 0x087FA1B0
+    files = (0x0864CEB4, 0x08711F1C)
+
+
+class AddressesBPDJ(LoadedFiles):
+    """BPDJ (Bouken Yuuki PlaStar World: Densetsu no Plust Gate EX): the loader reads its music file from a literal."""
+    sound_init = 0x08159098
+    init_calls = ((0x0815BC78, ()),)
+    loader = 0x08159388
+    play = 0x08159478
+    play_effect = 0x081594B4
+    frame = 0x0815B16C
+    channels = 0x08E2B748
+    effect_channels = 0x08E2B760
+    files = (0x08BB301C,)
+
+
+class AddressesAVDJ(LoadedFiles):
+    """AVDJ (Legend of Dynamic: Goushouden): the loader reads its music file from a literal."""
+    sound_init = 0x080C8960
+    init_calls = ((0x080CB5AC, ()),)
+    loader = 0x080C8C50
+    play = 0x080C8D40
+    play_effect = 0x080C8D7C
+    frame = 0x080CAAA0
+    channels = 0x087ED9B4
+    effect_channels = 0x087ED9CC
+    files = (0x08135E6C,)
+
+
+class AddressesA8DJ(LoadedFiles):
+    """A8DJ (Doubutsu no Shima no Chobi Gurumi): the game's lookup gives its music file, file 4 of archive 0."""
+    sound_init = 0x08082B4C
+    init_calls = ((0x0808572C, ()),)
+    loader = 0x08082E3C
+    play = 0x08082F2C
+    play_effect = 0x08082F68
+    frame = 0x08084C20
+    channels = 0x087CE848
+    effect_channels = 0x087CE860
+    files = (0x080F7BE4,)
+
+
+class AddressesAAIJ(LoadedFiles):
+    """AAIJ and ABIJ (Gachasute! Dyna Device Red and Blue): the game's lookup gives the music file, file 0x16 of
+    archive 0. The two have the same driver and music."""
+    sound_init = 0x080A8118
+    init_calls = ((0x080AACF8, ()),)
+    loader = 0x080A8408
+    play = 0x080A84F8
+    play_effect = 0x080A8534
+    frame = 0x080AA1EC
+    channels = 0x08747B44
+    effect_channels = 0x08747B5C
+    files = (0x08131174,)
+
+
+class ProgramACVE(ProgramARPE):
+    """The program that ACVE sends to another console, at 0x08066F08: ARPE's, 8 bytes on."""
+    image = 0x08066F08
+    files = (0x0807663C,)
+
+
+class AddressesACVE(LoadedFiles):
+    """ACVE (Robopon 2: Cross Version): the game picks its music file by number from its table of files, as in ARPE."""
+    sound_init = 0x08044FD0
+    init_calls = ((0x08047BB0, ()),)
+    loader = 0x080452C0
+    play = 0x080453B0
+    play_effect = 0x080453EC
+    frame = 0x080470A4
+    channels = 0x0807BB40
+    effect_channels = 0x0807BB58
+    files = (0x0834674C,)
+    programs = (ProgramACVE,)
+
+
+class AddressesAJOJ(LoadedFiles):
+    """AJOJ (Magical Fengshen): the game picks its music file by number, through tables that it sets up in RAM."""
+    sound_init = 0x08048E14
+    init_calls = ((0x0804B9F4, ()),)
+    loader = 0x08049104
+    play = 0x080491F4
+    play_effect = 0x08049230
+    frame = 0x0804AEE8
+    channels = 0x08693EB4
+    effect_channels = 0x08693ECC
+    files = (0x08074504,)
+
+
+class AddressesASKJ(Addresses):
+    """ASKJ (Suta Komi: Star Communicator), with the S revision of the driver. The game's routines play song n of its
+    music file and sound effect n of its sound effects' file."""
+    sound_init = 0x08025FF0
+    play = 0x08026040
+    play_effect = 0x080260A0
+    frame = 0x08026110
+    channels = 0x08119500
+    effect_channels = 0x08119518
+    songs = 23
+
+
+GAMES = {b'ASRJ': Addresses, b'A6SJ': AddressesA6SJ, b'AJ9J': AddressesAJ9J, b'B6JJ': AddressesB6JJ,
+         b'A2PJ': AddressesA2PJ, b'A8DJ': AddressesA8DJ, b'AAIJ': AddressesAAIJ, b'ABIJ': AddressesAAIJ,
+         b'ABRE': AddressesABRE, b'ACVE': AddressesACVE, b'AJOJ': AddressesAJOJ, b'APJJ': AddressesAPJJ,
+         b'ARPE': AddressesARPE, b'ASKJ': AddressesASKJ, b'AVDJ': AddressesAVDJ, b'BPDJ': AddressesBPDJ}
+
+
+def file_counts(rom, file):
+    """Returns the songs and the sound effects of the music file whose first word is at `file`, as the loader counts
+    them: each list ends at a length of 0. A song's length gives the start of the next."""
+    counts = []
+    at = file
+    for _ in range(2):
+        size = struct.unpack_from('<I', rom, at - ROM_BASE)[0]
+        song, n = at + 4, 0
+        while True:
+            length = struct.unpack_from('<H', rom, song - ROM_BASE)[0] & ~1
+            if not length:
+                break
+            song += length
+            n += 1
+        counts.append(n)
+        at += 4 + (size & ~3)
+    return counts
 
 
 def addresses_for(rom):
@@ -102,9 +349,29 @@ def addresses_for(rom):
     return GAMES[code]
 
 
+def program_files(rom):
+    """Returns each music file of the game in agbsf2's order, as (the addresses of the program that plays it, the
+    file's address in the ROM): the game's files, then those of each program that it sends to another console."""
+    a = addresses_for(rom)
+    return [(a, f) for f in a.files] + [(p, f) for p in a.programs for f in p.files]
+
+
+def locate(rom, song):
+    """Returns the addresses of the program that plays agbsf2's song `song`, the song's music file and its number in
+    the file, or the game's addresses, None and `song` if the game has no music files."""
+    for program, file in program_files(rom):
+        count = sum(file_counts(rom, file))
+        if song < count:
+            return program, file, song
+        song -= count
+    return addresses_for(rom), None, song
+
+
 class DriverEmulator:
-    def __init__(self, rom):
-        self.addr = addresses_for(rom)
+    def __init__(self, rom, song=0):
+        """Starts the driver of the program that plays agbsf2's song `song`: the game's, or that of a program that the
+        game sends to another console."""
+        self.addr = locate(rom, song)[0]
         uc = Uc(UC_ARCH_ARM, UC_MODE_ARM)
         uc.mem_map(0x00000000, 0x4000)
         uc.mem_map(0x02000000, 0x40000)
@@ -115,6 +382,9 @@ class DriverEmulator:
         uc.mem_write(ROM_BASE, rom)
         uc.mem_map(RETURN_TRAP, 0x1000)
         uc.mem_write(RETURN_TRAP, b'\xfe\xe7' * 0x800)
+        if self.addr.image:
+            # A program that the game sends to another console runs from the start of EWRAM.
+            uc.mem_write(0x02000000, rom[self.addr.image - ROM_BASE:self.addr.image - ROM_BASE + 0x40000])
         uc.hook_add(UC_HOOK_MEM_WRITE, self._io_write, begin=0x04000000, end=0x04000FFF)
         uc.hook_add(UC_HOOK_MEM_READ, self._io_read, begin=0x04000000, end=0x04000FFF)
         uc.hook_add(UC_HOOK_MEM_UNMAPPED, self._unmapped)
@@ -124,11 +394,23 @@ class DriverEmulator:
         self.writes = []
         self.channel_records = self.records(self.addr.channels)
         self.call(self.addr.sound_init)
+        for routine, args in self.addr.init_calls:
+            self.call(routine, args)
         self.init_writes = self.writes  # the sound init's writes. A sound effect plays on from them.
 
     def records(self, table):
         """Returns the addresses of the 6 channel records that the table at `table` points to."""
-        return struct.unpack('<6I', self.rom[table - ROM_BASE:table - ROM_BASE + 24])
+        return struct.unpack('<6I', self.uc.mem_read(table, 24))
+
+    def rom_address(self, address):
+        """Returns the ROM's address of `address` in a program that runs from EWRAM, or `address` itself."""
+        if self.addr.image and 0x02000000 <= address < 0x02040000:
+            return self.addr.image + address - 0x02000000
+        return address
+
+    def ram_address(self, address):
+        """Returns the address in EWRAM of a ROM address in a program that runs from there, or `address` itself."""
+        return 0x02000000 + address - self.addr.image if self.addr.image else address
 
     def _svc(self, uc, intno, user):
         raise SystemExit('the driver made a BIOS call')
@@ -140,7 +422,11 @@ class DriverEmulator:
         if address in FIFO_DATA:
             return
         if any(lo <= address < hi for lo, hi in TRACED):
-            self.writes.append((address, size, value & ((1 << (8 * size)) - 1)))
+            value &= (1 << (8 * size)) - 1
+            if address in (0x040000BC, 0x040000C8) and size == 4:
+                # A DMA's source in a program that runs from EWRAM, as the ROM's address of the same data.
+                value = self.rom_address(value)
+            self.writes.append((address, size, value))
 
     def _io_read(self, uc, access, address, size, value, user):
         # Mask what's stored before the read sees it, as the register would read on the hardware.
@@ -169,9 +455,16 @@ class DriverEmulator:
         """Starts `song` at once, or the sound effect that agbsf2 numbers `song`. Returns the register writes that
         starting it made."""
         self.writes = []
-        if song >= self.addr.songs:
+        songs = self.addr.songs
+        if self.addr.loader:
+            # The loader reads the file that holds the song first.
+            program, file, song = locate(self.rom, song)
+            assert program is self.addr
+            self.call(self.addr.loader, (self.ram_address(file),))
+            songs = file_counts(self.rom, file)[0]
+        if song >= songs:
             self.channel_records = self.records(self.addr.effect_channels)
-            self.call(self.addr.play_effect, (song - self.addr.songs,))
+            self.call(self.addr.play_effect, (song - songs,))
         else:
             self.call(self.addr.play, (song,))
         return self.writes
@@ -200,7 +493,7 @@ def format_write(frame, write):
 
 
 def trace(rom, song, frames):
-    emu = DriverEmulator(rom)
+    emu = DriverEmulator(rom, song)
     for w in emu.play(song):
         print(format_write(-1, w))
     for f in range(frames):
@@ -211,7 +504,7 @@ def trace(rom, song, frames):
 
 
 def channels(rom, song, frames):
-    emu = DriverEmulator(rom)
+    emu = DriverEmulator(rom, song)
     emu.play(song)
     for f in range(frames):
         emu.frame()
@@ -260,7 +553,7 @@ class FifoModel:
 def render(rom, song, frames, channels_wanted=None):
     """Returns the driver's stereo output for the first `frames` frames of `song`, at psg_model.RATE. `channels_wanted`
     lists the channels to keep: 0-3 the PSG's, 4 and 5 the FIFOs."""
-    emu = DriverEmulator(rom)
+    emu = DriverEmulator(rom, song)
     keep = set(range(6)) if channels_wanted is None else set(channels_wanted)
     psg_keep = keep & {0, 1, 2, 3}
     if len(psg_keep) not in (0, 1, 4):

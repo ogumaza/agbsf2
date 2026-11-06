@@ -29,7 +29,7 @@ The script starts those sequences without Yoshi, like agbsf2's first version. --
 riding Yoshi, like agbsf2's <name>_NN_yoshi.
 
 The routine and RAM addresses are chosen by the ROM's game code. Those of The Legend of Zelda: A Link to the Past
-(AZLE), Super Mario Advance 2 (AA2E) and Super Mario Advance 3 (A3AE) are built in. For another game, add an entry to
+(AZLE), Super Mario Advance 2 (AA2E), Super Mario Advance 3 (A3AE) and Super Mario Advance 4 (AX4E) are built in. For another game, add an entry to
 GAMES (see docs/rd2.md).
 """
 import argparse
@@ -161,7 +161,37 @@ class AddressesA3AE(Addresses):
     music_count = 0x29
 
 
-GAMES = {b'AZLE': Addresses, b'AA2E': AddressesAA2E, b'A3AE': AddressesA3AE}
+class AddressesAX4E(AddressesA3AE):
+    """AX4E (Super Mario Advance 4: Super Mario Bros. 3, US, revision 1). The game's driver has the same code as Super
+    Mario Advance 3's. The driver's variables are 0x70 bytes higher than there. The play-music routine reads the music's
+    sequence from its table and requests it. It sets nothing else."""
+    sound_init = 0x080E4414
+    request = 0x080E6D94
+    effect_request = 0x080E6DB8
+    settings = 0x030003A4
+    commit = 0x080E6D80
+    requests = 0x080E72A0
+    vblank = 0x080E4DDC
+    frame = 0x080E4DE8
+    voices = 0x03001738
+    active = 0x03000140
+    tracks = 0x03000BF8
+    players = 0x03001C60
+    fixed_region = 0x03000130
+    outputs = 0x03000118
+    output_index = 0x0300012A
+    note_on = 0x080E5E34
+    note_key = 0x080E5E72
+    note_voice = 0x080E5F22
+    note_done = 0x080E5FE4
+    music_player = 0x13
+    effect_player = 0  # the game's sound routine at 0x080E4936 picks a player for each effect, from 0 up
+    play_music = 0x080E4598  # the game's play-music routine: r0 = the music number
+    music_table = 0x08263CAC  # a halfword for each music number: the sequence in its low byte
+    music_count = 67  # entries 57 to 66 give sequences 76 to 85, and another table follows
+
+
+GAMES = {b'AZLE': Addresses, b'AA2E': AddressesAA2E, b'A3AE': AddressesA3AE, b'AX4E': AddressesAX4E}
 
 
 def addresses_for(rom):

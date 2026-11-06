@@ -2,6 +2,7 @@
 
 #include "rare/driver.h"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstddef>
@@ -58,6 +59,72 @@ constexpr RateSetting kRateSettings[] = {
 
 // The rate that detection assumes where the init sets a rate that the rate routine doesn't know.
 constexpr const RateSetting& kAssumedRate = kRateSettings[1];
+
+// Donkey Kong Country: the volume that the game's code gives each tune after it requests it, through the setter at
+// 0x08032734. 0x7F at most of the 54 calls. The level music comes from the switch at 0x0801B08C, at 0x7F, and at 0x96
+// for tune 25. When tune 21 ends, the routine at 0x080003D0 starts tune 22 at 0x8C. Tune 24 starts at 0x8C
+// (0x0802F440), tune 33 at 0x5A (0x08023D4C), tune 3 at 0x73 (0x0805FAFA), tunes 5 and 13 at 0x69 (0x0806C5FC,
+// 0x08021D7A), tune 18 at 0x77 (0x080208AE), and tunes 26, 27 and 29 to 32 at 0x6E (0x080251C2). Tune 34 starts at
+// 0x6E too (0x08092904). The sound test plays every tune at 0x7F (0x0800ECEC).
+constexpr uint8_t kA5neVolumes[] = {127, 127, 127, 115, 127, 105, 127, 127, 127, 127, 127, 127, 127,
+                                    105, 127, 127, 127, 127, 119, 127, 127, 127, 140, 127, 140, 150,
+                                    110, 110, 127, 110, 110, 110, 110, 90,  110, 127, 127, 127, 127};
+
+// Donkey Kong Country 2: the routine at 0x08027B88 gives each tune a volume from 0x50 to 0x7F and multiplies it by the
+// options' music level / 256. The options start at 0xB3 (0x08020B42). These are the routine's results at 0xB3, from a
+// run of its code for each tune.
+constexpr uint8_t kB2deVolumes[] = {69, 69, 62, 62, 69, 66, 59, 69, 69, 66, 62, 69, 69, 66, 66, 69,
+                                    62, 88, 62, 62, 76, 76, 62, 62, 55, 69, 69, 69, 55, 62, 62, 69,
+                                    69, 62, 62, 69, 69, 62, 69, 69, 69, 55, 62, 55, 62, 62, 55};
+
+// Donkey Kong Country 3: the routine at 0x08085B98 gives tune 2 a volume of 40, tunes 3 and 4 80 and the rest 70, and
+// multiplies it by the options' music level / 256. At boot, the routine at 0x0807ADDC sets the level from the music
+// slider: the slider × 25.5, rounded down. The slider starts at 10, a level of 255. These are the routine's results
+// at 255 for each tune.
+constexpr uint8_t kBdqeVolumes[] = {69, 69, 39, 79, 79, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69,
+                                    69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69, 69};
+
+// Sabre Wulf: 0x7F at most calls of the setter at 0x0800E074. Tunes 5 and 7 start at 0x50 (0x08026326, 0x080639FC),
+// as does tune 35 (0x080687C2), and tune 29 at 0x3C (0x08025596). The game's scripts start tunes through their table
+// at 0x0828A40C (0x0800B500): tunes 2 and 1 at 0x50 and the others at 0x7F. A new game's intro starts tune 1 from a
+// script, at 0x50, before 0x080279DE starts it at 0x7F. The level-music switch at 0x08016170 starts tune 2 at 0x7F in
+// seven levels. Tune 4 starts at 0x7F at 0x08012534 and from the scripts, and at 0x50 at 0x08068852. No run has shown
+// which start of tunes 2, 4, 5 and 7 comes first in normal play. The table takes the volume that more of their starts
+// give: 0x7F for tunes 2 and 4, and 0x50 for tunes 5 and 7. A few requests set no volume and keep the one before.
+constexpr uint8_t kAwueVolumes[] = {127, 80,  127, 127, 127, 80,  127, 80,  127, 127, 127, 127, 127,
+                                    127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127, 127,
+                                    127, 127, 127, 60,  127, 127, 127, 127, 127, 80,  127, 127};
+
+// Banjo-Pilot: the routine at 0x08016094 starts a tune at the options' music level × 100 / 256, and the routine at
+// 0x080300A4 at the level × 127 / 256. The options start at 0x80 (0x080301C2): 50 and 63. The races' tunes start
+// through the first, and tunes 24 to 26 and 28 to 30 through the second. Tune 3 starts through both.
+constexpr uint8_t kBajeVolumes[] = {50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50,
+                                    50, 50, 50, 50, 50, 50, 50, 63, 63, 63, 50, 63, 63, 63, 50, 50, 50};
+
+// The music volume, out of 128, of most of Donkey Kong Country 3's tunes (kBdqeVolumes).
+constexpr int kDkc3MusicVolume = 69;
+
+// What detection can't read from a game's code: the music volume, out of 128, at which the game starts each tune. A
+// game that isn't listed plays every tune at the init's 128.
+struct GameSettings
+{
+    const char* game_code;
+    uint32_t init;                    // the driver's init in the game's build, to check that the build is the same
+    int tune_count;                   // the tunes in the build's table
+    std::span<const uint8_t> volumes; // each tune's music volume; empty for `volume`
+    int volume = 128;                 // every tune's music volume, where `volumes` is empty
+};
+
+constexpr GameSettings kGameSettings[] = {
+    {.game_code = "A5NE", .init = 0x08032294, .tune_count = 39, .volumes = kA5neVolumes},
+    {.game_code = "B2DE", .init = 0x08032AB0, .tune_count = 47, .volumes = kB2deVolumes},
+    {.game_code = "BDQE", .init = 0x080AED90, .tune_count = 31, .volumes = kBdqeVolumes},
+    {.game_code = "AWUE", .init = 0x0800DBD4, .tune_count = 38, .volumes = kAwueVolumes},
+    {.game_code = "BAJE", .init = 0x08002084, .tune_count = 34, .volumes = kBajeVolumes},
+    // Banjo-Kazooie: Grunty's Revenge: the options' music level runs from 0 to 9 and starts at 4 (0x08040C96). The
+    // table at 0x080BF604 gives level 4 a volume of 56. Every tune plays at it.
+    {.game_code = "BKZX", .init = 0x08004C18, .tune_count = 0, .volumes = {}, .volume = 56},
+};
 
 // Maximum number of tunes to read during detection.
 constexpr int kMaxTunes = 1024;
@@ -500,6 +567,38 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
         info.voice_limit = 8;
     }
 
+    // The music volume at which the game's code starts each tune. Donkey Kong Country 3's revision of the driver plays
+    // most tunes of that game at 69. A build of the game that isn't listed is taken to do the same.
+    bool known = false, other_build = false;
+    for (const GameSettings& game : kGameSettings)
+    {
+        if (rom.GameCode() != game.game_code)
+        {
+            continue;
+        }
+
+        if (info.init != game.init || (!game.volumes.empty() && info.tune_count != game.tune_count))
+        {
+            other_build = true;
+            break;
+        }
+
+        info.music_volume = game.volume;
+        info.music_volumes.assign(game.volumes.begin(), game.volumes.end());
+        known = true;
+    }
+    if (!known && info.skips_silent_notes)
+    {
+        info.music_volume = kDkc3MusicVolume;
+        info.warnings.push_back("the game's music volumes aren't known; every tune plays at " +
+                                std::to_string(kDkc3MusicVolume) +
+                                ", the volume of most of Donkey Kong Country 3's tunes");
+    }
+    else if (other_build)
+    {
+        info.warnings.push_back("agbsf2 knows another build's music volumes; every tune plays at 128");
+    }
+
     // Donkey Kong Country 3's code picks the arrangement of a tune by the water, through the channels' levels. Only
     // that revision of the driver has the levels.
     if (info.skips_silent_notes)
@@ -524,6 +623,17 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
         {
             info.log.push_back("controllers 20-23 set a channel's attack, decay, sustain and release");
         }
+        if (!info.music_volumes.empty() || info.music_volume != 128)
+        {
+            int low = info.music_volume, high = info.music_volume;
+            if (!info.music_volumes.empty())
+            {
+                low = *std::min_element(info.music_volumes.begin(), info.music_volumes.end());
+                high = *std::max_element(info.music_volumes.begin(), info.music_volumes.end());
+            }
+            info.log.push_back("the game's code starts the tunes at a music volume of " + std::to_string(low) +
+                               (low == high ? "" : " to " + std::to_string(high)) + ", out of 128");
+        }
         if (info.water.tune >= 0)
         {
             info.log.push_back("the game's code plays tune " + std::to_string(info.water.tune) + " on channels " +
@@ -535,6 +645,16 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
                        (info.tune_count == 1 ? "" : "s"));
 
     return true;
+}
+
+int MusicVolume(const DriverInfo& info, int tune)
+{
+    if (tune >= 0 && size_t(tune) < info.music_volumes.size())
+    {
+        return info.music_volumes[size_t(tune)];
+    }
+
+    return info.music_volume;
 }
 
 uint32_t TuneAddress(const Rom& rom, const DriverInfo& info, int tune)

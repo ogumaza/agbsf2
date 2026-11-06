@@ -12,10 +12,14 @@ from the code (see [Locating the driver](#locating-the-driver)).
 
 *Yu-Gi-Oh! World Championship Tournament 2004* has an older revision of the
 driver, with a different command set. [The WCT 2004
-revision](#the-wct-2004-revision) describes how it differs, and [The Rave
-Master revision](#the-rave-master-revision), [The Eternal Duelist
+revision](#the-wct-2004-revision) describes how it differs. [The Kitaro
+revision](#the-kitaro-revision) and [The Minna no Ouji-sama
+revision](#the-minna-no-ouji-sama-revision) describe two variants of it. [The Rave Master
+revision](#the-rave-master-revision), [The Hunter X Hunter
+revision](#the-hunter-x-hunter-revision), [The Captain Tsubasa
+revision](#the-captain-tsubasa-revision), [The Eternal Duelist
 revision](#the-eternal-duelist-revision) and [The Dungeon Dice Monsters
-revision](#the-dungeon-dice-monsters-revision) describe three still older ones.
+revision](#the-dungeon-dice-monsters-revision) describe five still older ones.
 
 ## Architecture
 
@@ -63,16 +67,70 @@ Other builds of this driver read the same song format, with a few differences:
 | Games | Pitch bend | Voice records |
 |---|---|---|
 | *Ultimate Masters Edition* (`BY6J`, `BY6E`) | kept for later notes | 28 bytes |
-| *Yu-Gi-Oh! GX: Duel Academy* (`BYGE`) | kept for later notes | 24 bytes |
-| *Shaman King: Master of Spirits* 1 and 2 (`BSOE`, `B2ME`), *Yu-Gi-Oh! Day of the Duelist* (`BY7E`) | the playing note only | 24 bytes |
+| *Yu-Gi-Oh! GX: Duel Academy* (`BYGE`), *Animal Yokochou* (`BAYJ`) | kept for later notes | 24 bytes |
+| *Shaman King: Master of Spirits* 1 and 2 (`BSOE`, `B2ME`), *Yu-Gi-Oh! Day of the Duelist* (`BY7E`), *Mermaid Melody Pichi Pichitto Live Start!* (`B3MJ`) | the playing note only | 24 bytes |
+| *Tennis no Ouji-sama 2004* (`B4GJ`, `B4SJ`) | the playing note only | 24 bytes |
 
 See [Pitch bend](#pitch-bend-f2) for the difference in bends. The 24-byte voice
-records leave out the ADPCM decoder's state at `+0x18`, and the note-start code
-points a voice that plays an ADPCM sample at `+0x4C` of the sample's header
-rather than `+0x0C`. In these builds the driver's RAM follows the mixer that the
+records hold no ADPCM decoder state at `+0x18`. Their mixer plays packed
+samples instead (see [Packed samples](#packed-samples)). In these builds the driver's RAM follows the mixer that the
 init copies to IWRAM: the state is at `+0x480`, the voice records at `+0x820`
-and the echo buses at `+0x98C`. The mixer goes to `0x03000000` in `BSOE` and
-`B2ME`, `0x03004788` in `BY7E` and `0x030006C8` in `BYGE`.
+and the echo buses at `+0x98C`. The mixer goes to `0x03000000` in `BSOE`,
+`B2ME`, `BAYJ`, `B4GJ` and `B4SJ`, `0x03001EB0` in `B3MJ`, `0x03004788` in
+`BY7E` and `0x030006C8` in `BYGE`.
+
+The builds of *Mermaid Melody Pichi Pichitto Live Start!* and *Tennis no
+Ouji-sama 2004* (The Prince of Tennis 2004) differ in more ways. `agbsf2`
+reads them as two revisions, Live Start and Prince of Tennis 2004. Detection
+finds both from their duty command's code, `2x0F 40xx 2x03 DD01 3x04 E000 01xx`
+with any registers. Live Start keeps the Ultimate Masters revision's code that
+reads a sample byte above `EF` with the next byte, `2xEF DDxx 3x01 3x01 2x0F
+40xx 02xx`. Prince of Tennis 2004 doesn't.
+
+Both builds read the Ultimate Masters revision's commands, with these
+differences:
+
+- The duty command reads only the opcode's low nibble, for every opcode from
+  `00` to `8F`. A nibble of 0 to 3 sets the duty byte to the nibble shifted into
+  bits 6-7. `00`-`03` and `80`-`83` then both select 12.5%, 25%, 50% and 75%.
+  Any other nibble sets the duty byte to the nibble minus 4. The wave track
+  then has waves 0 to 11.
+- Delays read as in WCT 2004 (see [Delays in WCT 2004](#delays-in-wct-2004)).
+- `90`-`9F` are calls. They work as in WCT 2004 (see [Calls](#calls)). Like
+  `00`-`8F`, `90`-`9E` first set the duty byte from their low nibble.
+- `F4` and `F5` set the attack and decay rates of PSG notes. They work as in
+  WCT 2004 (see [Attack and decay](#attack-and-decay)).
+- `F6 xx` with `xx` up to `63` selects entry `xx` of a table of samples that
+  the game can give the driver with a song request. Init and every plain
+  request clear the table's address. Only the live stage of *Pichi Pichitto
+  Live Start!* gives a table (see [Live stages](#live-stages)). `F6` with a
+  higher value changes the playing note's sample from the table at once. No
+  song with a table uses that, and `agbsf2` leaves it out.
+- `FA xx` with any `xx` but 0 holds the track back if a setting that the game
+  gives the driver is 0 when `FA` runs. A held track's output record has its
+  retrigger byte and flags cleared every frame. The output stage then neither
+  starts nor changes the track's notes. A song loop keeps the hold. `FA 00`
+  releases the track, and so does the end of the track. A song request sets the
+  setting to `FF`, and `FA` then holds nothing back. *Pichi Pichitto Live
+  Start!* sets the setting to 0 after the requests of its live stage (see
+  [Live stages](#live-stages)).
+- A pitch bend applies to the playing note only.
+
+Prince of Tennis 2004 differs from Live Start in three more ways:
+
+- A sample byte is one byte. `F0`-`FF` are samples 240 to 255.
+- Its track records are 28 bytes. The other builds' are 32. A record has no
+  copy of the note's 16-bit sample. A bend or a vibrato step therefore puts the
+  duty byte in the output record's bytes 6 and 7. The duty byte holds the low
+  byte of the note's sample. Everything after the track records sits `0x40`
+  bytes lower: the voice records at `+0x7E0` from the mixer, and the echo buses
+  at `+0x94C`.
+- The output stage sets a playing voice's levels only when the track
+  retriggers the voice. A pan change without a note waits for the next note or
+  volume command.
+
+The songs of *Pichi Pichitto Live Start!* use `9F`, `F6`, `FA` and samples
+numbered from `100` up, and some of the samples are packed.
 
 ## Song table
 
@@ -239,7 +297,10 @@ note. Each sample is a 12-byte header followed by signed 8-bit PCM:
 | 12 | s8[] | PCM data |
 
 A looped sample plays `[0, length)` and then repeats `[loop start, length)`. A
-negative length selects a mode that agbsf2 doesn't model.
+negative length selects another mode. In the builds with 24-byte voice records,
+that mode is a packed sample (see [Packed samples](#packed-samples)). `agbsf2`
+reads packed samples only in the later builds of Live Start and Prince of Tennis
+2004. None of the checked games of the other builds plays one.
 
 The step is relative to the mixer's output rate, so the playback rate is
 `mixer rate × step / 4096`.
@@ -248,6 +309,40 @@ At pitch `p` the step becomes `(step × pitchtab[p]) >> 12`, where
 `pitchtab[p] = round(4096 × 2^(p/384))` (the table is centred on index 0).
 
 In `BY6J` the sample table is at `0x081D7F30`.
+
+### Packed samples
+
+A packed sample's length has bit 31 set, and the note start takes the length's
+low 24 bits. A table of 32 pairs of samples follows the 12-byte header, 2 bytes
+for each pair. The packed data starts at `+0x4C` of the header. The mixer reads
+the data as a stream of codes:
+
+| Byte | Plays |
+|---|---|
+| `C0`-`7F` | the byte, as one sample |
+| `A0`-`BF` | pair `n - A0` of the table: its high byte, then its low byte |
+| `90`-`9F` | `n` zero samples |
+| `80`-`8F` | `n` samples of the value in the next byte |
+
+In a run, `n` is the code's low nibble, or the next byte if the nibble is 0. A
+run with a count of 0 plays one sample. The mixer then skips the next code if
+that code is a single sample.
+
+`agbsf2` unpacks a packed sample as the mixer plays it at one sample of the
+data for each sample of the mix. At other steps the mixer departs from that in
+three ways:
+
+- When it moves on by more than one sample, it skips single samples one by one.
+  A run or pair that it meets ends the skip, and plays from its first sample.
+- After a run or pair that it moves past by more than one sample, it lands one
+  sample short.
+- At the start of each block of 16 samples, a pair that the mixer has just
+  reached plays its low byte in place of its high byte.
+
+These depend on the step and on where the blocks fall. A SoundFont can't
+follow either. The mixer can't loop a packed sample. At the loop, it goes back
+to the loop start's byte in the packed data, and it goes back there again on
+every step after that. `agbsf2` reads a packed sample only when it has no loop.
 
 ## Mixer
 
@@ -281,6 +376,11 @@ The sequencer starts, changes and stops voices through the 12 voice records at
 | 15 | u8 | volume |
 | 16 | u8 | level on the right |
 | 17 | u8 | level on the left |
+
+In the builds with 24-byte voice records, byte 18 holds the value that a packed
+sample's run or pair plays next, and byte 19 the number of its samples left.
+Bytes 20-23 hold the start of the sample's data. A loop goes back to that start,
+and a packed sample's table of pairs comes just before it.
 
 ### Volume table
 
@@ -386,6 +486,10 @@ the Ultimate Masters revision) and the echo buses at `0x0300587C`. The init
 copies the mixer to `0x03004F18`. The song table is at `0x0893C7D0`, and the
 sample table is at `0x0894E950`.
 
+*Mermaid Melody Pichi Pichi Pitch* (`BMAJ`) has a build of this revision whose
+voice records are 24 bytes, laid out as the Ultimate Masters builds' 24-byte
+records are. Its commands and outputs are the same.
+
 ### Delays in WCT 2004
 
 | First byte | Length | Value |
@@ -413,15 +517,24 @@ number of frames.
 | `F3` | loop point | as in the Ultimate Masters revision |
 | `F4 rr` | attack rate | see [Attack and decay](#attack-and-decay) |
 | `F5 rr` | decay rate | see [Attack and decay](#attack-and-decay) |
-| `F6 ii` | instrument | picks the notes' samples from a table that the game can give the driver; `agbsf2` ignores it |
+| `F6 ii` | instrument | picks the notes' samples from a table that the game can give the driver with a song request (see [Live stages](#live-stages)) |
 | `F7 ff` | echo feedback | echo bus 0 feedback = `(ff & 7F)`/256 |
 | `F8 dd` | echo delay | echo bus `dd >> 7` delay = `(dd & 7F) × 32` mixer samples |
 | `F9 vb` | echo routing | as in the Ultimate Masters revision |
-| `FA xx` | volume scale | scales the track's volumes by a setting that the game can give the driver; `agbsf2` ignores it |
+| `FA xx` | volume scale | `xx` other than 0 scales the track's later volumes by a setting that the game gives the driver, and `FA 00` ends that; see below |
 | `FB`, `FC` | - | nothing |
 | `FD` | end track | the track stops until the song loops |
 | `FE` | loop song | all tracks go back to their loop points |
 | `FF` | stop song | everything is silenced on the next frame |
+
+`FA` with any `xx` but 0 sets the track's scale to the setting, and `FA 00`
+sets it to `FF`. A scale under `80` makes a note's or a volume command's volume
+`volume × scale / 16`, rounded down. A note or a volume command that the scale
+takes to 0 does nothing, and the note that's playing goes on. A PSG note plays
+at the scaled volume, even at 0. A song request sets the setting to `FF`, and
+a song's start sets each track's scale to `FF`. A song loop keeps the scale.
+*Mermaid Melody Pichi Pichi Pitch* sets the setting to 0 after the requests of
+its live stage (see [Live stages](#live-stages)).
 
 The notes store their volume as it is. A sample note's output record starts
 the voice without the retrigger byte, since the output stage sets the voice's
@@ -489,6 +602,85 @@ revision, except that the sequencer masks the routing it hands the mixer with
 `0x1FFF`. That keeps only voices 5-11 of bus 0, so voices 0-4 routed to bus 0
 play dry.
 
+## The Kitaro revision
+
+*Gegege no Kitarou: Kikiippatsu! Youkai Rettou* (`BGKJ`) has a revision of
+the driver that works like the WCT 2004 revision. Its songs, delays, output
+records, output stage and voices are those of WCT 2004. These parts differ:
+
+* **Commands.** `FA` does nothing and takes no argument, as `FB` and `FC` do.
+  The other commands are WCT 2004's.
+* **Duties.** `00`-`8F` and the calls `90`-`9E` store a duty of 0-3 as it is,
+  where WCT 2004 shifts it into bits 6-7. The output stage writes the byte to
+  a square's length and duty bits, as WCT 2004's does. The duty bits stay 0,
+  so every square note plays at a duty of 12.5 %.
+* **Echo.** The init takes no work buffer. After the init, the game gives the
+  echo buses their delay lines through `0x0803853C`: `r0` is bus 0's line, and
+  buses 1 and 2 share the 8 KB after it. `BGKJ` passes `0x02002304`. The mixer
+  reads each bus's routing from the bus's record, and takes every voice from
+  bus 0.
+
+The reader compares `FC`, `FF`, `FE`, `EF`, `F9`, `F8`, `F7`, `F6`, `F5`, `F4`,
+`F3`, `F2`, `F1` and `F0`.
+
+In `BGKJ` the routines are:
+
+| Address | Routine |
+|---|---|
+| `0x08035F70` | sound init: `r0` = the address where the init writes the mixer's address |
+| `0x0803853C` | give the echo buses their delay lines: `r0` = bus 0's line |
+| `0x080378AC` | request a song: `r0` = song number |
+| `0x08037900` | request a song unless it's playing: `r0` = song number |
+| `0x08037718` | start the requested song (the game calls it every frame) |
+| `0x080373F0` | per-frame entry |
+| `0x08036794` | the sequencer; its command reader is at `0x08036AD0`, and its output stage starts at `0x08037064` |
+| `0x08037FE0` | start a DirectSound note |
+
+The driver's state is at `0x03000424` (the track records start at `+0x1C`, 28
+bytes each), the voice records at `0x03000768` (28 bytes each) and the echo
+buses at `0x03000904`. The init writes `0x03000000` as the mixer's address. The
+song table is at `0x080CD220`, and the sample table is at `0x080F5F00`.
+
+## The Minna no Ouji-sama revision
+
+*Minna no Ouji-sama* (`BMOJ`) has a revision of the driver that works like the
+WCT 2004 revision. Its songs, delays, output records, output stage and mixer
+are those of WCT 2004, and its voice records are the 24-byte records of
+`BMAJ`'s build. Its commands are WCT 2004's, with one more:
+
+* **`FB xx`** sets the song volume to `xx`. A song starts at `10`, and a loop
+  sets the volume back to `10`. At the end of each running track's frame,
+  after the attack or decay, the sequencer multiplies the track's volume by
+  the song volume and divides it by 16. The tracks run from 15 down to 0. A
+  track after the `FB`'s track plays at the new volume in that frame, and a
+  track before it from the next frame.
+* **Retriggers.** While the song volume isn't `10`, each running track's
+  output gets a retrigger every frame, unless the frame's commands or
+  envelope gave it one. The retrigger has the track's duty byte and the
+  note's pitch without vibrato. Vibrato therefore stops while the song volume
+  isn't `10`.
+
+The reader compares `FC`, `FF`, `FE`, `EF`, `FB`, `FA`, `F9`, `F8`, `F7`, `F6`,
+`F5`, `F4`, `F3`, `F2`, `F1` and `F0`.
+
+In `BMOJ` the routines are:
+
+| Address | Routine |
+|---|---|
+| `0x0808BE34` | sound init |
+| `0x0808D94C` | request a song: `r0` = song number |
+| `0x0808D9A0` | request a song unless it's playing: `r0` = song number |
+| `0x0808D744` | start the requested song (the game calls it every frame) |
+| `0x0808D400` | per-frame entry |
+| `0x0808C630` | the sequencer; its command reader is at `0x0808CA14`, and its output stage starts at `0x0808D06A` |
+| `0x0808E15C` | start a DirectSound note |
+
+The driver's state is at `0x030004A0` (the track records start at `+0x1C`, 28
+bytes each, and the song volume is at `+0x351`), the voice records at
+`0x030007F4` (24 bytes each) and the echo buses at `0x03000960`. The init
+copies the mixer to `0x03000000`. The song table is at `0x087E33F0`, and the
+sample table is at `0x08806BF0`.
+
 ## The Rave Master revision
 
 *Rave Master: Special Attack Force* (`BRME`) has a revision of the driver
@@ -527,6 +719,113 @@ The driver's state is at `0x030040EC` (the track records start at `+0x0C`, 28
 bytes each), and the voice records at `0x0300433C` (24 bytes each). The init
 copies the mixer to `0x03004440`. The song table is at `0x0809A7E0`, and the
 sample table is at `0x080E0EB0`.
+
+*Groove Adventure Rave 2* (`ARIJ`) has the driver of `BRME`, 0x2B0 bytes lower
+in ROM, with the same RAM. *Hikaru no Go 2* (`AKEJ`) has a build with 20-byte
+voice records. Its state is at `0x03000770`, and its voice records at
+`0x030009C0`. The init's second half copies the mixer to `0x03000AA0`, and its
+wave RAM loader has no check for volume 0 (see [Locating the
+driver](#locating-the-driver)). Its commands and outputs are those of `BRME`.
+
+## The Hunter X Hunter revision
+
+*Hunter X Hunter: Minna Tomodachi Daisakusen!!* (`A8NJ`), *Tennis no
+Ouji-sama 2003: Passion Red* and *Cool Blue* (`A8RJ`, `A9LJ`) and *Tennis no
+Ouji-sama: Aim at the Victory!* (`AVAJ`) have a revision of the driver that
+works like the Rave Master revision. Its songs, delays, output records and
+mixer are those of Rave Master. These parts differ:
+
+* **Commands.** `F6 ii` stores `ii` for the track's later notes. If `ii` is
+  above 0 and the game gave the request a table of samples, each note plays
+  entry `ii` of the table, unless the entry is 0. `F7`-`FC` do nothing.
+* **Lists of samples.** The game can also give a request a list of samples for
+  one of the tracks. Each note of that track then plays the next sample of the
+  list, from the second sample table.
+* **Loops.** A song loop keeps each track's pan, as in WCT 2004.
+* **Mixer rate.** The game picks one of five mixer rates, from 21024 Hz down to
+  10512 Hz, and the note start scales each voice's step to keep its pitch.
+  `A8RJ` and `A9LJ` mix at 15768 Hz. `AVAJ` changes the rate with its modes.
+  `agbsf2` reads the table's first rate, 21024 Hz.
+* **Voices.** A voice record is 28 bytes. The mixer keeps the address of the
+  voice's mixing loop in the last 4 bytes.
+
+The reader compares `FC`, `FF`, `FE`, `EF`, `F6`, `F5`, `F4`, `F3`, `F2`, `F1`
+and `F0`. The note start loads the sample table with the registers of WCT
+2004's, and the square 1 and noise outputs load their tables with other
+registers than Rave Master's.
+
+In `A8RJ` the routines are:
+
+| Address | Routine |
+|---|---|
+| `0x080983B0` | sound init: `r0` = the address where the init writes the mixer's address |
+| `0x0809823C` | set the mixer rate: `r0` = 0-4 |
+| `0x080999B4` | request a song: `r0` = song number, `r1` = fade-in rate (0 plays it at full volume at once) |
+| `0x08099A6C` | request a song with a list of samples: `r1` = the list, `r2` = the track |
+| `0x08099A90` | request a song with a table for `F6`: `r1` = the table |
+| `0x08099AA8` | request a song with both: `r1` = the list, `r2` = the track, `r3` = the table |
+| `0x08099854` | start the requested song |
+| `0x080995A4` | per-frame entry |
+| `0x08098B04` | the sequencer; its command reader is at `0x08098DBA`, and its output stage starts at `0x0809919A` |
+| `0x0809A0AC` | start a DirectSound note |
+
+The driver's state is at `0x03000330` (the track records start at `+0x1C`, 28
+bytes each), and the voice records at `0x030005E0`. The init copies the mixer
+to `0x03000000`. The song table is at `0x089AC770`, the sample table at
+`0x089C2920`, and the second sample table at `0x08A90D80`.
+
+`A9LJ` has the driver of `A8RJ`, 0xD0 bytes higher in ROM, with the same RAM.
+`A8NJ` and `AVAJ` have other builds, with their states at `0x03002054` and
+`0x03005184`. Only `A8NJ` makes requests with lists of samples or tables. It
+builds them in RAM as it runs. `agbsf2` converts each song as a plain request
+plays it.
+
+## The Captain Tsubasa revision
+
+*Tennis no Ouji-sama* (`ATIJ`), *Kami no Kijutsu: Illusion of the Evil Eyes*
+(`AG2J`), *Captain Tsubasa: Eikou no Kiseki* (`AKYJ`) and *Groove Adventure
+Rave* (`ARVJ`) have a revision of the driver between the Eternal Duelist and
+Rave Master revisions. Its songs, delays, `F0`, output records, voices and
+mixer are those of the Eternal Duelist revision (see [The Eternal Duelist
+revision](#the-eternal-duelist-revision)). These parts differ from Eternal
+Duelist, and most of them follow Rave Master:
+
+* **Commands.** `F4` and `F5` set the attack and decay rates of PSG notes, as
+  in Rave Master (see [Attack and decay](#attack-and-decay)). `F1` and
+  `F6`-`FC` are vibrato.
+* **Notes.** Every PSG note retriggers its channel. There's no legato.
+* **Bends and vibrato.** They add the pitch flag to the output record's flags.
+  Only that flag changes the pitch of a DirectSound voice. In Eternal Duelist
+  any flag changes it, even the flag of a volume command.
+* **Calls.** Returning from a call clears the return position.
+* **Tracks.** A track record is 28 bytes. It has 4 bytes more than Eternal
+  Duelist's for the attack and decay rates and countdowns.
+
+The reader compares `FC`, `FF`, `FE`, `EF`, `F5`, `F4`, `F3`, `F2`, `F0` and
+`F0`. Rave Master's compares `F1` in place of the first `F0`. The square 1
+output loads the frequency table with Rave Master's registers.
+
+In `ATIJ` the routines are:
+
+| Address | Routine |
+|---|---|
+| `0x08075950` | sound init: `r0` = 0 |
+| `0x08076B10` | request a song: `r0` = song number, `r1` = fade-in rate (0 plays it at full volume at once) |
+| `0x080769D4` | start the requested song |
+| `0x0807682C` | per-frame entry: runs the sequencer, then the mixer |
+| `0x08075ED8` | the sequencer; its command reader is at `0x08076162`, and its output stage starts at `0x080764DE` |
+| `0x08076E9C` | start a DirectSound note |
+| `0x080767A0` | the DMA 1 interrupt's routine: it moves the mixer's position on |
+| `0x08077054` | the mixer (ARM, in ROM) |
+
+The driver's state is at `0x03000000` (the track records start at `+0x08`, 28
+bytes each), and the voice records at `0x030001C4`. The song table is at
+`0x083BAD10`, and the sample table is at `0x083C98B0`.
+
+`AG2J` has the driver of `ATIJ`, with its state at `0x030008A0`. `AKYJ` and
+`ARVJ` have another build, with their states at `0x03001AE4` and `0x03004074`.
+`ATIJ`'s output stage puts square 2 on both sides while bit 6 of the setting at
+`+0x1B0` of the state is set. The output stage of this build has no such mode.
 
 ## The Eternal Duelist revision
 
@@ -591,6 +890,11 @@ In `AY5E` the routines are:
 The driver's state is at `0x03005210` (the track records start at `+0x08`, 24
 bytes each), and the voice records at `0x030053AC` (16 bytes each). The song
 table is at `0x080E09D0`, and the sample table is at `0x0811B420`.
+
+*Hikaru no Go* (`AHKJ`) and *Yu-Gi-Oh! Duel Monsters 6 Expert 2* (`AY6J`) have
+the driver of `AY5E`. It's 0x1FC74 bytes lower in `AHKJ`'s ROM and 0x4A4C
+bytes lower in its RAM, and 0xC2C4 bytes higher in `AY6J`'s ROM and 0x100
+bytes lower in its RAM.
 
 ### Mixer in Eternal Duelist
 
@@ -719,6 +1023,23 @@ at `0x0805E034`. The sample table is at `0x08088534`, the sample map at
 at `0x0805CDC0`, the waves at `0x0805DF20`, and the wave volume table at
 `0x0866CAE8`.
 
+*GetBackers Dakkanya: Jigoku no Scaramouche* (`AGBJ`) and *Yu-Gi-Oh! Duel
+Monsters 5 Expert 1* (`AY5J`) have a later build of this revision. Its command
+reader, note starts and DMA interrupt routines are compiled differently, and
+the interrupt routines stop their DMA while they mix. The commands and outputs
+are the same. In `AGBJ` the init is at `0x08024DA0`, and the driver's state at
+`0x03000B24`. `AY5J`'s driver is 0x56994 bytes higher in ROM, with its state at
+`0x030053C8`.
+
+*Yu-Gi-Oh! Double Pack 2* (`BYVE`) holds *Dungeon Dice Monsters* with a third
+build of the driver. Its init, request, per-frame entry
+and DMA interrupt routines match `AYDE`'s. Its sequencer and output stage were
+compiled with other registers. The patterns for its tables leave those
+registers open (see [Locating the driver](#locating-the-driver)). In `BYVE` the
+init is at `0x0802B2D0`, the request at `0x0802CCBC`, the start of the requested
+song at `0x0802CA98`, the per-frame entry at `0x0802C888` and the output stage
+at `0x0802C032`. The driver's state is at `AYDE`'s address.
+
 ### Output stage in Dungeon Dice Monsters
 
 The output stage writes a PSG channel only when the track's record has its
@@ -765,17 +1086,66 @@ A note on voice 1 (or 3) at any other rate doesn't start while voice 0 (or 2)
 plays at its sample's rate. `agbsf2` leaves these rules out. Each voice plays
 at the rate of its notes and bends.
 
+## Live stages
+
+Two games change the state that a song request leaves before their live stages
+play a song. Every song request sets the setting that `FA` reads to `FF`, and
+gives `F6` no table of samples. The live stages set the setting to 0 after
+their requests. For some songs, they also give `F6` a table. The games play
+these songs in both states. `agbsf2` therefore writes each of them twice:
+`NAME_NN` as a request leaves it, and `NAME_NN_live` as the live stage plays
+it. The songs and the tables come from tables in the games' code. `agbsf2`
+lists them by game code.
+
+| Game | Live stage's request | Songs | What `FA 01` does there | Songs with a table |
+|---|---|---|---|---|
+| *Mermaid Melody Pichi Pichi Pitch* (`BMAJ`) | `0x0800C254`: the song of entry `r0` of the table at `0x08EB7E08`, with the table of samples through `0x080158EC`, then `0x080166AC` with 0 | 0-8 | track 12 plays no more notes | 1, 4-7 |
+| *Mermaid Melody Pichi Pichitto Live Start!* (`B3MJ`) | `0x0801E1C8` with `r1` = 1: the song of entry `r0` of the table at `0x09D37848`, with the table of samples through `0x0800B70C`, then `0x0800C514` with 0. `0x080106CC` does the same for songs 17-20. | 2, 4, 17-20 | track 12 or 14 is held | 0, 1, 4-8, 13 |
+
+The request builds the table of samples in RAM. Entry 0 is 0. The entries
+after it come from a list for each of the live stage's entries: `BMAJ`'s
+pointers are at `0x08EB10D4`, and `B3MJ`'s at `0x09D37800`. Each list ends in
+`FFFF`. The request sets bits 14 and 15 of each sample number, and in `B3MJ`
+bit 12 as well. The song start hands the table to `F6`. After `F6 xx`, each
+note of the track plays the sample of entry `xx` in place of the note's
+sample, where the entry isn't 0:
+
+| Bit of the entry | Effect |
+|---|---|
+| 15 | the sample comes from the second sample table: `0x0833D750` in `BMAJ` (note start `0x08015F48`), `0x08772980` in `B3MJ` (note start `0x0800BD94`), at the number's low 12 bits |
+| 14 | the note plays at pitch 0, the sample's rate, whatever its semitone |
+| 12 | `B3MJ`: the note plays at volume `7F` |
+
+`F6 00` ends that. Most of the second tables' samples are packed (see
+[Packed samples](#packed-samples)). `BMAJ`'s mixer unpacks them with the same
+code as Live Start's. `agbsf2` names them `Live sample N` in the SoundFont.
+
+The first version is the song as a request leaves it. `BMAJ`'s song select
+previews songs 0 to 7 that way (`0x0800E66E`), and `B3MJ` plays songs 17 to 20
+that way at `0x0800FBA2`. With no input after boot, `BMAJ` stops at its
+title. The title plays song 9. Songs 14 and 15 of `B3MJ` have
+`FA 01` too, but its live stage plays neither of them.
+`driver_emu.py --live` requests a song through the live stage's request.
+
+## Revisions that agbsf2 doesn't read
+
+Another game may have a revision whose command reader compares other opcodes
+after `FF`, `FE` and `EF`. Detection names the reader and stops. None of the
+games tested has one.
+
 ## Locating the driver
 
 `agbsf2` first finds the driver's command reader. The reader loads a command's
-opcode and compares it with `FC`: `ldrb rX,[rY]` / `cmp rX,#0xFC` / `ble`.
-The next opcode comparisons identify the revision: `FF`, `FD`, `EF` and `FB`
-for Ultimate Masters; `FF`, `FE`, `EF` and `FA` for WCT 2004; `FF`, `FE`, `EF`
-and `F5` for Rave Master; `FF`, `FE`, `EF` and `F3` for Eternal Duelist; and
-`FF`, `FE`, `EF` and `FC` for Dungeon Dice Monsters. For any other reader that
-compares `FF` and then `FE`, detection fails with an error that says the game
-has an older revision. If no recognised command reader is found, detection
-assumes the Ultimate Masters revision.
+opcode and compares it with `FC`: `ldrb rX,[rY]` / `cmp rX,#0xFC` / `ble`. The
+next opcode comparisons identify the revision: `FF`, `FD`, `EF` and `FB` for
+Ultimate Masters; `FF`, `FE`, `EF` and `FA` for WCT 2004; `FF`, `FE`, `EF` and
+`F9` for Kitaro; `FF`, `FE`, `EF` and `FB` for Minna no Ouji-sama; `FF`, `FE`,
+`EF` and `F5` for Rave Master, or for Captain Tsubasa if the ninth is `F0`;
+`FF`, `FE`, `EF` and `F6` for Hunter X Hunter; `FF`, `FE`, `EF` and `F3` for
+Eternal Duelist; and `FF`, `FE`, `EF` and `FC` for Dungeon Dice Monsters. For
+any other reader that compares `FF` and then `FE`, detection fails with an
+error that says the game has an older revision. If no recognised command
+reader is found, detection assumes the Ultimate Masters revision.
 
 It then finds each table from the instruction sequence that loads it. It matches
 Thumb code with the literal-pool offsets wildcarded. The song and sample tables
@@ -832,7 +1202,11 @@ its init loads the timer setting from a literal too.
 In the other revisions, the wave RAM loader's code goes on to load the second
 wave table, for waves from `80` up: `2800 D0xx 4Bxx` follows the wave pattern in
 the first table. A GSF rip may have zeroed that code, as the songs don't run it.
-The Eternal Duelist revision's loader reads every wave from the one table.
+Some builds of the Rave Master revision, such as *Hikaru no Go 2*'s, leave out
+the loader's check for volume 0. Their loader is `B510 1C04 4Bxx 2080 4008 2800
+D0xx 4Bxx`, with the first table in the first literal and the second table in
+the last. The Eternal Duelist revision's loader reads every wave from the one
+table.
 
 The Dungeon Dice Monsters revision has its own tables. Detection requires both
 the sample map and the sample period table. Noise settings start at note 72 in
@@ -843,12 +1217,15 @@ gives the starting index of the table's vibrato section.
 |---|---|---|
 | songs | song start: `song × 5 × 4 + table` | `00A0 1900 0080 49xx 1841 884C 0420 880D 4328` |
 | samples | voice start | `00D1 48xx 1808 6805 6841` |
-| PSG frequency | square output | `49xx 2400 5F30 0040 1840 8800` |
-| sample map | sample note | `48xx 786D 1828 7800 70A0` |
-| sample periods | sample bend | `48xx 0051 1809 8808 8038 8808 8018` |
-| waves | wave command | `0118 49xx 1840 6010` |
-| wave volumes | wave output | `49xx 7EF2 0050 1840 7EB3 8800 4303` |
-| vibrato part | vibrato | `109B 48xx 49xx 1A40` |
+| PSG frequency | square output | `ldr r1,=frequencies` / `movs rA,#0` / `ldrsh r0,[r6,rA]` / `lsls r0,r0,#1` / `adds r0,r0,r1` / `ldrh r0,[r0]` |
+| sample map | sample note | `ldr rA,=map` / `ldrb rB,[rC,#1]` / `adds rD,rE,rF` / `ldrb r0,[r0]` / `strb r0,[rG,#2]` |
+| sample periods | sample bend | `ldr r0,=periods` / `lsls r1,rA,#1` / `adds r1,r1,r0` / `ldrh r0,[r1]` / `strh r0,[rB]` / `ldrh r0,[r1]` / `strh r0,[rC]` |
+| waves | wave command | `lsls r0,rA,#4` / `ldr r1,=waves` / `adds r0,r0,r1` / `str r0,[r2]` |
+| wave volumes | wave output | `ldr r1,=volumes` / `ldrb rA,[r6,#0x1b]` / `lsls r0,rA,#1` / `adds r0,r0,r1` |
+| vibrato part | vibrato | `asrs rA,rB,#2` / `ldr r0,=part` / `ldr r1,=frequencies` / `subs r0,r0,r1` |
+
+In the rows given as instructions, `rA` to `rG` match any register. The builds
+of the revision number those registers differently.
 
 In the Ultimate Masters revision, the pitch bend command's code tells the builds
 apart. It hands on the bent pitch with `8BB0 4647 80F8 8830 1900 8038 7978

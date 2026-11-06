@@ -19,9 +19,9 @@ the game's modules:
                  volume column's effects
 
 They play three samples of their own: one that loops forwards, one that loops back and forth, and one that doesn't
-loop, and the XM module has three instruments. The copy has new tables of samples and instruments, the game's samples
-followed by the new ones and the new instruments, and the player's literals point to them, so the game's modules play
-as they do in the game. Run compare_trace.py and compare_notes.py on the copy with --songs for the new modules.
+loop, and the XM module has three instruments. The copy has new tables of samples and instruments, the game's entries
+followed by the new ones, and the player's literals point to them. The game's modules therefore play as they do in the
+game. Run compare_trace.py and compare_notes.py on the copy with --songs for the new modules.
 """
 import argparse
 import math
@@ -35,48 +35,73 @@ from gbarom import ROM_BASE, load_rom
 
 class Game:
     """BDGE (Digimon Racing)."""
+    later_patterns = False    # the patterns' format of the builds from 2004/09/17 on
     samples = 0x087BF3F4      # the game's table of samples
     sample_literals = (0x08037CC0, 0x08037F4C, 0x08038860)  # the player's literals that give the table
-    instrument_literals = (0x08037CBC,)  # the player's literal that gives the table of instruments, which is empty
+    instrument_literals = (0x08037CBC,)  # the player's literal that gives the table of instruments
 
 
-class EverythingOrNothing:
+class EverythingOrNothing(Game):
     """BJBE (007: Everything or Nothing): build 1.4 of player.c."""
     samples = 0x08251864
     sample_literals = (0x0803DB68, 0x0803DDF0, 0x0803E72C)
     instrument_literals = (0x0803DB64,)
 
 
-class Build1_2_2_17:
+class Build1_2_2_17(Game):
     """A homebrew game with build 1.2.2.17 of player.c, and no game code."""
     samples = 0x080373B8
     sample_literals = (0x08004908, 0x08004B90, 0x080054CC)
     instrument_literals = (0x08004904,)
 
 
-class Build1_2_2_15:
+class Build1_2_2_15(Game):
     """A game with build 1.2.2.15 of player.c."""
     samples = 0x087BAE54
     sample_literals = (0x08014A50, 0x08014CC4, 0x080155E0)
     instrument_literals = (0x08014A4C,)
 
 
-class RacingFever:
+class RacingFever(Game):
     """BRWP (Racing Fever): build 1.2.2.14 of player.c."""
     samples = 0x08056C84
     sample_literals = (0x08004D50, 0x08004FC4, 0x080058E4)
     instrument_literals = (0x08004D4C,)
 
 
-class Build1_2_2_10:
+class Build1_2_2_10(Game):
     """A homebrew game with build 1.2.2.10 of player.c."""
     samples = 0x0802DD18
     sample_literals = (0x08009954, 0x08009BC8, 0x0800A4E8)
     instrument_literals = (0x08009950,)
 
 
-GAMES = {b'BDGE': Game, b'BJBE': EverythingOrNothing, b'BRWP': RacingFever, b'MGBA': Build1_2_2_10,
-         b'0000': Build1_2_2_15, bytes(4): Build1_2_2_17}
+class Juka(Game):
+    """BJKE (Juka and the Monophonic Menace): the build of 2004/09/17."""
+    later_patterns = True
+    samples = 0x08EC3AD8
+    sample_literals = (0x0802BBAC, 0x0802BE04, 0x0802C71C)
+    instrument_literals = (0x0802BBA8,)
+
+
+class Babar(Game):
+    """BBVE (Babar to the Rescue): the build of 2004/11/14."""
+    later_patterns = True
+    samples = 0x083DBE90
+    sample_literals = (0x0801CB98, 0x0801CDF0, 0x0801D708)
+    instrument_literals = (0x0801CB94,)
+
+
+class Eragon(Game):
+    """BENE (Eragon): the build of 2005-04-21."""
+    later_patterns = True
+    samples = 0x086B78B0
+    sample_literals = (0x08043238, 0x08043490, 0x08043DA8)
+    instrument_literals = (0x08043234,)
+
+
+GAMES = {b'BBVE': Babar, b'BDGE': Game, b'BENE': Eragon, b'BJBE': EverythingOrNothing, b'BJKE': Juka,
+         b'BRWP': RacingFever, b'MGBA': Build1_2_2_10, b'0000': Build1_2_2_15, bytes(4): Build1_2_2_17}
 
 # The effects of the effect column.
 SPEED, BPM, SPEED_BPM, JUMP, BREAK = 1, 2, 3, 4, 5
@@ -98,9 +123,10 @@ def note(name):
     return 1 + names.index(name[:2]) + 12 * int(name[2:])
 
 
-def pattern(rows, events):
+def pattern(rows, events, later):
     """Returns a pattern's bytes: the index of every 4th row's data, the row count and the rows. Each event is (row,
-    channel, note, instrument, volume byte, effect, operand), with None for what it leaves out."""
+    channel, note, instrument, volume byte, effect, operand), with None for what it leaves out. `later` picks the format
+    of the builds from 2004/09/17 on: the row count is a halfword, and a note and its instrument take 2 or 3 bytes."""
     by_row = {}
     for e in events:
         by_row.setdefault(e[0], []).append(e[1:])
@@ -117,7 +143,12 @@ def pattern(rows, events):
             if effect is not None:
                 follow |= 0x80
             data.append(follow)
-            if n is not None:
+            if n is not None and later:
+                wide = (instrument or 0) > 0xFF
+                data += bytes((n | 0x80 * wide, (instrument or 0) & 0xFF))
+                if wide:
+                    data.append(instrument >> 8)
+            elif n is not None:
                 data += bytes((n << 1 | (instrument or 0) >> 8, (instrument or 0) & 0xFF))
             if volume is not None:
                 data.append(volume)
@@ -125,7 +156,7 @@ def pattern(rows, events):
                 data += bytes((effect, op))
         data.append(0)
     index += [index[-1]] * (16 - len(index))
-    return struct.pack('<16H', *index) + bytes((rows,)) + bytes(data)
+    return struct.pack('<16H', *index) + (struct.pack('<H', rows) if later else bytes((rows,))) + bytes(data)
 
 
 def module(channels, orders, speed, tempo, instruments=False, linear=False, fast=False, restart=0,
@@ -177,7 +208,7 @@ def instrument(note_samples, volume_env, pan_env, fade, vibrato_depth, vibrato_r
     return out + struct.pack('<HBBBB', fade, 0, 0, vibrato_depth, vibrato_rate)
 
 
-def s3m_patterns(fwd, bidi, one):
+def s3m_patterns(fwd, bidi, one, later):
     """The S3M modules' patterns: every effect of the effect column, a few rows apart."""
     i = lambda s: s + 1  # a sample's instrument number
     v = lambda x: 0x10 + x
@@ -226,11 +257,12 @@ def s3m_patterns(fwd, bidi, one):
         (9, 0, note('B-3'), i(fwd), None, PORTA_NOTE, 0x04), (9, 1, None, None, None, NOTE_CUT, 0x02),
         (11, 0, None, None, None, JUMP, 0x01),
     ]
-    return [pattern(20, first), pattern(16, second)]
+    return [pattern(20, first, later), pattern(16, second, later)]
 
 
-def xm_patterns():
-    """The XM module's patterns: instruments with envelopes, the XM effects and the volume column's effects."""
+def xm_patterns(later, first):
+    """The XM module's patterns: instruments with envelopes, the XM effects and the volume column's effects. `first` is
+    the number of the instrument before the new ones."""
     v = lambda x: 0x10 + x
     vc = lambda kind, x: 0x60 + (kind << 4) + x
     events = [
@@ -255,7 +287,11 @@ def xm_patterns():
         (28, 0, note('C-4'), 1, None, PORTA_DOWN_XM, 0x40), (28, 2, note('C-1'), 3, None, PORTA_DOWN_XM, 0x40),
         (31, 3, None, None, None, JUMP, 0x00),
     ]
-    return [pattern(32, events)]
+    moved = [e[:3] + (e[3] and e[3] + first,) + e[4:] for e in events]
+    return [pattern(32, moved, later)]
+
+
+INSTRUMENT_SIZE = 0x130
 
 
 def sample_count(rom, table):
@@ -268,6 +304,18 @@ def sample_count(rom, table):
             return n
         end = struct.unpack_from('<I', rom, at - ROM_BASE + 4)[0]
         if not at + 0x12 <= end <= ROM_BASE + len(rom):
+            return n
+        n += 1
+
+
+def instrument_count(rom, table):
+    """Returns the entries of the game's table of instruments: the words from its start that give instruments, one after
+    another. A table with no entries starts with something else, usually the first sample's loop length."""
+    first = struct.unpack_from('<I', rom, table - ROM_BASE)[0]
+    n = 0
+    while True:
+        at = struct.unpack_from('<I', rom, table - ROM_BASE + 4 * n)[0]
+        if not ROM_BASE <= at < ROM_BASE + len(rom) or at != first + n * INSTRUMENT_SIZE:
             return n
         n += 1
 
@@ -318,17 +366,20 @@ def main():
                    envelope([(0, 10), (8, 54), (16, 20), (24, 40)], 2, 1, 1 | 2 | 4), 0x0400, 0, 0),
         instrument([bidi] * 40 + [fwd] * 56, flat, flat, 0, 4, 0),
     ]
-    table_at = place(struct.pack('<3I', *[place(data) for data in instruments]))
+    game_table = struct.unpack_from('<I', rom, game.instrument_literals[0] - ROM_BASE)[0]
+    first_instrument = instrument_count(rom, game_table)
+    new = [place(data) for data in instruments]
+    table_at = place(rom[game_table - ROM_BASE:game_table - ROM_BASE + 4 * first_instrument] + struct.pack('<3I', *new))
     for literal in game.instrument_literals:
         struct.pack_into('<I', rom, literal - ROM_BASE, table_at)
 
     # The modules, each a header and its patterns' addresses, after the patterns.
     pans = [-40, 40, -10, 10, 0, 0]
-    s3m = [place(p) for p in s3m_patterns(fwd, bidi, one)]
+    s3m = [place(p) for p in s3m_patterns(fwd, bidi, one, game.later_patterns)]
     for fast in (False, True):
         header = module(6, [0, 254, 1], 4, 0x80, fast=fast, global_volume=60, pans=pans)
         place(header + struct.pack('<%dI' % len(s3m), *s3m))
-    xm = [place(p) for p in xm_patterns()]
+    xm = [place(p) for p in xm_patterns(game.later_patterns, first_instrument)]
     header = module(4, [0], 3, 0x96, instruments=True, linear=True, pans=[0, 0, 0, 0])
     place(header + struct.pack('<%dI' % len(xm), *xm))
 

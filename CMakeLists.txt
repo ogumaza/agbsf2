@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.20)
-project(agbsf2 VERSION 1.8.2 LANGUAGES CXX)
+project(agbsf2 VERSION 1.9.0 LANGUAGES CXX)
 
 # The name of the macOS droplet app.
 set(AGBSF2_APP_NAME Agbsf2)
@@ -26,38 +26,30 @@ endif()
 add_subdirectory(externals/seqlib EXCLUDE_FROM_ALL)
 
 # xsflib, a library for players and rippers of the PSF formats, is a submodule too. agbsf2 takes xsflib's PSF container,
-# console code and common files. The container doesn't require zlib: agbsf2 decompresses the programs itself
-# (src/inflate.cpp).
+# console code and common files. The container doesn't require zlib: ntdlib's GBA module decompresses the programs
+# itself.
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/externals/xsflib/CMakeLists.txt")
     message(FATAL_ERROR "externals/xsflib is missing. Run: git submodule update --init")
 endif()
 add_subdirectory(externals/xsflib EXCLUDE_FROM_ALL)
 
+# ntdlib, the library of the consoles' sound drivers, is a submodule too. agbsf2 takes its GBA modules: the ROM, MP2K and
+# their conversions.
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/externals/ntdlib/CMakeLists.txt")
+    message(FATAL_ERROR "externals/ntdlib is missing. Run: git submodule update --init")
+endif()
+set(NTDLIB_SEQUENCE_EXPORT ON)
+add_subdirectory(externals/ntdlib EXCLUDE_FROM_ALL)
+
 add_library(agbsf2_core STATIC
-    src/arm.cpp
-    src/beat_grid.cpp
-    src/beat_midi.cpp
-    src/inflate.cpp
-    src/midi.cpp
     src/music.cpp
-    src/psg.cpp
-    src/rom.cpp
-    src/sf2.cpp
-    src/song_banks.cpp
-    src/thumb.cpp
     src/brownie/convert.cpp
     src/brownie/driver.cpp
     src/brownie/music.cpp
     src/brownie/sequencer.cpp
     src/brownie/song.cpp
     src/brownie/soundfont.cpp
-    src/konami/convert.cpp
-    src/konami/driver.cpp
     src/konami/music.cpp
-    src/konami/pitch.cpp
-    src/konami/seqformat.cpp
-    src/konami/sequencer.cpp
-    src/konami/soundfont.cpp
     src/krawall/convert.cpp
     src/krawall/driver.cpp
     src/krawall/music.cpp
@@ -66,12 +58,7 @@ add_library(agbsf2_core STATIC
     src/krawall/song.cpp
     src/krawall/soundfont.cpp
     src/krawall/unpack.cpp
-    src/mp2k/convert.cpp
-    src/mp2k/driver.cpp
     src/mp2k/music.cpp
-    src/mp2k/sequencer.cpp
-    src/mp2k/song.cpp
-    src/mp2k/soundfont.cpp
     src/quintet/convert.cpp
     src/quintet/driver.cpp
     src/quintet/music.cpp
@@ -90,15 +77,26 @@ add_library(agbsf2_core STATIC
     src/rd2/sequencer.cpp
     src/rd2/song.cpp
     src/rd2/soundfont.cpp
+    src/rd1/convert.cpp
+    src/rd1/driver.cpp
+    src/rd1/music.cpp
+    src/rd1/sequencer.cpp
+    src/rd1/song.cpp
+    src/rd1/soundfont.cpp
     src/ubimilan/convert.cpp
     src/ubimilan/driver.cpp
     src/ubimilan/music.cpp
     src/ubimilan/sequencer.cpp
     src/ubimilan/song.cpp
     src/ubimilan/soundfont.cpp
+    src/alphadream/convert.cpp
+    src/alphadream/driver.cpp
+    src/alphadream/music.cpp
+    src/alphadream/sequencer.cpp
+    src/alphadream/soundfont.cpp
 )
 target_include_directories(agbsf2_core PUBLIC src)
-target_link_libraries(agbsf2_core PUBLIC seqlib::seqlib xsflib::psf_container)
+target_link_libraries(agbsf2_core PUBLIC seqlib::seqlib xsflib::psf_container ntdlib::sequence_export_mp2k ntdlib::sequence_export_konami)
 
 # Disable fused multiply-add so output stays byte-identical across platforms. GCC and Clang can fuse a * b + c on
 # CPUs such as ARM64, changing the rounding. MSVC's default /fp:precise disables this in Visual Studio 2022 and later;
@@ -133,7 +131,8 @@ if(AGBSF2_BUILD_TESTS)
     enable_testing()
     add_executable(agbsf2_tests tests/test_main.cpp tests/test_util.cpp tests/konami_test.cpp tests/rare_test.cpp
                                 tests/quintet_test.cpp tests/mp2k_test.cpp tests/rd2_test.cpp
-                                tests/brownie_test.cpp tests/krawall_test.cpp tests/ubimilan_test.cpp)
+                                tests/brownie_test.cpp tests/krawall_test.cpp tests/ubimilan_test.cpp
+                                tests/rd1_test.cpp tests/alphadream_test.cpp)
     target_link_libraries(agbsf2_tests PRIVATE agbsf2_core seqlib::testing)
     add_test(NAME agbsf2_tests COMMAND agbsf2_tests)
 

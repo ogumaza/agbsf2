@@ -2,8 +2,10 @@
 
 #include "quintet/song.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <iterator>
 #include <string>
 #include <utility>
 #include <vector>
@@ -63,24 +65,47 @@ bool ReadSongHeader(const Rom& rom, uint32_t address, SongHeader& header)
     return true;
 }
 
+uint8_t CommandOfS(uint8_t command)
+{
+    static constexpr uint8_t kCommands[] = {0x0E, 0x0F, 0x1E, 0x1F, 0x2E, 0x2F, 0x3E, 0x3F, 0x4E, 0x4F, 0x5E, 0x5F,
+                                            0x6E, 0x6F, 0x7E, 0x7F, 0x8E, 0x8F, 0x9E, 0x9F, 0xAE, 0xAF, 0xBE, 0xBF,
+                                            0xCE, 0xCF, 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6, 0xD7, 0xD8, 0xD9,
+                                            0xDA, 0xDB, 0xDC, 0xDD, 0xDE, 0xDF, 0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5,
+                                            0xF2, 0xE6, 0xE7, 0xE8, 0xE9, 0xEA, 0xEB, 0xEC, 0xED, 0xEE, 0xEF};
+    const size_t index = size_t(command - kFirstCommandS);
+    return command == 0xFF ? 0xFF : command >= kFirstCommandS && index < std::size(kCommands) ? kCommands[index] : 0xF2;
+}
+
 Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, int channel)
 {
     Command cmd;
-    const uint8_t b = rom.U8(address);
+    const bool byte_notes = TraitsOf(info.revision).byte_notes;
+    const uint8_t first = rom.U8(address);
     const int arg = rom.U8(address + 1);
     const int sarg = int8_t(arg);
     const bool pcm = channel >= kPcmA;
 
-    // A note: the low nibble is the pitch, 12 to play again or 13 to rest, and the high nibble picks the length.
-    const int pitch = b & 15;
-    const int length = b >> 4;
-    if (pitch <= 13 && length <= 12)
+    // A note: the low nibble is the pitch, 12 to play again or 13 to rest, and the high nibble picks the length. In the
+    // S revision, the note's first byte is its pitch, and the second its note value.
+    int pitch = first & 15;
+    const int length = first >> 4;
+    if (byte_notes ? first < kFirstCommandS : pitch <= 13 && length <= 12)
     {
-        const int value = rom.U8(info.length_table + uint32_t(length));
+        const int value = byte_notes ? arg : rom.U8(info.length_table + uint32_t(length));
+        if (byte_notes)
+        {
+            pitch = first <= 11 ? first : first == kPlayAgainS ? 12 : first == kRestS ? 13 : -1;
+            cmd.size = 2;
+        }
+
         cmd.note = true;
         cmd.ticks = value ? uint32_t(kWholeNote / value) : 0;
         const std::string len = Format("%d ticks (1/%d)", int(cmd.ticks), value);
-        if (pitch <= 11)
+        if (pitch < 0)
+        {
+            cmd.text = "wait, " + len;
+        }
+        else if (pitch <= 11)
         {
             cmd.text = std::string("note ") + kNoteNames[pitch] + ", " + len;
         }
@@ -95,6 +120,18 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
 
         return cmd;
     }
+
+    // The S revision's command that skips a byte. Its other commands are the A revision's under other numbers.
+    if (byte_notes && first == kSkipByteS)
+    {
+        cmd.size = 2;
+        cmd.command = CommandOfS(first);
+        cmd.text = "nothing: skips a byte";
+        return cmd;
+    }
+
+    const uint8_t b = byte_notes ? CommandOfS(first) : first;
+    cmd.command = b;
 
     // The commands with arguments.
     struct Argument
@@ -329,8 +366,8 @@ Command DecodeCommand(const Rom& rom, const DriverInfo& info, uint32_t address, 
 bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::string& path, std::string& error)
 {
     SongHeader h;
-    const uint32_t address = SongAddress(info, song);
-    if (!address || !ReadSongHeader(rom, address, h))
+    const uint32_t song_address = SongAddress(info, song);
+    if (!song_address || !ReadSongHeader(rom, song_address, h))
     {
         error = "invalid song";
         return false;
@@ -338,6 +375,7 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
 
     std::string text;
     char line[320];
+    const bool byte_notes = TraitsOf(info.revision).byte_notes;
     const int effect = EffectIndex(info, song);
     const std::string name = effect >= 0 ? "song " + std::to_string(song) + ", sound effect " + std::to_string(effect)
                                          : "song " + std::to_string(song);
@@ -357,15 +395,17 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
         uint32_t address = h.channels[size_t(c)];
         uint64_t tick = 0;
         uint32_t dot_ticks = 0;                        // the length of the note just before, which a dot adds half of
-        int tie_pitch = -1;                            // the pitch of the note just before, which D4 can tie to
+        int tie_note = -1;                             // the first byte of the note just before: D4 can tie to it
         std::vector<std::pair<uint32_t, int>> repeats; // each open repeat's start and the passes left
         for (int n = 0; n < kMaxListedCommands; n++)
         {
             // A dot or a tie only counts right after a note.
+            // D4 ties a note of the same pitch: the same first byte in the S revision.
             Command cmd = DecodeCommand(rom, info, address, c);
-            const uint8_t b = rom.U8(address);
+            const uint8_t b = cmd.command;
             const uint8_t next = rom.U8(address + 1);
-            const bool tie = b == 0xD4 && tie_pitch >= 0 && (next & 15) == tie_pitch && (next >> 4) <= 12;
+            const bool tie = b == 0xD4 && tie_note >= 0 &&
+                             (byte_notes ? next == tie_note : (next & 15) == (tie_note & 15) && (next >> 4) <= 12);
             if (b == 0xD1 && dot_ticks == 0)
             {
                 cmd.text = "nothing: a dot that doesn't follow a note";
@@ -391,7 +431,7 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
             {
                 tick += cmd.ticks;
                 dot_ticks = cmd.ticks;
-                tie_pitch = b & 15;
+                tie_note = rom.U8(address - cmd.size);
                 continue;
             }
             if (b == 0xD1 && dot_ticks)
@@ -407,7 +447,7 @@ bool DumpSong(const Rom& rom, const DriverInfo& info, int song, const std::strin
             }
 
             dot_ticks = 0;
-            tie_pitch = -1;
+            tie_note = -1;
             if (b == 0xD6 && repeats.size() < kMaxRepeatDepth)
             {
                 repeats.emplace_back(address, 0);

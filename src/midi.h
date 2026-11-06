@@ -1,15 +1,10 @@
 // SPDX-License-Identifier: MIT
 
-// agbsf2's names for seqlib's MIDI file builder, the drum channel, the pitch bend ranges and values and the levels that
-// the drivers share, and the writer of a channel's track that some drivers share.
+// The MIDI files' writer, from ntdlib.
 
 #pragma once
 
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
-
-#include "seqlib/midi/builder.h"
+#include "ntdlib/sequence_export/agb/midi.h"
 
 #include "song_banks.h"
 
@@ -17,112 +12,17 @@ namespace agbsf2
 {
 
 namespace cc = seqlib::midi::cc;
-
-using seqlib::midi::LevelsToControllers;
-using MidiFile = seqlib::midi::FileBuilder;
-using MidiTrack = seqlib::midi::TrackBuilder;
-
-// The MIDI channel that General MIDI players keep for drums.
-constexpr int kDrumChannel = 9;
-
-// Returns channel `n` of the MIDI channels other than the drum channel, from 0: channels 0-8, and then 10 on.
-constexpr int MelodicChannel(int n)
-{
-    return n < kDrumChannel ? n : n + 1;
-}
-
-// The widest pitch bend range that a track gets, in semitones.
-constexpr int kMaxBendRange = 96;
-
-// The widest bend that a track can leave out, in semitones: half a cent.
-constexpr double kSmallBend = 0.005;
-
-// Returns the pitch bend range that covers a track's bends of up to `widest` semitones either way: at least 2 semitones
-// and at most kMaxBendRange. It's 0 when no bend is wider than `smallest`. The track then writes no bends.
-inline int BendRangeFor(double widest, double smallest)
-{
-    return widest > smallest ? std::clamp(int(std::ceil(widest - 1e-9)), 2, kMaxBendRange) : 0;
-}
-
-// Returns the pitch bend value for `bend` semitones with a bend range of `range`.
-inline int BendValue(double bend, int range)
-{
-    return std::clamp(8192 + int(std::lround(bend / range * 8192)), 0, 16383);
-}
-
-// Returns the MIDI value that plays a level of `level` / `full` in a straight line: 127 × √(level / full), rounded,
-// from `lowest` to 127. SoundFont players square velocity and controller 7 by default. A note-on's velocity takes a
-// `lowest` of 1.
-inline int SquareRootValue(double level, double full, int lowest)
-{
-    return std::clamp(int(std::lround(127 * std::sqrt(std::max(0.0, level) / full))), lowest, 127);
-}
-
-// Returns the pitch bend value for a pitch offset of `offset` steps, `semitone` of which make a semitone, with a bend
-// range of `range` semitones, at least 1. The value is rounded to the nearest, with halves away from 0.
-inline int FixedBendValue(int64_t offset, int64_t semitone, int range)
-{
-    const int64_t scaled = offset * 8192;
-    const int64_t unit = int64_t(range) * semitone;
-    const int64_t steps = scaled >= 0 ? (scaled + unit / 2) / unit : -((-scaled + unit / 2) / unit);
-    return int(std::clamp<int64_t>(8192 + steps, 0, 16383));
-}
-
-// Returns the bank and program of the preset numbered `number`. Each bank holds 128 presets.
-constexpr BankProgram NumberedPreset(int number)
-{
-    return {number / 128, number % 128};
-}
-
-// Writes a channel's track for a driver whose notes give their program, and their levels and bend frame by frame. The
-// track starts with the first note's program, full volume, the centre pan, no expression, reverb or chorus, and, with a
-// bend range, no bend. After that, the writer writes each setting where it changes. A player that jumps back to the
-// loop's start keeps the settings that the loop's end left. The writer writes each setting again from the first tick
-// that it reaches at or after the loop's start. SetProgram(), SetLevels() and SetBend() call Reach() with their tick
-// first.
-//
-// Tracks can share a MIDI channel. Their settings then act on each other's notes. A writer for such a track starts
-// with the settings that the tracks share alone: the volume, reverb, chorus and bend range. It writes the program, pan,
-// expression and bend again for each note.
-class ChannelWriter
-{
-public:
-    // Starts `track` on MIDI channel `channel` with program `program`. `preset` is the bank and program number that the
-    // program plays. `range` is the bend range in semitones, or 0 for a track without bends. `loop_start` is the tick
-    // of the loop's start, or 0 if the song doesn't loop or loops from its start. `shared` is set if other tracks use
-    // the MIDI channel too. They have to have the same bend range.
-    ChannelWriter(MidiTrack& track, int channel, int program, BankProgram preset, int range, uint32_t loop_start,
-                  bool shared = false);
-
-    // Reaches tick `at`. On the first call at or after the loop's start, the writer clears its record of the settings.
-    void Reach(uint32_t at);
-
-    // Changes to program `program` at tick `at` if it's another program. `preset` is the bank and program number that
-    // the program plays. The bank select comes first if the bank changes too.
-    void SetProgram(uint32_t at, int program, BankProgram preset);
-
-    // Sets the pan and expression at tick `at` to those that the levels `left` and `right` give.
-    void SetLevels(uint32_t at, double left, double right);
-
-    // Sets the bend at tick `at` to `semitones` if the track has a bend range.
-    void SetBend(uint32_t at, double semitones);
-
-    // Writes a note on `key` at full velocity from tick `on` to tick `off`. The expression gives the note's loudness.
-    // For a shared MIDI channel, the writer then clears its record of the settings.
-    void Note(uint32_t on, uint32_t off, int key);
-
-private:
-    MidiTrack& track_;
-    int channel_;
-    int range_;
-    uint32_t loop_start_;
-    bool shared_;
-    bool before_loop_;
-    int program_; // -1 from the loop's start to the next SetProgram()
-    int bank_;    // the bank of `program_`'s preset
-    int pan_ = 64;
-    int expression_ = 0;
-    int bend_ = 8192;
-};
+using ntdlib::sequence_export::agb::BendRangeFor;
+using ntdlib::sequence_export::agb::BendValue;
+using ntdlib::sequence_export::agb::ChannelWriter;
+using ntdlib::sequence_export::agb::FixedBendValue;
+using ntdlib::sequence_export::agb::kDrumChannel;
+using ntdlib::sequence_export::agb::kSmallBend;
+using ntdlib::sequence_export::agb::LevelsToControllers;
+using ntdlib::sequence_export::agb::MelodicChannel;
+using ntdlib::sequence_export::agb::MidiFile;
+using ntdlib::sequence_export::agb::MidiTrack;
+using ntdlib::sequence_export::agb::NumberedPreset;
+using ntdlib::sequence_export::agb::SquareRootValue;
 
 } // namespace agbsf2

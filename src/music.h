@@ -4,13 +4,16 @@
 
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "ntdlib/agb/song_plan.h"
+#include "ntdlib/sequence_export/agb/settings.h"
+
+#include "program.h"
 #include "rom.h"
 
 namespace agbsf2
@@ -28,6 +31,8 @@ enum class Driver
     kBrownie,
     kKrawall,
     kUbiMilan,
+    kRd1,
+    kAlphaDream,
 };
 
 // Settings that override detection, from the command line. A value of 0, or kAny for the driver, leaves it to
@@ -41,40 +46,17 @@ struct Overrides
     double mix_rate = 0;       // Konami's driver only
 };
 
-// The settings for converting songs.
-struct ConvertSettings
+// The settings for converting songs. The files' comments name agbsf2.
+struct ConvertSettings : ntdlib::sequence_export::agb::ConvertSettings
 {
-    int loops = 2;                    // times a looping song's loop is played
-    uint32_t track_mask = 0xFFFFFFFF; // tracks to include (bit t = track t; Krawall has 32, the others 16 at most)
-    bool voice_channels = false;      // a MIDI channel for each of the driver's sound channels, where it can
-    bool psg_exclusive = false;       // an exclusive class for each PSG channel on the slow releases (MP2K)
-    bool frame_timing = false;        // each event on the frame the driver plays it in, rather than on the beat
-    int version = 0;                  // the version of the song to convert: an index into Music::Versions()
-    std::string out_dir = ".";
-    std::string base_name = "song";
+    ConvertSettings()
+    {
+        program = kProgramName;
+    }
 };
 
-// A version of a song: one of the ways in which the game plays it.
-struct SongVersion
-{
-    std::string name;   // what messages give after the song's number, such as "under water", or nothing
-    std::string suffix; // what the files' names have after the song's number, such as "_underwater", or nothing
-};
-
-// A song's length, loop points, track count and conversion result. Only InspectSong() gives the song's address.
-struct SongReport
-{
-    bool ok = false;        // converted, or skipped for playing no notes
-    bool silent = false;    // no notes on the chosen tracks, so nothing was written
-    uint32_t address = 0;   // the song's data in the ROM: its header, or a Konami song's sequence data
-    double seconds = 0;     // duration including the requested number of loop passes
-    double loop_start = -1; // seconds; -1 if the song doesn't loop
-    double loop_end = -1;
-    int tracks = 0; // chosen tracks that play notes
-    double bpm = 0;
-    std::string midi_path, sf2_path;
-    std::vector<std::string> warnings;
-};
+using ntdlib::sequence_export::agb::SongReport;
+using ntdlib::sequence_export::agb::SongVersion;
 
 // Access to a game's songs through its sound driver. Each driver's class passes the driver's name and what detection
 // found to the constructor.
@@ -96,10 +78,11 @@ public:
     virtual bool HasSong(int song) const = 0;
 
     // Returns the versions of a song that ConvertSong() writes, each to separate files. The first is the song as the
-    // game starts it. It has no name or suffix. Only the drivers of Rare and Nintendo R&D2 give more. Donkey Kong
-    // Country 3 plays Enchanted Riverbank above water and under water. Super Mario Advance 2 mutes one track of a
+    // game starts it. It has no name or suffix. Only the drivers of Rare, Nintendo R&D2 and Konami give more. Donkey
+    // Kong Country 3 plays Enchanted Riverbank above water and under water. Super Mario Advance 2 mutes one track of a
     // sequence for one music number and another track for another. That game also plays a track of four sequences only
-    // while the player rides Yoshi.
+    // while the player rides Yoshi. Two Mermaid Melody games play some songs both as a request leaves them and in a
+    // live stage. The live stage changes some of their tracks.
     virtual std::vector<SongVersion> Versions(int song) const;
 
     // Works out a song's length, loop and tracks the way ConvertSong() does, without writing anything.
@@ -169,94 +152,15 @@ std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std
 std::vector<FoundMusic> OpenAllMusic(const Rom& rom, const Overrides& overrides, std::string& error,
                                      std::vector<std::string>& unread);
 
-// Returns a song's number for file names and titles: at least two digits, and as many as the largest of `count` songs'.
-std::string SongNumber(int song, int count);
-
-// Returns the path of a song's files without their extensions. The files go in the folder in `settings`. Their names
-// start with the base name in `settings`, an underscore and `number`. SafeFileName() makes the base name safe for a
-// file name.
-std::string SongStem(const ConvertSettings& settings, const std::string& number);
-
-// The most times as long as the longest of its tracks' loops that a song's loop can be.
-constexpr uint64_t kMaxLoopFactor = 8;
-
-// Returns the length of a song's loop from its looping tracks' loop lengths, which are above 0: the shortest length
-// that each of them divides, so that every track is back where its loop started, or the longest of them if that would
-// be more than kMaxLoopFactor times as long.
-uint64_t LoopLength(const std::vector<uint64_t>& lengths);
-
-// A track's loop and end in its driver's ticks, read from its commands without timing them. Each driver's ScanTrack()
-// says which command counts as the last command of a track without a loop.
-struct TrackLayout
-{
-    bool loops = false;
-    uint64_t loop_start = 0;   // the tick that the loop starts at, the first time through
-    uint64_t loop_end = 0;     // the tick at which the track goes back to the loop's start
-    uint64_t end = 0;          // the end of a track without a loop
-    uint64_t last_command = 0; // the tick by which a track without a loop has played its last command
-};
-
-// The stretch of a song that a conversion covers: its loop, and the tick at which the MIDI file ends.
-struct SongPlan
-{
-    bool loops = false;
-    uint64_t loop_start = 0; // the latest of the looping tracks' loop starts and the other tracks' last commands
-    uint64_t loop_end = 0;   // the loop start plus the length LoopLength() gives for the tracks' loops
-    uint64_t end = 0;
-};
-
-// The pass through a song's loop that the marked loop starts at.
-enum class LoopStart
-{
-    kFirstPass,
-    kSecondPass, // the song plays the first pass before the marked loop
-};
-
-// Plans a conversion from the layouts of a song's tracks: looping songs play `loops` passes; other songs run until the
-// last track ends. Tracks can have different loop points and lengths. The overall loop starts once all looping tracks
-// have entered their loops and all other tracks have played their last command. It ends when all looping tracks return
-// to their loop starts, subject to the length limit in LoopLength(). `start_pass` is the pass through the loop that the
-// marked loop starts at.
-SongPlan PlanSong(const std::vector<TrackLayout>& tracks, int loops, LoopStart start_pass);
-
-// Collects the notes that start in a song's first two passes through its loop, to tell whether a player that loops on
-// the markers can repeat the first. A driver can carry a setting, such as a pan, a level, a program or the tempo, from
-// the loop's end into the next pass, so that the first pass, which comes from the song's start, plays unlike the later
-// ones. The marked loop then starts at the second pass.
-class PassComparison
-{
-public:
-    // The first pass runs from `start` for `length` of the driver's units of time, and the second for another `length`.
-    PassComparison(uint64_t start, uint64_t length);
-
-    // Adds a note that starts at `on` on channel or track `channel`, with its key and the settings it starts with, in
-    // whatever form the driver has them. A note that starts outside the two passes is left out.
-    void Add(uint64_t on, int channel, int key, std::vector<double> settings);
-
-    // Returns true if the two passes start the same notes at the same times from their starts, with the same settings.
-    bool Alike() const;
-
-    // Returns true if the two passes start the same notes at the same times from their starts. Their settings may
-    // differ by `tolerance` at most. Notes that start at the same time on the same channel with the same key are
-    // compared in the order they were added.
-    bool Alike(double tolerance) const;
-
-private:
-    struct Start
-    {
-        bool operator<(const Start& other) const;
-        bool operator==(const Start& other) const;
-
-        uint64_t at = 0;
-        int channel = 0;
-        int key = 0;
-        std::vector<double> settings;
-    };
-
-    uint64_t start_;
-    uint64_t length_;
-    std::array<std::vector<Start>, 2> passes_;
-};
+using ntdlib::agb::kMaxSilentEndSeconds;
+using ntdlib::agb::LoopLength;
+using ntdlib::agb::LoopStart;
+using ntdlib::agb::PassComparison;
+using ntdlib::agb::PlanSong;
+using ntdlib::agb::SongPlan;
+using ntdlib::agb::TrackLayout;
+using ntdlib::sequence_export::agb::SongNumber;
+using ntdlib::sequence_export::agb::SongStem;
 
 // Each driver's part of OpenMusic(), which looks for that driver only. It returns null and sets `error` if the driver's
 // tables can't be read, or returns null and leaves `error` empty if the game shows no sign of the driver.
@@ -315,4 +219,18 @@ namespace ubimilan
 std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std::string& error);
 
 } // namespace ubimilan
+
+namespace rd1
+{
+
+std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std::string& error);
+
+} // namespace rd1
+
+namespace alphadream
+{
+
+std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std::string& error);
+
+} // namespace alphadream
 } // namespace agbsf2

@@ -5,9 +5,11 @@
 
 #include "ubimilan/driver.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <vector>
@@ -21,6 +23,33 @@ namespace agbsf2::ubimilan
 namespace
 {
 
+// The samples that Tomb Raider: The Prophecy plays as music, by their resource numbers. The game's sound events and its
+// list of the levels' background sounds start them on the mixer's voices, with no sequence. Unlike the game's other
+// long loops, they have chords and a beat. 103, 104 and 105 play in some levels through the list at resource 38. 103
+// also plays while an object asks for state 1 of the background sound, through event 13 (the table at 0x080611F8). 104
+// also plays through events 55 and 153. 105 also plays through event 66. 106 is event 65, 108 the game over screen on
+// events 128 and 156, 224 the story screens on event 107, and 308 the credits on event 187. Nothing in the bank names
+// 107 and 259. The game never plays them.
+constexpr int kMusicSamples[] = {103, 104, 105, 106, 107, 108, 224, 259, 308};
+
+// The pieces of music that The Mummy (AUME) starts with channel 9's kit switched off, by their resource numbers. Each
+// door of a level (an MPEV object) contains the music that starts when the player arrives through it, with a type. A
+// level of type 1 starts its piece with the kit off (0x08035BB8). In state 2 of such a level, the game switches the kit
+// on while the piece plays (0x08035A78). A character's AI sets state 2 when it turns to mode 3 (0x0801F830). Each of
+// these pieces is the music of a level of type 1. Levels of types 0 and 2 start 156, 212, 220, 223 and 253 with the kit
+// on. The second door of level 32 starts 156 with the kit off, but no door and no place on the map leads to it. The
+// screens start 128, 168 and 214. The game switches the kit on each time it returns from a level to the screens
+// (0x0800AB1C). No starter of 171 or 173 was found. The pieces outside this list keep the kit.
+constexpr int kKitOffPieces[] = {130, 133, 136, 139, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155};
+
+// Returns true if `rom` is one of the three releases of Tomb Raider: The Prophecy. They share the sound bank.
+bool IsTombRaider(const Rom& rom)
+{
+    const std::string code = rom.GameCode();
+
+    return code == "AL9P" || code == "AL9E" || code == "AUTJ";
+}
+
 // The sequencer's per-frame step: if the track plays and its countdown is 0, it takes the next sequence that an end
 // command left it, or reads the next command.
 constexpr const char* kStepCode =
@@ -29,6 +58,12 @@ constexpr const char* kStepCode =
 
 // The routine that takes the sound bank: it copies the bank's counts and the addresses of its three tables.
 constexpr const char* kBankCode = "4Axx 6110 8801 8011 8841 8051 6841 1841 6051 6881 1841 6091 68C1 1840 60D0 4770";
+
+// The bank routine of an older build of the driver. It copies the bank counts and the addresses of two tables: the
+// sound events and the resources. The Sum of All Fears (AA6E) and Rogue Spear (AR6E) have this build. Their banks
+// contain samples and no sequences. Their sound init copies two ARM routines to IWRAM. kSoundInitCode doesn't match
+// it.
+constexpr const char* kOlderBankCode = "4Axx 60D0 8801 8011 8841 8051 6841 1841 6051 6881 1840 6090 4770";
 
 // The routine that returns a PSG instrument: 16 bytes in one of three tables, by the channel in r1. The routine that
 // reads an instrument's flags starts the same way, but doesn't go on to the first table.
@@ -44,6 +79,10 @@ constexpr const char* kNoiseCode = "00B1 48xx 1809 780A 3101 7808 3101 4338 0200
 
 // Square 1's note: the frequency settings of the new key and the last one.
 constexpr const char* kFrequencyCode = "49xx 4642 0050 1840 8807 6BE0 0040 1840 8800";
+
+// The PSG's update in the sequencer's step: a place in cents from the glide and the modulation, or from the modulation
+// and the key, 100 cents to a key, then that place's frequency setting in the fine table.
+constexpr const char* kFineCode = "1962 2C00 D1xx 4640 303C 4448 6801 2064 4348 1812 49xx 0050 1840 8801";
 
 // The wave channel's program change: 32 bytes of the wave table for the program.
 constexpr const char* kWaveCode = "0168 49xx 1840";
@@ -65,12 +104,12 @@ uint32_t FindOnly(const Rom& rom, const char* code)
     return hits.size() == 1 ? hits[0] : 0;
 }
 
-// Returns the address of the sound bank: the file that the game's start hands to the routine that takes the bank. The
-// game calls a routine that does nothing else first, with the bank from `movs r0, #N` and a call to the routine that
-// finds the archive's file N, which this runs.
-std::optional<uint32_t> FindBank(const Rom& rom)
+// Returns the address of the sound bank: the file that the game's start hands to the routine that takes the bank, whose
+// code is `code`. The game calls a routine that does nothing else first, with the bank from `movs r0, #N` and a call to
+// the routine that finds the archive's file N, which this runs.
+std::optional<uint32_t> FindBank(const Rom& rom, const char* code)
 {
-    const uint32_t take_bank = FindOnly(rom, kBankCode);
+    const uint32_t take_bank = FindOnly(rom, code);
     if (!take_bank)
     {
         return std::nullopt;
@@ -152,6 +191,8 @@ void FindPsgTables(const Rom& rom, DriverInfo& info)
     info.frequency_table = frequency ? ThumbLiteral(rom, frequency) : 0;
     const uint32_t wave = FindOnly(rom, kWaveCode);
     info.wave_table = wave ? ThumbLiteral(rom, wave + 2) : 0;
+    const uint32_t fine = FindOnly(rom, kFineCode);
+    info.fine_table = fine ? ThumbLiteral(rom, fine + 20) : 0;
 
     char line[160];
     std::snprintf(line, sizeof line, "PSG instruments: 0x%08X, 0x%08X, 0x%08X", unsigned(info.instrument_tables[0]),
@@ -160,10 +201,35 @@ void FindPsgTables(const Rom& rom, DriverInfo& info)
     std::snprintf(line, sizeof line, "PSG frequency table: 0x%08X, noise table: 0x%08X, wave table: 0x%08X",
                   unsigned(info.frequency_table), unsigned(info.noise_table), unsigned(info.wave_table));
     info.log.push_back(line);
+    std::snprintf(line, sizeof line, "PSG fine frequency table: 0x%08X", unsigned(info.fine_table));
+    info.log.push_back(line);
     if (!info.instrument_tables[2] || !info.frequency_table || !info.noise_table || !info.wave_table)
     {
         info.warnings.push_back("some of the PSG's tables weren't found, so the PSG's notes can't be converted");
     }
+    else if (!info.fine_table)
+    {
+        info.warnings.push_back(
+            "the PSG's fine frequency table wasn't found, so the PSG's modulation and glides are left out");
+    }
+}
+
+// Returns the error for a game with the older build of the driver. `bank` is the sound bank. It starts with two counts,
+// then the offsets of the sound event table and the resource table.
+std::string OlderBuildError(const Rom& rom, uint32_t bank)
+{
+    const int count = rom.U16(bank + 2);
+    const uint32_t table = bank + rom.U32(bank + 8);
+    int sequences = 0;
+    for (int i = 0; i < count && rom.Contains(table + 4 * uint32_t(i), 4); i++)
+    {
+        const uint32_t resource = bank + rom.U32(table + 4 * uint32_t(i));
+        sequences += rom.Contains(resource, 1) && rom.U8(resource) == kSequence ? 1 : 0;
+    }
+
+    return sequences ? "Found an older build of Ubisoft Milan's sound driver. This build isn't supported."
+                     : "Found an older build of Ubisoft Milan's sound driver. The music is recorded samples, with no "
+                       "sequences to convert.";
 }
 
 // Reads the sound bank at `song_table`, or the one that FindBank() finds if that's 0: two counts, then the offsets of
@@ -175,7 +241,7 @@ bool ReadBank(const Rom& rom, uint32_t song_table, DriverInfo& info, std::string
     {
         info.bank = song_table;
     }
-    else if (const std::optional<uint32_t> bank = FindBank(rom))
+    else if (const std::optional<uint32_t> bank = FindBank(rom, kBankCode))
     {
         info.bank = *bank;
     }
@@ -203,8 +269,9 @@ bool ReadBank(const Rom& rom, uint32_t song_table, DriverInfo& info, std::string
     return true;
 }
 
-// Finds the songs. They're the pieces of music: the bank's resources of kind 0, in order. If `song_count` is above 0,
-// no more than `song_count` are kept. Logs their count. Returns false and sets `error` if there are none.
+// Finds the songs. They're the pieces of music, the bank's resources of kind 0 in order, then the samples of a game
+// that plays samples as music. If `song_count` is above 0, no more than `song_count` are kept. Logs their count.
+// Returns false and sets `error` if there are none.
 bool FindSongs(const Rom& rom, int song_count, DriverInfo& info, std::string& error)
 {
     for (int id = 0; id < info.resource_count; id++)
@@ -215,9 +282,32 @@ bool FindSongs(const Rom& rom, int song_count, DriverInfo& info, std::string& er
             info.songs.push_back(id);
         }
     }
+    info.piece_count = int(info.songs.size());
+    if (IsTombRaider(rom))
+    {
+        for (const int id : kMusicSamples)
+        {
+            const uint32_t address = ResourceAddress(rom, info, id);
+            if (address && rom.U8(address) == kSample)
+            {
+                info.songs.push_back(id);
+            }
+        }
+    }
     if (song_count > 0 && size_t(song_count) < info.songs.size())
     {
         info.songs.resize(size_t(song_count));
+    }
+    if (rom.GameCode() == "AUME")
+    {
+        for (size_t song = 0; song < info.songs.size(); song++)
+        {
+            if (std::find(std::begin(kKitOffPieces), std::end(kKitOffPieces), info.songs[song]) !=
+                std::end(kKitOffPieces))
+            {
+                info.kit_off_songs.push_back(int(song));
+            }
+        }
     }
     if (info.songs.empty())
     {
@@ -226,8 +316,15 @@ bool FindSongs(const Rom& rom, int song_count, DriverInfo& info, std::string& er
     }
 
     char line[160];
-    std::snprintf(line, sizeof line, "music: %d pieces", int(info.songs.size()));
+    std::snprintf(line, sizeof line, "music: %d pieces, %d samples that play as music", info.piece_count,
+                  int(info.songs.size()) - info.piece_count);
     info.log.push_back(line);
+    if (!info.kit_off_songs.empty())
+    {
+        std::snprintf(line, sizeof line, "music that starts without channel 9's kit: %d pieces",
+                      int(info.kit_off_songs.size()));
+        info.log.push_back(line);
+    }
 
     return true;
 }
@@ -293,9 +390,15 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
     info = DriverInfo();
     error.clear();
 
+    // A game with the older build has a bank that the conversion can't read.
     info.step_routine = FindOnly(rom, kStepCode);
     if (!info.step_routine && !overrides.song_table)
     {
+        if (const std::optional<uint32_t> bank = FindBank(rom, kOlderBankCode); bank && rom.Contains(*bank, 12))
+        {
+            info.older_bank = *bank;
+            error = OlderBuildError(rom, *bank);
+        }
         return false;
     }
 
@@ -319,6 +422,12 @@ bool DetectDriver(const Rom& rom, const DriverOverrides& overrides, DriverInfo& 
     return true;
 }
 
+bool KitPlays(const DriverInfo& info, int song, int version)
+{
+    return version > 0 ||
+           std::find(info.kit_off_songs.begin(), info.kit_off_songs.end(), song) == info.kit_off_songs.end();
+}
+
 uint32_t ResourceAddress(const Rom& rom, const DriverInfo& info, int id)
 {
     if (id < 0 || id >= info.resource_count)
@@ -337,7 +446,6 @@ bool ReadMusic(const Rom& rom, const DriverInfo& info, int song, MusicPiece& pie
         return false;
     }
 
-    // A count, the flags, then the sequences' resource numbers.
     piece = MusicPiece();
     piece.address = ResourceAddress(rom, info, info.songs[size_t(song)]);
     if (!piece.address || !rom.Contains(piece.address, 8))
@@ -345,6 +453,21 @@ bool ReadMusic(const Rom& rom, const DriverInfo& info, int song, MusicPiece& pie
         return false;
     }
 
+    // A sample that the game plays as music.
+    if (rom.U8(piece.address) == kSample)
+    {
+        GameSample sample;
+        if (!ReadSample(rom, piece.address, sample))
+        {
+            return false;
+        }
+        piece.sample = info.songs[size_t(song)];
+        piece.flags = sample.loop ? 1 : 0;
+
+        return true;
+    }
+
+    // A count, the flags, then the sequences' resource numbers.
     const int count = rom.U16(piece.address + 4);
     piece.flags = rom.U16(piece.address + 6);
     if (!count || !rom.Contains(piece.address + 8, 2 * uint32_t(count)))
