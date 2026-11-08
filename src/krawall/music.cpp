@@ -17,6 +17,7 @@
 #include "krawall/player.h"
 #include "krawall/song.h"
 #include "krawall/soundfont.h"
+#include "program.h"
 #include "rom.h"
 #include "sf2.h"
 
@@ -94,7 +95,8 @@ public:
 
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
-        Sf2File f = shared_->Build(rom_, info_);
+        ntdlib::sequence_export::agb::Sf2File f = shared_->Build(rom_, info_);
+        f.program = kProgramName;
         f.SetTitle(rom_.Title());
 
         return f.Write(path, error);

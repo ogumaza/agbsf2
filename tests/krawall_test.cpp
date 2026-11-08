@@ -1385,7 +1385,7 @@ void TestShortLoop()
     const DriverInfo info = Detect(rom);
     InstrumentSet set;
     set.Program(kHeader, 0, 0);
-    const Sf2File sf = set.Build(rom, info);
+    const auto sf = set.Build(rom, info);
     SEQLIB_REQUIRE_EQ(sf.samples.size(), 1);
     SEQLIB_CHECK(test::LengthenedLoop(sf.samples[0], 14, 6));
 }

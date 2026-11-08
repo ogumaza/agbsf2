@@ -56,8 +56,8 @@ class Addresses:
     envelope_settings = None     # in BDQE's revision, 4 bytes for each channel from controllers 20-23
     # The music volume, out of 128, at which the game starts each tune, through its setter. The game's routine
     # `volume_routine` gives it for the requested tune, with the options' music level, an s16, at `volume_option`.
-    # Without the routine, `volumes` gives each tune's, from the game's calls of the setter (src/rare/driver.cpp), or
-    # `volume` every tune's.
+    # Without the routine, `volumes` gives each tune's, from the game's calls of the setter (ntdlib's
+    # src/rare/driver.cpp), or `volume` every tune's.
     volume_setter = 0x08032734
     volume_routine = None
     volume_option = None         # (address, value): the options' music level when the game's first tune starts

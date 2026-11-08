@@ -1,20 +1,16 @@
 // SPDX-License-Identifier: MIT
 
-// The compressed data of the music files in games whose modified Krawall loads each module into RAM before it plays
-// it. docs/krawall.md describes the format.
+// Krawall's unpacking of the modified build's music files, from ntdlib.
 
 #pragma once
 
-#include <cstdint>
-#include <vector>
+#include "ntdlib/krawall/unpack.h"
 
 #include "rom.h"
 
 namespace agbsf2::krawall
 {
 
-// Unpacks the data at `at`: a 3-byte size, then the compressed stream. Returns false if the stream is broken, runs
-// past the ROM's end or makes more bytes than the size gives.
-bool Unpack(const Rom& rom, uint32_t at, std::vector<uint8_t>& out);
+using ntdlib::krawall::Unpack;
 
 } // namespace agbsf2::krawall

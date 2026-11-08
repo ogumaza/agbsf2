@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "gba.h"
+#include "program.h"
 #include "rd2/convert.h"
 #include "rd2/driver.h"
 #include "rd2/sequencer.h"
@@ -108,7 +109,8 @@ public:
 
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
-        Sf2File& f = shared_->File();
+        ntdlib::sequence_export::agb::Sf2File& f = shared_->File();
+        f.program = kProgramName;
         f.SetTitle(rom_.Title());
 
         return f.Write(path, error);

@@ -223,9 +223,11 @@ private:
                       0x4A25, 0x8810, 0x2380, 0x01DB, 0x1C19, 0x4308, 0x8010, 0x4C23, 0x4823, 0x4924, 0x6809, 0xF001,
                       0xFD9D, 0x6020, 0x4922, 0x2009, 0xF7FE, 0xFEFC, 0x4921, 0x200A, 0xF7FE, 0xFEF8, 0x4820});
         Put32(kSoundInit + 0xC8, 0x44800570);
-        PutHalfwords(kFineCode, {0x1962, 0x2C00, 0xD106, 0x4640, 0x303C, 0x4448, 0x6801, 0x2064, 0x4348, 0x1812, 0x4901,
-                                 0x0050, 0x1840, 0x8801});
-        Put32(kFineCode + 0x1C, kFineTable);
+        // The PSG's update and the start of its modulation's branches, as at 0x08004CA2 in The Mummy. ntdlib's
+        // detection reads the code from the load of the fine table on.
+        PutHalfwords(kFineCode, {0x1962, 0x2C00, 0xD106, 0x4640, 0x303C, 0x4448, 0x6801, 0x2064, 0x4348, 0x1812,
+                                 0x4904, 0x0050, 0x1840, 0x8801, 0x2B01, 0xD000, 0x2B01, 0xDC00, 0x2B00, 0xD000});
+        Put32(kFineCode + 0x28, kFineTable);
     }
 
     // Square 1, instrument 1: a 50% duty and an envelope that the velocity sets. Instrument 2 adds a modulation: a
@@ -405,8 +407,9 @@ void TestDetection()
     SEQLIB_CHECK(info.warnings.empty());
     SEQLIB_CHECK(!found_blank && blank_error.empty());
 
+    // Without the load of the fine table, detection doesn't find the table.
     Cart no_fine;
-    no_fine.Put16(kFineCode, 0);
+    no_fine.Put16(kFineCode + 0x14, 0);
     const DriverInfo no_fine_info = Detect(no_fine.ToRom());
     SEQLIB_CHECK_EQ(no_fine_info.fine_table, 0);
     SEQLIB_CHECK(no_fine_info.warnings ==
@@ -526,7 +529,7 @@ void TestKitSwitch()
     const Cart cart;
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
-    Sequencer seq(rom, info, 2, false);
+    Sequencer seq(rom, info, 2, false, false);
 
     for (int f = 0; f < 40; f++)
     {

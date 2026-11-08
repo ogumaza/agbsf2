@@ -2236,8 +2236,9 @@ void TestTrackChoice()
     SEQLIB_CHECK(ConvertSong(rom, info, 0, opt, nullptr).silent);
 }
 
-// The tune that the game plays by the water has a version above water and one under water. Each leaves the other's
-// channels out of the mix, out of the voice limit and out of the MIDI file.
+// The tune that the game plays by the water has a version above water and one under water. From the tune's second
+// frame, each version leaves the channels of the other out of the mix and out of the voice limit. Neither MIDI file has
+// the channels of the other version.
 void TestWaterVersions()
 {
     // Above water, channels 0 and 1 play five notes. Under water, channels 2 and 3 play five: ten voices, two more than
@@ -2258,13 +2259,17 @@ void TestWaterVersions()
     const Rom rom = cart.ToRom();
     const DriverInfo info = Detect(rom);
 
-    // What the mixer does in the first frame with the first voice of each channel. At full level, channel 3's voices
-    // are past the limit. In either version, the other version's voices play at a level of 0. They're left out and
-    // don't count.
-    auto results = [&](uint16_t silenced)
+    // What the mixer does with the first voice of each channel in the tune's first or second frame. The driver gives
+    // every channel a level of 128 as it starts the tune. The first frame therefore plays every channel, and channel
+    // 3's voices are past the limit. The game turns the other version's channels down to 0 before the second frame.
+    // From then on, those voices are left out and don't count.
+    auto results = [&](uint16_t silenced, int frames)
     {
         Sequencer seq(rom, info, 0, silenced);
-        seq.Step();
+        for (int f = 0; f < frames; f++)
+        {
+            seq.Step();
+        }
         std::vector<MixResult> out;
         for (int channel = 0; channel < 4; channel++)
         {
@@ -2275,10 +2280,13 @@ void TestWaterVersions()
     };
 
     using M = MixResult;
-    SEQLIB_CHECK(results(0) == std::vector<MixResult>({M::kMixed, M::kMixed, M::kMixed, M::kSkipped}));
-    SEQLIB_CHECK(results(SilencedChannels(info, 0, false)) ==
+    const std::vector<MixResult> every = {M::kMixed, M::kMixed, M::kMixed, M::kSkipped};
+    SEQLIB_CHECK(results(0, 1) == every);
+    SEQLIB_CHECK(results(SilencedChannels(info, 0, false), 1) == every);
+    SEQLIB_CHECK(results(SilencedChannels(info, 0, true), 1) == every);
+    SEQLIB_CHECK(results(SilencedChannels(info, 0, false), 2) ==
                  std::vector<MixResult>({M::kMixed, M::kMixed, M::kSilent, M::kSilent}));
-    SEQLIB_CHECK(results(SilencedChannels(info, 0, true)) ==
+    SEQLIB_CHECK(results(SilencedChannels(info, 0, true), 2) ==
                  std::vector<MixResult>({M::kSilent, M::kSilent, M::kMixed, M::kMixed}));
 
     // Each version's files: above water as usual, and under water with the version's suffix.
@@ -2292,12 +2300,16 @@ void TestWaterVersions()
     SEQLIB_CHECK(PathFromUtf8(u.midi_path).filename() == "water_00_underwater.mid");
     SEQLIB_CHECK(PathFromUtf8(u.sf2_path).filename() == "water_00_underwater.sf2");
 
-    // Each file plays its version's notes, without key pressures, and has no events of the other version's channels.
+    // Each file plays the notes of its version and has no events of the other version's channels. Above water, no
+    // note is left out. Under water, the mixer leaves out channel 3's notes in the first frame. Their keys are muted
+    // until the second frame, which starts at tick 15. The keys of channel 2 start at pressure 0.
     const MidiEvents a = ReadMidi(r.midi_path);
     const MidiEvents b = ReadMidi(u.midi_path);
     SEQLIB_CHECK(a.Find(0x90).size() == 3 && a.Find(0x91).size() == 2 && a.Find(0xA0).empty() && a.Find(0xA1).empty());
     SEQLIB_CHECK(a.Find(0x92).empty() && a.Find(0x93).empty() && a.Find(0xB2).empty() && a.Find(0xC3).empty());
-    SEQLIB_CHECK(b.Find(0x92).size() == 3 && b.Find(0x93).size() == 2 && b.Find(0xA2).empty() && b.Find(0xA3).empty());
+    SEQLIB_CHECK(b.Find(0x92).size() == 3 && b.Find(0x93).size() == 2);
+    SEQLIB_CHECK(KeyPressures(b, 2) == Pressures({{0, 80, 0}, {0, 81, 0}, {0, 82, 0}}));
+    SEQLIB_CHECK(KeyPressures(b, 3) == Pressures({{0, 90, 127}, {0, 91, 127}, {15, 90, 0}, {15, 91, 0}}));
     SEQLIB_CHECK(b.Find(0x90).empty() && b.Find(0x91).empty() && b.Find(0xB0).empty() && b.Find(0xC1).empty());
 
     // The version under water has its name in the title.

@@ -206,7 +206,8 @@ clang-cl. Other platforms and compilers aren't supported.
 You need Git, a C++20 compiler and CMake 3.20 or later. The MIDI and
 SoundFont code comes from seqlib. The PSF container reader, the file and
 console code and the parsing of numbers come from xsflib. The ROM and GSF
-reader, MP2K, Konami's driver and their conversions come from ntdlib. The
+reader, MP2K, Krawall, the drivers of Konami, Rare, Quintet, Nintendo R&D2,
+Brownie Brown and Ubisoft Milan and their conversions come from ntdlib. The
 repository holds the three as Git submodules, in `externals/seqlib`,
 `externals/xsflib` and `externals/ntdlib`. There are no other dependencies.
 
@@ -1657,13 +1658,13 @@ off.
 
 ## Internals
 
-`docs/konami.md`, `docs/rare.md`, `docs/quintet.md`, `docs/rd2.md`,
-`docs/mp2k.md`, `docs/brownie.md`, `docs/krawall.md` and `docs/ubimilan.md`
-document the drivers and their data formats in full, including how the tool
-locates them. The code for each is in `src/rare/`, `src/quintet/`,
-`src/rd2/`, `src/brownie/`, `src/krawall/` and `src/ubimilan/`, behind the
-interface in `src/music.h`. The code of MP2K and Konami's driver comes from
-ntdlib. `src/mp2k/` and `src/konami/` connect it to that interface.
+`docs/konami.md`, `docs/rare.md`, `docs/quintet.md`, `docs/rd1.md`,
+`docs/rd2.md`, `docs/alphadream.md`, `docs/mp2k.md`, `docs/brownie.md`,
+`docs/krawall.md` and `docs/ubimilan.md` document the drivers and their data
+formats in full, including how the tool locates them. The code of Nintendo
+R&D1's and AlphaDream's drivers is in `src/rd1/` and `src/alphadream/`,
+behind the interface in `src/music.h`. The code of the other eight comes from
+ntdlib. A folder for each in `src/` connects it to that interface.
 
 `tools/` holds the scripts used to reverse engineer the drivers and validate
 the conversion: a disassembler, harnesses that run each game's driver
@@ -1672,7 +1673,8 @@ under an ARM emulator, and comparison scripts. See `tools/README.md`.
 ## License
 
 `agbsf2` is released under the MIT License; see `LICENSE`. The ROM and GSF
-reader, MP2K, Konami's driver and their conversions come from ntdlib, under
+reader, MP2K, Krawall, the drivers of Konami, Rare, Quintet, Nintendo R&D2,
+Brownie Brown and Ubisoft Milan and their conversions come from ntdlib, under
 the MIT License. ntdlib's notice is in `externals/ntdlib/LICENSE` and in
 `THIRD_PARTY_NOTICES`. ntdlib's DEFLATE decoder is adapted from Mark Adler's
 puff under the zlib license. Its notice is in ntdlib's `src/agb/inflate.cpp`

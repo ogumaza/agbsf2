@@ -18,6 +18,7 @@
 #include "brownie/song.h"
 #include "brownie/soundfont.h"
 #include "gba.h"
+#include "program.h"
 #include "rom.h"
 #include "sf2.h"
 
@@ -85,7 +86,8 @@ public:
     {
         SoundfontBuilder sf(rom_, uint32_t(info_.mix_rate));
         shared_->Build(sf, PsgTuning(rom_, info_).cents);
-        Sf2File& f = sf.File();
+        ntdlib::sequence_export::agb::Sf2File& f = sf.File();
+        f.program = kProgramName;
         f.SetTitle(rom_.Title());
 
         return f.Write(path, error);

@@ -16,6 +16,7 @@
 #include "quintet/sequencer.h"
 #include "quintet/song.h"
 #include "quintet/soundfont.h"
+#include "program.h"
 #include "rom.h"
 #include "sf2.h"
 
@@ -30,18 +31,8 @@ public:
     // Keeps a reference to `rom`, which has to outlive this. A game with several music files gets a DriverInfo for
     // each, numbered after the one before.
     QuintetMusic(const Rom& rom, const DriverInfo& info)
-        : Music("Quintet's sound driver", info.log, info.warnings), rom_(rom)
+        : Music("Quintet's sound driver", info.log, info.warnings), rom_(rom), infos_(ReadMusicFiles(rom, info))
     {
-        infos_.push_back(info);
-        for (size_t f = 1; f < info.music_files.size(); f++)
-        {
-            DriverInfo next = info;
-            if (ReadMusicFile(rom, info.music_files[f], next))
-            {
-                next.first_song = infos_.back().first_song + quintet::SongCount(infos_.back());
-                infos_.push_back(std::move(next));
-            }
-        }
     }
 
     // Each file's songs, then its sound effects.
@@ -79,7 +70,8 @@ public:
 
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
-        Sf2File& f = shared_->File();
+        ntdlib::sequence_export::agb::Sf2File& f = shared_->File();
+        f.program = kProgramName;
         f.SetTitle(rom_.Title());
 
         return f.Write(path, error);
@@ -126,15 +118,7 @@ private:
     // Returns the DriverInfo of the music file that has song `song`, or the last if none has it.
     const DriverInfo& InfoOf(int song) const
     {
-        for (const DriverInfo& info : infos_)
-        {
-            if (song < info.first_song + quintet::SongCount(info))
-            {
-                return info;
-            }
-        }
-
-        return infos_.back();
+        return infos_[FileOfSong(infos_, song)];
     }
 
     const Rom& rom_;

@@ -18,6 +18,7 @@
 #include "rare/sequencer.h"
 #include "rare/song.h"
 #include "rare/soundfont.h"
+#include "program.h"
 #include "rom.h"
 #include "sf2.h"
 
@@ -92,7 +93,8 @@ public:
 
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
-        Sf2File& f = shared_->File();
+        ntdlib::sequence_export::agb::Sf2File& f = shared_->File();
+        f.program = kProgramName;
         f.SetTitle(rom_.Title());
 
         return f.Write(path, error);
@@ -155,6 +157,7 @@ private:
 std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std::string& error)
 {
     DriverOverrides ov;
+    ov.program = kProgramName;
     ov.tune_table = overrides.song_table;
     ov.tune_count = overrides.song_count;
 

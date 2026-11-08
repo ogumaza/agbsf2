@@ -89,7 +89,8 @@ Its notice follows.
 ntdlib (MIT License)
 ====================
 
-The ROM and GSF reader, MP2K, Konami's driver and their conversions come
+The ROM and GSF reader, MP2K, Krawall, the drivers of Konami, Rare, Quintet,
+Nintendo R&D2, Brownie Brown and Ubisoft Milan and their conversions come
 from ntdlib, in externals/ntdlib.
 Its notice follows.
 

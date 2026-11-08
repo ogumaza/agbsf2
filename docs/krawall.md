@@ -389,7 +389,7 @@ same in all of them. So are the player's tables, the player's record, the
 table of 51 effects, the mixer's rate of 16384 Hz and its 276 samples a frame.
 The effects' table is at `0x0805160C` in `BJBE` and `0x08012CD0` in `BRWP`.
 The mixing routines' table is `0x78` bytes before it in the builds before 1.4,
-and `0x74` before it in 1.4. `src/krawall/player_v1.cpp` holds the parts of
+and `0x74` before it in 1.4. ntdlib's `src/krawall/player_v1.cpp` holds the parts of
 the model in which these builds differ.
 
 ### Build 1.4

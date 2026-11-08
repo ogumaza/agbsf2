@@ -1,83 +1,17 @@
 // SPDX-License-Identifier: MIT
 
-// Builds SoundFont instruments from the driver's instruments and samples.
+// Rare's SoundFont instruments, from ntdlib.
 
 #pragma once
 
-#include <cstdint>
-#include <map>
-#include <tuple>
-#include <utility>
-
-#include "rare/driver.h"
-#include "rare/song.h"
+#include "ntdlib/sequence_export/rare/soundfont.h"
 #include "rom.h"
-#include "sf2.h"
 
 namespace agbsf2::rare
 {
 
-// Returns `bank`, or the next bank if `bank` is the drum bank. The drum bank holds only the drum channel's presets.
-constexpr int SkipDrumBank(int bank)
-{
-    return bank == kDrumBank ? bank + 1 : bank;
-}
-
-// Returns the SoundFont envelope that comes closest to an instrument's envelope in the driver, with the settings from
-// controllers 20-23 that its notes play with. The driver's decays and releases fall in a straight line in level, where
-// a SoundFont's fall in a straight line in decibels.
-VolumeEnvelope EnvelopeFor(const DriverInfo& info, const Instrument& inst, const EnvelopeSettings& settings = {});
-
-// A builder of SoundFont samples and instruments from the ROM, which reuses any already built. The converter adds the
-// presets.
-class SoundfontBuilder
-{
-public:
-    // Keeps references to `rom` and `info`, which have to outlive the builder. The presets for envelope settings go in
-    // banks from `first_free_bank` up.
-    SoundfontBuilder(const Rom& rom, const DriverInfo& info, int first_free_bank = 1);
-
-    Sf2File& File()
-    {
-        return file_;
-    }
-
-    // Returns the index of the SoundFont instrument for the driver's instrument at `address`, played with the envelope
-    // settings `settings`, or -1 if it has no sample that can be played.
-    int InstrumentFor(uint32_t address, const EnvelopeSettings& settings = {});
-
-    // Returns the bank for the presets of bank `bank` played with the envelope settings `settings`: `bank` itself
-    // without any, and otherwise a bank of their own, the next free one the first time.
-    int BankFor(int bank, const EnvelopeSettings& settings);
-
-    // Returns the preset for `program` in `bank`, or null if the bank has none.
-    const sf2::Preset* FindPreset(int bank, int program) const;
-
-    // Adds a preset for `program` in `bank` that plays SoundFont instrument `instrument`, unless the bank has a preset
-    // for the program already.
-    void AddPreset(int bank, int program, int instrument);
-
-    // Gives every instrument, those built later included, a modulator that mutes a note while the polyphonic key
-    // pressure of its key is 64 or more. The MIDI file mutes the voices that the driver's mixer leaves out that way.
-    void AddMutes();
-
-private:
-    // Returns the index of the SoundFont sample for a sample instrument's sample, or -1 if it isn't valid.
-    int SampleFor(const Instrument& inst);
-
-    // Returns a zone that plays sample instrument `voice` on keys `low` to `high`, with the envelope settings
-    // `settings`. A drum kit's zones play at the sample's pitch whatever the key.
-    sf2::Zone ZoneFor(const Instrument& voice, const EnvelopeSettings& settings, int sample, int low, int high,
-                      bool fixed_pitch) const;
-
-    const Rom& rom_;
-    const DriverInfo& info_;
-    Sf2File file_;
-    std::map<std::pair<uint32_t, EnvelopeSettings>, int> instruments_;
-    std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>, int> samples_;
-    std::map<std::pair<int, EnvelopeSettings>, int> banks_;
-    int next_bank_;
-    bool mutes_ = false;
-};
+using ntdlib::sequence_export::rare::EnvelopeFor;
+using ntdlib::sequence_export::rare::SkipDrumBank;
+using ntdlib::sequence_export::rare::SoundfontBuilder;
 
 } // namespace agbsf2::rare

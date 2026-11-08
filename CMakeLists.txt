@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.20)
-project(agbsf2 VERSION 1.9.1 LANGUAGES CXX)
+project(agbsf2 VERSION 1.9.2 LANGUAGES CXX)
 
 # The name of the macOS droplet app.
 set(AGBSF2_APP_NAME Agbsf2)
@@ -33,8 +33,8 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/externals/xsflib/CMakeLists.txt")
 endif()
 add_subdirectory(externals/xsflib EXCLUDE_FROM_ALL)
 
-# ntdlib, the library of the consoles' sound drivers, is a submodule too. agbsf2 takes its GBA modules: the ROM, MP2K and
-# their conversions.
+# ntdlib, the library of the consoles' sound drivers, is a submodule too. agbsf2 takes its GBA modules: the ROM, MP2K,
+# Krawall, the drivers of Konami, Rare, Quintet, Nintendo R&D2, Brownie Brown and Ubisoft Milan, and their conversions.
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/externals/ntdlib/CMakeLists.txt")
     message(FATAL_ERROR "externals/ntdlib is missing. Run: git submodule update --init")
 endif()
@@ -43,52 +43,20 @@ add_subdirectory(externals/ntdlib EXCLUDE_FROM_ALL)
 
 add_library(agbsf2_core STATIC
     src/music.cpp
-    src/brownie/convert.cpp
-    src/brownie/driver.cpp
     src/brownie/music.cpp
-    src/brownie/sequencer.cpp
-    src/brownie/song.cpp
-    src/brownie/soundfont.cpp
     src/konami/music.cpp
-    src/krawall/convert.cpp
-    src/krawall/driver.cpp
     src/krawall/music.cpp
-    src/krawall/player.cpp
-    src/krawall/player_v1.cpp
-    src/krawall/song.cpp
-    src/krawall/soundfont.cpp
-    src/krawall/unpack.cpp
     src/mp2k/music.cpp
-    src/quintet/convert.cpp
-    src/quintet/driver.cpp
     src/quintet/music.cpp
-    src/quintet/sequencer.cpp
-    src/quintet/song.cpp
-    src/quintet/soundfont.cpp
-    src/rare/convert.cpp
-    src/rare/driver.cpp
     src/rare/music.cpp
-    src/rare/sequencer.cpp
-    src/rare/song.cpp
-    src/rare/soundfont.cpp
-    src/rd2/convert.cpp
-    src/rd2/driver.cpp
     src/rd2/music.cpp
-    src/rd2/sequencer.cpp
-    src/rd2/song.cpp
-    src/rd2/soundfont.cpp
     src/rd1/convert.cpp
     src/rd1/driver.cpp
     src/rd1/music.cpp
     src/rd1/sequencer.cpp
     src/rd1/song.cpp
     src/rd1/soundfont.cpp
-    src/ubimilan/convert.cpp
-    src/ubimilan/driver.cpp
     src/ubimilan/music.cpp
-    src/ubimilan/sequencer.cpp
-    src/ubimilan/song.cpp
-    src/ubimilan/soundfont.cpp
     src/alphadream/convert.cpp
     src/alphadream/driver.cpp
     src/alphadream/music.cpp
@@ -96,7 +64,9 @@ add_library(agbsf2_core STATIC
     src/alphadream/soundfont.cpp
 )
 target_include_directories(agbsf2_core PUBLIC src)
-target_link_libraries(agbsf2_core PUBLIC seqlib::seqlib xsflib::psf_container ntdlib::sequence_export_mp2k ntdlib::sequence_export_konami)
+target_link_libraries(agbsf2_core PUBLIC seqlib::seqlib xsflib::psf_container ntdlib::sequence_export_mp2k ntdlib::sequence_export_konami
+                      ntdlib::sequence_export_krawall ntdlib::sequence_export_quintet ntdlib::sequence_export_rare
+                      ntdlib::sequence_export_rd2 ntdlib::sequence_export_brownie ntdlib::sequence_export_ubimilan)
 
 # Disable fused multiply-add so output stays byte-identical across platforms. GCC and Clang can fuse a * b + c on
 # CPUs such as ARM64, changing the rounding. MSVC's default /fp:precise disables this in Visual Studio 2022 and later;

@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "gba.h"
+#include "program.h"
 #include "rom.h"
 #include "sf2.h"
 #include "ubimilan/convert.h"
@@ -81,6 +82,7 @@ public:
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
         Sf2File f;
+        f.program = kProgramName;
         shared_->Build(rom_, info_, f);
         f.SetTitle(rom_.Title());
 
@@ -96,7 +98,7 @@ public:
     // the track, and each voice that the mixer plays.
     bool Trace(int song, long long frames, std::FILE* out, std::vector<std::string>& warnings) const override
     {
-        Sequencer seq(rom_, info_, song, KitPlays(info_, song, 0));
+        Sequencer seq(rom_, info_, song, false, KitPlays(info_, song, 0));
         if (!seq.Valid())
         {
             return false;

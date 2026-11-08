@@ -23,8 +23,8 @@ A PSG voice's note plays at velocity 127 instead. It ends where its PSG channel 
 takes the channel. In each frame until then, its CC11 has to give the channel's volume at the frame's start. The wave
 channel's volume is 15 times the share of its full level that NR32 sets. psg_model.py plays the driver's writes to the
 PSG's registers with the hardware's envelopes, length counters and sweep. agbsf2 works out the CC11 from the volume
-and the sides that NR51 gives the channel (PsgExpression() in src/rd2/convert.cpp). The check works it out the same
-way.
+and the sides that NR51 gives the channel (PsgExpression() in ntdlib's src/sequence_export/rd2/convert.cpp). The check
+works it out the same way.
 
 A sequence named in --songs that has no MIDI file mustn't play any notes. AGBSF2 is used for its --info report. The
 report names the driver's tables and gives each sequence's length.
@@ -40,10 +40,10 @@ notes that it can't make a sound for. They are a note at velocity 0, a note that
 note whose sample can't be read. The check leaves them out too (see converted()).
 
 The driver plays a velocity of up to 255. A track whose sample notes play above 127 gets a scale. Its notes play at
-their velocity divided by the scale. Its CC11 raises its levels by the scale (VelocityScales() in src/rd2/convert.cpp).
-The scale is the loudest sample note's velocity over 127. Where CC11 can't raise the track's levels that far, the scale
-is smaller. CC11 then reaches 127. The velocities of such a track have to fit one scale, from 1 up to the loudest
-note's velocity over 127.
+their velocity divided by the scale. Its CC11 raises its levels by the scale (VelocityScales() in ntdlib's
+src/sequence_export/rd2/convert.cpp). The scale is the loudest sample note's velocity over 127. Where CC11 can't raise
+the track's levels that far, the scale is smaller. CC11 then reaches 127. The velocities of such a track have to fit one
+scale, from 1 up to the loudest note's velocity over 127.
 """
 import argparse
 import bisect
@@ -331,7 +331,7 @@ def converted(rom, bank_starts, note):
     """Returns true if the conversion keeps one of the driver's notes. A note at velocity 0 is left out. So is a note
     whose region is in `bank_starts`. Its instrument has no region for it. The driver plays it from its bank's table of
     offsets. A sample voice's note is left out if agbsf2 can't make a SoundFont sample from the sample's header
-    (SampleReadable() in src/rd2/soundfont.cpp)."""
+    (SampleReadable() in ntdlib's src/sequence_export/rd2/soundfont.cpp)."""
     if note['velocity'] == 0 or note['region'] in bank_starts:
         return False
     if note.get('type') != 0:

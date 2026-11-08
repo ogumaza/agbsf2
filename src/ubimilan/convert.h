@@ -1,29 +1,16 @@
 // SPDX-License-Identifier: MIT
 
-// Song conversion for Ubisoft Milan's driver: the model's notes -> MIDI file + SoundFont instruments.
+// Ubisoft Milan's conversion, from ntdlib.
 
 #pragma once
 
-#include <vector>
-
-#include "music.h"
-#include "rom.h"
-#include "ubimilan/driver.h"
-#include "ubimilan/soundfont.h"
+#include "ntdlib/sequence_export/ubimilan/convert.h"
 
 namespace agbsf2::ubimilan
 {
 
-// Returns the versions of a song: the song as the game starts it, then the song with the kit for a song that the game
-// starts with channel 9's kit switched off.
-std::vector<SongVersion> SongVersions(const DriverInfo& info, int song);
-
-// Works out a song's length, loop and channels the way ConvertSong() does, without writing anything.
-SongReport InspectSong(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings);
-
-// Converts one song. If `shared` is supplied, the song's instruments are added to it for a shared SoundFont; otherwise
-// a SoundFont is written next to the MIDI file.
-SongReport ConvertSong(const Rom& rom, const DriverInfo& info, int song, const ConvertSettings& settings,
-                       InstrumentSet* shared);
+using ntdlib::sequence_export::ubimilan::ConvertSong;
+using ntdlib::sequence_export::ubimilan::InspectSong;
+using ntdlib::sequence_export::ubimilan::SongVersions;
 
 } // namespace agbsf2::ubimilan
