@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ntdlib/sequence_export/rare/soundfont.h"
+
 #include "rom.h"
 
 namespace agbsf2::rare

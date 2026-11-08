@@ -9,8 +9,6 @@
 namespace agbsf2::ubimilan
 {
 
-using ntdlib::ubimilan::ArgumentBytes;
 using ntdlib::ubimilan::DumpSong;
-using ntdlib::ubimilan::kEndCommand;
 
 } // namespace agbsf2::ubimilan

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "gba.h"
+#include "program.h"
 #include "rd1/convert.h"
 #include "rd1/driver.h"
 #include "rd1/sequencer.h"
@@ -69,7 +70,8 @@ public:
 
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
-        Sf2File f = shared_->Build();
+        ntdlib::sequence_export::agb::Sf2File f = shared_->Build();
+        f.program = kProgramName;
         f.SetTitle(rom_.Title());
         return f.Write(path, error);
     }
@@ -145,8 +147,10 @@ private:
 
 std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides&, std::string& error)
 {
+    DriverOverrides overrides;
+    overrides.program = kProgramName;
     DriverInfo info;
-    if (!DetectDriver(rom, info, error))
+    if (!DetectDriver(rom, overrides, info, error))
     {
         return nullptr;
     }

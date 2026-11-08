@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ntdlib/sequence_export/rd2/soundfont.h"
+
 #include "rd2/driver.h"
 #include "rom.h"
 #include "sf2.h"
@@ -14,8 +15,6 @@ namespace agbsf2::rd2
 {
 
 using ntdlib::sequence_export::rd2::PsgShare;
-using ntdlib::sequence_export::rd2::SampleReadable;
-using ntdlib::sequence_export::rd2::SampleRelease;
 using ntdlib::sequence_export::rd2::SoundfontBuilder;
 
 } // namespace agbsf2::rd2

@@ -13,7 +13,6 @@ using ntdlib::mp2k::Action;
 using ntdlib::mp2k::CamelotKeyToFrequency;
 using ntdlib::mp2k::Channel;
 using ntdlib::mp2k::kChannelCount;
-using ntdlib::mp2k::kDefaultTempo;
 using ntdlib::mp2k::KeyToFrequency;
 using ntdlib::mp2k::KeyToPsgFrequency;
 using ntdlib::mp2k::kFirstPsgChannel;

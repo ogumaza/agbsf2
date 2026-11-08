@@ -12,14 +12,9 @@
 namespace agbsf2::krawall
 {
 
-using ntdlib::krawall::AmigaPeriod;
 using ntdlib::krawall::Channel;
-using ntdlib::krawall::kAmigaClock;
 using ntdlib::krawall::kMixChannels;
-using ntdlib::krawall::kModifiedMixChannels;
-using ntdlib::krawall::kOldMixChannels;
 using ntdlib::krawall::kPlayerChannels;
-using ntdlib::krawall::LinearPeriod;
 using ntdlib::krawall::MixChannel;
 using ntdlib::krawall::Player;
 

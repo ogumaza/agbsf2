@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ntdlib/sequence_export/rd2/convert.h"
+
 #include "music.h"
 #include "rd2/driver.h"
 #include "rd2/soundfont.h"

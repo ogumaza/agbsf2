@@ -11,12 +11,12 @@
 #include <vector>
 
 #include "gba.h"
+#include "program.h"
 #include "quintet/convert.h"
 #include "quintet/driver.h"
 #include "quintet/sequencer.h"
 #include "quintet/song.h"
 #include "quintet/soundfont.h"
-#include "program.h"
 #include "rom.h"
 #include "sf2.h"
 

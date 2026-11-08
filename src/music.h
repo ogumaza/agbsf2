@@ -154,10 +154,6 @@ std::vector<FoundMusic> OpenAllMusic(const Rom& rom, const Overrides& overrides,
 
 using ntdlib::agb::kMaxSilentEndSeconds;
 using ntdlib::agb::LoopLength;
-using ntdlib::agb::LoopStart;
-using ntdlib::agb::PassComparison;
-using ntdlib::agb::PlanSong;
-using ntdlib::agb::SongPlan;
 using ntdlib::agb::TrackLayout;
 using ntdlib::sequence_export::agb::SongNumber;
 using ntdlib::sequence_export::agb::SongStem;

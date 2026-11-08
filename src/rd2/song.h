@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ntdlib/rd2/song.h"
+
 #include "rd2/driver.h"
 #include "rom.h"
 

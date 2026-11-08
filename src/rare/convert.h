@@ -5,6 +5,7 @@
 #pragma once
 
 #include "ntdlib/sequence_export/rare/convert.h"
+
 #include "music.h"
 #include "rom.h"
 
@@ -14,7 +15,6 @@ namespace agbsf2::rare
 using ntdlib::sequence_export::rare::ConvertSong;
 using ntdlib::sequence_export::rare::DumpSong;
 using ntdlib::sequence_export::rare::InspectSong;
-using ntdlib::sequence_export::rare::kAboveWater;
 using ntdlib::sequence_export::rare::kUnderWater;
 using ntdlib::sequence_export::rare::TuneVersions;
 

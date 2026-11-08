@@ -206,8 +206,7 @@ clang-cl. Other platforms and compilers aren't supported.
 You need Git, a C++20 compiler and CMake 3.20 or later. The MIDI and
 SoundFont code comes from seqlib. The PSF container reader, the file and
 console code and the parsing of numbers come from xsflib. The ROM and GSF
-reader, MP2K, Krawall, the drivers of Konami, Rare, Quintet, Nintendo R&D2,
-Brownie Brown and Ubisoft Milan and their conversions come from ntdlib. The
+reader and all ten sound drivers, with their conversions, come from ntdlib. The
 repository holds the three as Git submodules, in `externals/seqlib`,
 `externals/xsflib` and `externals/ntdlib`. There are no other dependencies.
 
@@ -1661,10 +1660,9 @@ off.
 `docs/konami.md`, `docs/rare.md`, `docs/quintet.md`, `docs/rd1.md`,
 `docs/rd2.md`, `docs/alphadream.md`, `docs/mp2k.md`, `docs/brownie.md`,
 `docs/krawall.md` and `docs/ubimilan.md` document the drivers and their data
-formats in full, including how the tool locates them. The code of Nintendo
-R&D1's and AlphaDream's drivers is in `src/rd1/` and `src/alphadream/`,
-behind the interface in `src/music.h`. The code of the other eight comes from
-ntdlib. A folder for each in `src/` connects it to that interface.
+formats in full, including how the tool locates them. The code of the drivers
+comes from ntdlib. A folder for each driver in `src/` connects it to the
+interface in `src/music.h`.
 
 `tools/` holds the scripts used to reverse engineer the drivers and validate
 the conversion: a disassembler, harnesses that run each game's driver
@@ -1673,9 +1671,8 @@ under an ARM emulator, and comparison scripts. See `tools/README.md`.
 ## License
 
 `agbsf2` is released under the MIT License; see `LICENSE`. The ROM and GSF
-reader, MP2K, Krawall, the drivers of Konami, Rare, Quintet, Nintendo R&D2,
-Brownie Brown and Ubisoft Milan and their conversions come from ntdlib, under
-the MIT License. ntdlib's notice is in `externals/ntdlib/LICENSE` and in
+reader and all ten sound drivers, with their conversions, come from ntdlib,
+under the MIT License. ntdlib's notice is in `externals/ntdlib/LICENSE` and in
 `THIRD_PARTY_NOTICES`. ntdlib's DEFLATE decoder is adapted from Mark Adler's
 puff under the zlib license. Its notice is in ntdlib's `src/agb/inflate.cpp`
 and in `THIRD_PARTY_NOTICES`. The MIDI

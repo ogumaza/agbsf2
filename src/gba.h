@@ -14,8 +14,6 @@ using ntdlib::agb::kFrameCycles;
 using ntdlib::agb::kFrameRate;
 using ntdlib::agb::kSecondCycles;
 using ntdlib::agb::PrintWrite;
-using ntdlib::agb::QuarterMicros;
 using ntdlib::agb::RegisterWrite;
-using ntdlib::agb::TickSeconds;
 
 } // namespace agbsf2

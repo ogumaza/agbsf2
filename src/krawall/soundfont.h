@@ -15,7 +15,5 @@ namespace agbsf2::krawall
 
 using ntdlib::sequence_export::krawall::InstrumentSet;
 using ntdlib::sequence_export::krawall::kRootKey;
-using ntdlib::sequence_export::krawall::kRootNote;
-using ntdlib::sequence_export::krawall::SampleRate;
 
 } // namespace agbsf2::krawall

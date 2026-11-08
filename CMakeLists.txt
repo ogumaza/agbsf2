@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.20)
-project(agbsf2 VERSION 1.9.2 LANGUAGES CXX)
+project(agbsf2 VERSION 1.9.3 LANGUAGES CXX)
 
 # The name of the macOS droplet app.
 set(AGBSF2_APP_NAME Agbsf2)
@@ -33,8 +33,8 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/externals/xsflib/CMakeLists.txt")
 endif()
 add_subdirectory(externals/xsflib EXCLUDE_FROM_ALL)
 
-# ntdlib, the library of the consoles' sound drivers, is a submodule too. agbsf2 takes its GBA modules: the ROM, MP2K,
-# Krawall, the drivers of Konami, Rare, Quintet, Nintendo R&D2, Brownie Brown and Ubisoft Milan, and their conversions.
+# ntdlib, the library of the consoles' sound drivers, is a submodule too. agbsf2 takes its GBA modules: the ROM and GSF
+# reader and all ten sound drivers, with their conversions.
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/externals/ntdlib/CMakeLists.txt")
     message(FATAL_ERROR "externals/ntdlib is missing. Run: git submodule update --init")
 endif()
@@ -50,23 +50,15 @@ add_library(agbsf2_core STATIC
     src/quintet/music.cpp
     src/rare/music.cpp
     src/rd2/music.cpp
-    src/rd1/convert.cpp
-    src/rd1/driver.cpp
     src/rd1/music.cpp
-    src/rd1/sequencer.cpp
-    src/rd1/song.cpp
-    src/rd1/soundfont.cpp
     src/ubimilan/music.cpp
-    src/alphadream/convert.cpp
-    src/alphadream/driver.cpp
     src/alphadream/music.cpp
-    src/alphadream/sequencer.cpp
-    src/alphadream/soundfont.cpp
 )
 target_include_directories(agbsf2_core PUBLIC src)
 target_link_libraries(agbsf2_core PUBLIC seqlib::seqlib xsflib::psf_container ntdlib::sequence_export_mp2k ntdlib::sequence_export_konami
                       ntdlib::sequence_export_krawall ntdlib::sequence_export_quintet ntdlib::sequence_export_rare
-                      ntdlib::sequence_export_rd2 ntdlib::sequence_export_brownie ntdlib::sequence_export_ubimilan)
+                      ntdlib::sequence_export_rd2 ntdlib::sequence_export_brownie ntdlib::sequence_export_ubimilan
+                      ntdlib::sequence_export_rd1 ntdlib::sequence_export_alphadream)
 
 # Disable fused multiply-add so output stays byte-identical across platforms. GCC and Clang can fuse a * b + c on
 # CPUs such as ARM64, changing the rounding. MSVC's default /fp:precise disables this in Visual Studio 2022 and later;
@@ -101,8 +93,7 @@ if(AGBSF2_BUILD_TESTS)
     enable_testing()
     add_executable(agbsf2_tests tests/test_main.cpp tests/test_util.cpp tests/konami_test.cpp tests/rare_test.cpp
                                 tests/quintet_test.cpp tests/mp2k_test.cpp tests/rd2_test.cpp
-                                tests/brownie_test.cpp tests/krawall_test.cpp tests/ubimilan_test.cpp
-                                tests/rd1_test.cpp tests/alphadream_test.cpp)
+                                tests/brownie_test.cpp tests/krawall_test.cpp tests/ubimilan_test.cpp)
     target_link_libraries(agbsf2_tests PRIVATE agbsf2_core seqlib::testing)
     add_test(NAME agbsf2_tests COMMAND agbsf2_tests)
 

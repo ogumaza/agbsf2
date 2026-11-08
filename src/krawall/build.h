@@ -10,6 +10,5 @@ namespace agbsf2::krawall
 {
 
 using ntdlib::krawall::Build;
-using ntdlib::krawall::BuildName;
 
 } // namespace agbsf2::krawall

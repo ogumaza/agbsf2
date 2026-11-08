@@ -12,27 +12,14 @@ namespace agbsf2
 {
 
 namespace sf2 = seqlib::sf2;
-using ntdlib::sequence_export::agb::AddLoopGuard;
-using ntdlib::sequence_export::agb::AddressName;
-using ntdlib::sequence_export::agb::AddTuning;
-using ntdlib::sequence_export::agb::AddVolumeEnvelope;
-using ntdlib::sequence_export::agb::Centibels;
-using ntdlib::sequence_export::agb::FadeSeconds;
 using ntdlib::sequence_export::agb::kDrumBank;
 using ntdlib::sequence_export::agb::kInstant;
 using ntdlib::sequence_export::agb::kLoopGuard;
 using ntdlib::sequence_export::agb::kMinLoop;
 using ntdlib::sequence_export::agb::kSilent;
-using ntdlib::sequence_export::agb::LengthenLoop;
 using ntdlib::sequence_export::agb::Looped;
-using ntdlib::sequence_export::agb::MakeInstrument;
 using ntdlib::sequence_export::agb::MakePreset;
-using ntdlib::sequence_export::agb::NamedZones;
 using ntdlib::sequence_export::agb::PresetInstrument;
-using ntdlib::sequence_export::agb::RootKeyZone;
-using ntdlib::sequence_export::agb::SampleZone;
-using ntdlib::sequence_export::agb::SetCycle;
-using ntdlib::sequence_export::agb::SidesPan;
 using ntdlib::sequence_export::agb::Timecents;
 using ntdlib::sequence_export::agb::VolumeEnvelope;
 

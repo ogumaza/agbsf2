@@ -531,6 +531,13 @@ mode that isn't 0 replaces the driver's setting. `agbsf2` reads these cases:
   `bl m4aSoundInit; ldr r0, =mode; bl m4aSoundMode`. *Guilty Gear X: Advance
   Edition* (`AGXE`) sets a master volume of 8 that way, at `0x0802C230`.
   *F-Zero: GP Legend* (`BFZE`) sets 6 DirectSound channels, at `0x08000E34`.
+* Calls straight after the init that build the mode with
+  `movs r0, #imm; lsls r0, r0, #n`. Up to two calls of other routines may come
+  first. Each call of `m4aSoundMode` applies in turn. *Sugar Sugar Rune: Heart
+  ga Ippai! Moegi Gakuen* (`B4LJ`) calls another routine after the init. It
+  then sets 12 DirectSound channels at `0x080064F6` and a master volume of 6
+  at `0x080064FE`. *The Proud Family* (`BD7E`) sets 6 channels at
+  `0x080078BA`.
 * A game that works the mode out while it runs, which needs a row. *Spyro:
   Season of Flame* (`ASYE`) builds it from the settings it stores at
   `0x03000860`.

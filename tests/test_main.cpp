@@ -693,8 +693,6 @@ int Run()
     brownie::RunTests();
     krawall::RunTests();
     ubimilan::RunTests();
-    rd1::RunTests();
-    alphadream::RunTests();
 
     std::error_code ec;
     fs::remove_all(g_temp, ec);

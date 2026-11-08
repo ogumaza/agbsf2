@@ -13,12 +13,12 @@
 #include <utility>
 #include <vector>
 
+#include "program.h"
 #include "rare/convert.h"
 #include "rare/driver.h"
 #include "rare/sequencer.h"
 #include "rare/song.h"
 #include "rare/soundfont.h"
-#include "program.h"
 #include "rom.h"
 #include "sf2.h"
 
