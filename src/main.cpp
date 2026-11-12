@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 // Converts the music of GBA games with Konami's, Rare's, Quintet's, Nintendo R&D1's, Nintendo R&D2's, AlphaDream's,
-// Brownie Brown's or Ubisoft Milan's sound driver, Nintendo's MP2K or Krawall, to MIDI files and SoundFonts.
+// Brownie Brown's, Ubisoft Milan's or Logik State's sound driver, Nintendo's MP2K or Krawall, to MIDI files and
+// SoundFonts.
 
 #include <algorithm>
 #include <cmath>
@@ -35,7 +36,8 @@ using namespace agbsf2;
 namespace
 {
 
-constexpr int kSongLimit = 4096; // the highest number that --songs and --song-count accept
+constexpr int kSongLimit = 4096;     // the highest number that --songs and --song-count accept
+constexpr int kFullMusicVolume = 64; // the highest volume that --music-volume accepts, the full volume of the driver
 
 // Prints the help text to `f`.
 void Usage(FILE* f)
@@ -48,10 +50,10 @@ void Usage(FILE* f)
                  "Converts every song in each GBA ROM (.gba) or GSF rip (.gsf, .gsflib, .minigsf)\n"
                  "to a MIDI file and a matching SoundFont, for games whose music uses Konami's,\n"
                  "Rare's, Quintet's, Nintendo R&D1's, Nintendo R&D2's, AlphaDream's, Brownie\n"
-                 "Brown's or Ubisoft Milan's sound driver, Nintendo's MP2K or Krawall. A game\n"
-                 "with more than one of them has each one's songs converted. The results go in\n"
-                 "a folder beside the input file, with the same name. You can also drop files\n"
-                 "on the program.\n"
+                 "Brown's, Ubisoft Milan's or Logik State's sound driver, Nintendo's MP2K or\n"
+                 "Krawall. A game with more than one of them has each one's songs converted.\n"
+                 "The results go in a folder beside the input file, with the same name. You can\n"
+                 "also drop files on the program.\n"
                  "\n"
                  "options:\n"
                  "  -o, --output DIR      output directory (default: <file's folder>/<base name>)\n"
@@ -64,8 +66,9 @@ void Usage(FILE* f)
                  "                        channels and 4 and 5 the PCM channels, in Brownie\n"
                  "                        Brown's, 0-3 are the music's PSG channels, 4-7 the sound\n"
                  "                        effects' and 8 and up the sample channels, in Ubisoft\n"
-                 "                        Milan's, 0-2 are the PSG channels and 9 the kit, and in\n"
-                 "                        Krawall, the module's channels, 0-31)\n"
+                 "                        Milan's, 0-2 are the PSG channels and 9 the kit, in\n"
+                 "                        Krawall, the module's channels, 0-31, and in Logik\n"
+                 "                        State's, the module's channels, 0-7)\n"
                  "      --single-sf2      write one SoundFont for all songs\n"
                  "      --voice-channels  give each of the driver's sound channels a MIDI channel\n"
                  "                        (MP2K), so that notes stop where the game cuts them\n"
@@ -80,8 +83,8 @@ void Usage(FILE* f)
                  "      --info            print each driver's detected tables and songs, then\n"
                  "                        exit\n"
                  "      --driver NAME     use only konami, rare, quintet, rd1, rd2, alphadream,\n"
-                 "                        brownie, ubimilan, krawall or mp2k, instead of every\n"
-                 "                        driver detection finds\n"
+                 "                        brownie, ubimilan, logikstate, krawall or mp2k, instead\n"
+                 "                        of every driver detection finds\n"
                  "      --song-table ADDR    use this song table address (hex; in Nintendo R&D2's\n"
                  "                           driver, the address of the game's settings for it,\n"
                  "                           in Ubisoft Milan's, the sound bank, and in Krawall,\n"
@@ -89,6 +92,8 @@ void Usage(FILE* f)
                  "      --song-count N       use this many songs\n"
                  "      --sample-table ADDR  use this sample table address (hex; Konami's driver)\n"
                  "      --mix-rate HZ        use this DirectSound mixer rate (Konami's driver)\n"
+                 "      --music-volume N     play at this music volume, 1-64, not at the volume that\n"
+                 "                           the game sets at its start (Logik State's driver)\n"
                  "      --trace SONG      print the driver model's state after each frame of SONG:\n"
                  "                        in Konami's driver, each track's output (frame track\n"
                  "                        pitch b2 vol trig flags key, and 2 pan fields, which\n"
@@ -128,7 +133,9 @@ void Usage(FILE* f)
                  "                        p), each track that plays (frame t 1.track, then its\n"
                  "                        record in hex) and the record of each sample channel\n"
                  "                        and PSG channel when it changes (frame h or q, the\n"
-                 "                        channel, then the record in hex)\n"
+                 "                        channel, then the record in hex); in Logik State's,\n"
+                 "                        the player's variables (frame g) and each mixer\n"
+                 "                        channel's record (frame c0), in hex, when they change\n"
                  "      --trace-frames N  frames to trace (default: 3000)\n"
                  "  -q, --quiet           only print warnings and errors\n"
                  "  -h, --help            show this help\n"
@@ -284,6 +291,18 @@ bool CheckOptions(Options& o)
         o.overrides.driver = Driver::kKonami;
     }
 
+    // Only Logik State's driver has a music volume to override.
+    if (o.overrides.music_volume)
+    {
+        if (o.overrides.driver != Driver::kAny && o.overrides.driver != Driver::kLogikState)
+        {
+            OptionError("--music-volume is for Logik State's driver");
+            return false;
+        }
+
+        o.overrides.driver = Driver::kLogikState;
+    }
+
     return true;
 }
 
@@ -388,7 +407,8 @@ std::optional<int> ParseArgs(const std::vector<std::string>& args, Options& o)
             if (o.overrides.driver == Driver::kAny)
             {
                 OptionError(
-                    "--driver needs konami, rare, quintet, rd1, rd2, alphadream, brownie, ubimilan, krawall or mp2k");
+                    "--driver needs konami, rare, quintet, rd1, rd2, alphadream, brownie, ubimilan, logikstate, "
+                    "krawall or mp2k");
                 return 2;
             }
         }
@@ -434,6 +454,20 @@ std::optional<int> ParseArgs(const std::vector<std::string>& args, Options& o)
                 OptionError("--mix-rate needs a rate from 4000 to 65536 Hz");
                 return 2;
             }
+        }
+        else if (a == "--music-volume")
+        {
+            if (!NextValue(args, i, "--music-volume", v))
+            {
+                return 2;
+            }
+            if (!ParseNumber(v, n, 10) || n < 1 || n > kFullMusicVolume)
+            {
+                OptionError("--music-volume needs a volume from 1 to " + std::to_string(kFullMusicVolume));
+                return 2;
+            }
+
+            o.overrides.music_volume = int(n);
         }
         else if (a == "--trace")
         {

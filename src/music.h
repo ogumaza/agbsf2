@@ -33,6 +33,7 @@ enum class Driver
     kUbiMilan,
     kRd1,
     kAlphaDream,
+    kLogikState,
 };
 
 // Settings that override detection, from the command line. A value of 0, or kAny for the driver, leaves it to
@@ -44,6 +45,7 @@ struct Overrides
     int song_count = 0;
     uint32_t sample_table = 0; // Konami's driver only
     double mix_rate = 0;       // Konami's driver only
+    int music_volume = 0;      // Logik State's driver only: 1 to 64, or 0 for the volume that the game sets
 };
 
 // The settings for converting songs. The files' comments name agbsf2.
@@ -227,4 +229,9 @@ namespace alphadream
 std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std::string& error);
 
 } // namespace alphadream
+
+namespace logikstate
+{
+std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std::string& error);
+} // namespace logikstate
 } // namespace agbsf2

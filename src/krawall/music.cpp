@@ -27,26 +27,6 @@ namespace agbsf2::krawall
 namespace
 {
 
-// Prints a frame's line for a record that has changed since the last one printed, as driver_emu.py's trace does. Before
-// the first line, the record counts as zeros.
-void PrintChanged(std::FILE* out, long long frame, const char* name, const std::vector<uint8_t>& record,
-                  std::vector<uint8_t>& last)
-{
-    if (last.empty())
-    {
-        last.assign(record.size(), 0);
-    }
-    if (record == last)
-    {
-        return;
-    }
-
-    last = record;
-    std::fprintf(out, "%lld %s ", frame, name);
-    PrintHex(out, record);
-    std::fprintf(out, "\n");
-}
-
 class KrawallMusic : public Music
 {
 public:

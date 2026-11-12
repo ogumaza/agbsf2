@@ -19,11 +19,12 @@ namespace
 using Open = std::unique_ptr<Music> (*)(const Rom&, const Overrides&, std::string&);
 
 // The drivers in the order detection looks for them, with the names that --driver takes. Rare's, Quintet's, Nintendo
-// R&D2's, Nintendo R&D1's, AlphaDream's, Brownie Brown's and Ubisoft Milan's drivers, MP2K and Krawall come first.
-// Their detection uses code alone. Konami's detection can fall back on a scan of the data. A scan might mistake another
-// driver's data for a song table. R&D2's comes before MP2K, since a game can play most of its music with R&D2's driver
-// and the rest with MP2K. AlphaDream's comes before MP2K too. Mario & Luigi: Superstar Saga plays its music with it,
-// and MP2K plays only the Mario Bros. Classic that the game holds.
+// R&D2's, Nintendo R&D1's, AlphaDream's, Brownie Brown's, Ubisoft Milan's and Logik State's drivers, MP2K and Krawall
+// come first. Their detection uses the driver's code, or data that starts with the driver's signature. Konami's
+// detection can fall back on a scan of the data. A scan might mistake another driver's data for a song table. R&D2's
+// comes before MP2K, since a game can play most of its music with R&D2's driver and the rest with MP2K. AlphaDream's
+// comes before MP2K too. Mario & Luigi: Superstar Saga plays its music with it, and MP2K plays only the Mario Bros.
+// Classic that the game holds.
 const struct
 {
     Driver driver;
@@ -39,13 +40,14 @@ const struct
     {Driver::kBrownie, "brownie", brownie::OpenMusic},
     {Driver::kKrawall, "krawall", krawall::OpenMusic},
     {Driver::kUbiMilan, "ubimilan", ubimilan::OpenMusic},
+    {Driver::kLogikState, "logikstate", logikstate::OpenMusic},
     {Driver::kKonami, "konami", konami::OpenMusic},
 };
 
 // Returns the error for a game in which detection finds none of the drivers that `driver` allows. Rare's driver and
 // MP2K can read the songs that --song-table gives without the driver's code, so their errors suggest it. Detection of
-// Quintet's, Nintendo R&D1's, Nintendo R&D2's, AlphaDream's, Brownie Brown's and Ubisoft Milan's drivers and Krawall
-// finds their other tables through the driver's code.
+// Quintet's, Nintendo R&D1's, Nintendo R&D2's, AlphaDream's, Brownie Brown's, Ubisoft Milan's and Logik State's
+// drivers and Krawall finds their other tables through the driver's code.
 std::string NotFound(Driver driver)
 {
     const std::string kUnknown = std::string(": this game's music uses another engine, or a driver version that ") +
@@ -72,9 +74,11 @@ std::string NotFound(Driver driver)
         return "no Nintendo R&D1 sound driver found" + kUnknown;
     case Driver::kAlphaDream:
         return "no AlphaDream sound driver found" + kUnknown;
+    case Driver::kLogikState:
+        return "no Logik State sound driver found" + kUnknown;
     default:
         return "no Konami, Rare, Quintet, Nintendo R&D1, Nintendo R&D2, AlphaDream, Brownie Brown, Ubisoft Milan, "
-               "Krawall or MP2K sound driver found" +
+               "Logik State, Krawall or MP2K sound driver found" +
                kUnknown;
     }
 }

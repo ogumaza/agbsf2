@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.20)
-project(agbsf2 VERSION 1.9.4 LANGUAGES CXX)
+project(agbsf2 VERSION 1.10.0 LANGUAGES CXX)
 
 # The name of the macOS droplet app.
 set(AGBSF2_APP_NAME Agbsf2)
@@ -33,7 +33,7 @@ endif()
 add_subdirectory(externals/xsflib EXCLUDE_FROM_ALL)
 
 # ntdlib, the library of the consoles' sound drivers, is a submodule too. agbsf2 takes its GBA modules: the ROM and GSF
-# reader and all ten sound drivers, with their conversions.
+# reader and all eleven sound drivers, with their conversions.
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/externals/ntdlib/CMakeLists.txt")
     message(FATAL_ERROR "externals/ntdlib is missing. Run: git submodule update --init")
 endif()
@@ -59,12 +59,14 @@ add_library(agbsf2_core STATIC
     src/rd1/music.cpp
     src/ubimilan/music.cpp
     src/alphadream/music.cpp
+    src/logikstate/music.cpp
 )
 target_include_directories(agbsf2_core PUBLIC src)
 target_link_libraries(agbsf2_core PUBLIC seqlib::seqlib ntdlib::sequence_export_mp2k ntdlib::sequence_export_konami
                       ntdlib::sequence_export_krawall ntdlib::sequence_export_quintet ntdlib::sequence_export_rare
                       ntdlib::sequence_export_rd2 ntdlib::sequence_export_brownie ntdlib::sequence_export_ubimilan
-                      ntdlib::sequence_export_rd1 ntdlib::sequence_export_alphadream)
+                      ntdlib::sequence_export_rd1 ntdlib::sequence_export_alphadream
+                      ntdlib::sequence_export_logikstate)
 
 # Disable fused multiply-add so output stays byte-identical across platforms. GCC and Clang can fuse a * b + c on
 # CPUs such as ARM64, changing the rounding. MSVC's default /fp:precise disables this in Visual Studio 2022 and later;
@@ -101,7 +103,7 @@ if(AGBSF2_BUILD_TESTS)
     enable_testing()
     add_executable(agbsf2_tests tests/test_main.cpp tests/konami_test.cpp tests/rare_test.cpp tests/quintet_test.cpp
                                 tests/mp2k_test.cpp tests/rd2_test.cpp tests/brownie_test.cpp tests/krawall_test.cpp
-                                tests/ubimilan_test.cpp)
+                                tests/ubimilan_test.cpp tests/logikstate_test.cpp)
     target_link_libraries(agbsf2_tests PRIVATE agbsf2_core ntdlib::testing)
     add_test(NAME agbsf2_tests COMMAND agbsf2_tests)
 

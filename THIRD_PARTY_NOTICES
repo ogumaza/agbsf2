@@ -89,7 +89,7 @@ Its notice follows.
 ntdlib (MIT License)
 ====================
 
-The ROM and GSF reader and all ten sound drivers, with their conversions,
+The ROM and GSF reader and all eleven sound drivers, with their conversions,
 come from ntdlib, in externals/ntdlib.
 Its notice follows.
 

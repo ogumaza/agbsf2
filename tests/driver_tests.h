@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 // Each driver's tests, in konami_test.cpp, rare_test.cpp, quintet_test.cpp, mp2k_test.cpp, rd2_test.cpp,
-// brownie_test.cpp, krawall_test.cpp and ubimilan_test.cpp.
+// brownie_test.cpp, krawall_test.cpp, ubimilan_test.cpp and logikstate_test.cpp.
 
 #pragma once
 
@@ -60,3 +60,10 @@ namespace agbsf2::ubimilan
 void RunTests();
 
 } // namespace agbsf2::ubimilan
+
+namespace agbsf2::logikstate
+{
+
+void RunTests();
+
+} // namespace agbsf2::logikstate

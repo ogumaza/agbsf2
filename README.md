@@ -2,8 +2,8 @@
 
 `agbsf2` converts the music of Game Boy Advance games that use Konami's,
 Rare's, Quintet's, Nintendo R&D1's, Nintendo R&D2's, AlphaDream's, Brownie
-Brown's or Ubisoft Milan's sound driver, Nintendo's MP2K, or Krawall, to MIDI
-files and SoundFonts.
+Brown's, Ubisoft Milan's or Logik State's sound driver, Nintendo's MP2K, or
+Krawall, to MIDI files and SoundFonts.
 
 MP2K, often called the "Sappy" engine, is the sound driver in most GBA games.
 Konami's, Rare's and Quintet's games, *The Legend of Zelda: A Link to the Past*,
@@ -186,6 +186,36 @@ instruments of the game's banks. The sound effects of these games are converted 
   Their music is recorded samples, with no sequences. `agbsf2` reports that and
   converts nothing.
 
+### Logik State's driver
+
+* *Aero the Acro-Bat: Rascal Rival Revenge*. Songs 0-21 are its modules, in
+  the driver's `GBAMOD2.` format. The game's sound effects are single samples
+  that its code starts, and they aren't converted.
+* *Zapper: One Wicked Cricket!*. Songs 0-18 are its modules, in the same
+  format, with another build of the driver.
+* *Pinball Challenge Deluxe*. Its 11 modules are in the driver's `GBAMOD1.`
+  format. Each module holds many short pieces, and songs 0-314 are those
+  pieces: the title's music, the music of the eight tables and their jingles.
+  Eight pieces play no note and are skipped.
+* 26 later games, whose modules are in the driver's `GBAMOD30` format:
+  *Alex Rider: Stormbreaker*, *Alien Hominid*, *Arctic Tale*, *Arthur and the
+  Invisibles*, *Asterix & Obelix XXL*, *Bionicle: Maze of Shadows*, *Driv3r*,
+  *Duel Masters: Kaijudo Showdown*, *Duel Masters: Shadow of the Code*,
+  *Family Feud*, *Garfield and His Nine Lives*, *Hot Wheels: Stunt Track
+  Challenge*, *Kid Paddle*, *LEGO Knights' Kingdom*, *Medal of Honor:
+  Infiltrator*, *Need for Speed Carbon: Own the City*, *Need for Speed: Most
+  Wanted*, *Need for Speed: Porsche Unleashed*, *Need for Speed: Underground
+  2*, *Noddy: A Day in Toyland*, *Premier Manager 2004-2005*, *Premier Manager
+  2005-2006*, *Stuntman*, *Super Puzzle Fighter II Turbo*, *Totally Spies!*
+  and *Totally Spies! 2: Undercover*. They have eight builds of the driver
+  between them. Each game's songs are numbered in the order of the game's
+  table of songs. The sound effects are single samples, and they aren't
+  converted.
+
+A game with `GBAMOD30` modules that isn't in this list gets an error. The
+driver takes its settings from each game's code, and `agbsf2` holds them for
+these games alone.
+
 ### Other games
 
 Each driver is located from its own code rather than from fixed addresses, so
@@ -206,7 +236,7 @@ clang-cl. Other platforms and compilers aren't supported.
 You need Git, a C++20 compiler and CMake 3.20 or later. The MIDI and
 SoundFont code comes from seqlib. The PSF container reader, the file and
 console code and the parsing of numbers come from xsflib. The ROM and GSF
-reader and all ten sound drivers, with their conversions, come from ntdlib. The
+reader and all eleven sound drivers, with their conversions, come from ntdlib. The
 repository holds the three as Git submodules, in `externals/seqlib`,
 `externals/xsflib` and `externals/ntdlib`. There are no other dependencies.
 
@@ -292,23 +322,24 @@ Each file's results go in a folder next to it, as above.
 | `-n, --name NAME` | base name of the output files (default: input name) |
 | `-s, --songs LIST` | only these songs, e.g. `0,3,7-9` |
 | `-l, --loops N` | play each song's loop N times (default 2) |
-| `-t, --tracks LIST` | only these tracks, e.g. `4-15`; in Konami's driver, 0-3 are the PSG channels and 4 and up the sample voices, in Quintet's, 0-3 are the PSG channels and 4 and 5 the PCM channels, in Brownie Brown's, 0-3 are the music's PSG channels, 4-7 the sound effects' and 8 and up the sample channels, in Ubisoft Milan's, 0-2 are the PSG channels and 9 the kit, and in Krawall, the module's channels, 0-31 |
+| `-t, --tracks LIST` | only these tracks, e.g. `4-15`; in Konami's driver, 0-3 are the PSG channels and 4 and up the sample voices, in Quintet's, 0-3 are the PSG channels and 4 and 5 the PCM channels, in Brownie Brown's, 0-3 are the music's PSG channels, 4-7 the sound effects' and 8 and up the sample channels, in Ubisoft Milan's, 0-2 are the PSG channels and 9 the kit, in Krawall, the module's channels, 0-31, and in Logik State's, the module's channels, 0-7 |
 | `--single-sf2` | one SoundFont for all songs (see [Output](#output) for its banks) |
 | `--voice-channels` | MP2K only: a MIDI channel for each of the driver's sound channels instead of each track, so that notes stop where the game cuts them off, though a track's notes then move between channels (see [MIDI from MP2K](#midi-from-mp2k)) |
 | `--psg-exclusive` | MP2K only: an exclusive class for each PSG channel in the SoundFont. A track's next note on a PSG channel then ends the slow release of the note before it. The game cuts that note off there too. A note that another track cuts off still fades out (see [SoundFont from MP2K](#soundfont-from-mp2k)) |
 | `--frame-timing` | put each event on the frame the game plays it in, rather than on the song's beat (see [Output](#output)) |
 | `--dump` | also write a text listing of every command of each song (`NAME_NN.txt`) |
 | `--info` | print each driver found, with its tables and a list of its songs, then exit. The track count, length and loop reflect the current conversion options. A song that the game plays in two versions gets a line for each |
-| `--driver NAME` | use only `konami`, `rare`, `quintet`, `rd1`, `rd2`, `alphadream`, `brownie`, `ubimilan`, `krawall` or `mp2k`, instead of every driver detection finds |
+| `--driver NAME` | use only `konami`, `rare`, `quintet`, `rd1`, `rd2`, `alphadream`, `brownie`, `ubimilan`, `logikstate`, `krawall` or `mp2k`, instead of every driver detection finds |
 | `--song-table ADDR`, `--song-count N` | override detection: the song table's address (hex), or for Nintendo R&D2's driver the address of the game's settings for it, for Ubisoft Milan's driver the sound bank, and for Krawall a table of the game's modules, and the number of songs |
 | `--sample-table ADDR`, `--mix-rate HZ` | override detection in Konami's driver: the sample table's address (hex) and the mixer's rate |
+| `--music-volume N` | Logik State's driver only: play at this music volume, from 1 to 64, in place of the volume that the game sets at its start (see [Accuracy](#accuracy)) |
 | `-q, --quiet` | only print warnings and errors |
 | `--trace SONG`, `--trace-frames N` | print the driver model's state after each frame (for the driver's `compare_trace.py` in `tools/`) |
 
 Detection checks for Rare's driver first, followed by Quintet's, Nintendo
-R&D2's, Nintendo R&D1's, AlphaDream's, MP2K, Brownie Brown's, Krawall and
-Ubisoft Milan's. These are identified from their code alone. Konami's is
-checked last.
+R&D2's, Nintendo R&D1's, AlphaDream's, MP2K, Brownie Brown's, Krawall,
+Ubisoft Milan's and Logik State's. These are identified from their code alone.
+Konami's is checked last.
 If a game has several drivers, each driver's songs are converted. The first
 driver uses the usual file names; the others add the driver's name after the
 base name, as in `game_mp2k_000.mid`. Messages also include the driver's
@@ -321,6 +352,7 @@ are converted.
 and `--song-count` also select the first driver and convert only its songs.
 Supply `--driver` as well if the game's driver isn't recognised.
 `--sample-table` and `--mix-rate` imply `--driver konami`.
+`--music-volume` implies `--driver logikstate`.
 
 To listen, load the pair into any SoundFont player, for example:
 
@@ -390,8 +422,9 @@ at the start of a frame, so an event on the beat can be up to a frame from
 where the game plays it, or a frame and a half with Konami's, Brownie Brown's
 and Ubisoft Milan's drivers. `--frame-timing` puts each event on the frame the
 game plays it in instead, as closely as the MIDI file's ticks allow, at the same
-tempos. Krawall plays each tick at the sample where it falls, rather than at the
-start of a frame, so its events are on the module's ticks either way.
+tempos. Krawall and Logik State's driver play each tick at the sample where it
+falls, not at the start of a frame. Their events are on the module's ticks
+either way.
 
 Konami's, Brownie Brown's and Ubisoft Milan's drivers store note lengths in
 whole frames, rounded by the composers' tools. A 16th note that should last 6.5
@@ -1262,6 +1295,88 @@ below a square at the same key. The squares and the noise release at once,
 because the MIDI file's CC11 already follows their envelopes. The wave releases
 at once too: the driver silences it at the note's end.
 
+### MIDI from Logik State's driver
+
+Each `GBAMOD2.` module becomes a song. Songs are numbered in the order of the
+modules' addresses in the ROM. A `GBAMOD1.` module holds many pieces, each a
+run of orders that ends with a jump. Each piece becomes a song, in the order
+of the modules and of the pieces within them. `--info` gives each song's
+module and first order. Each MIDI file has a conductor track for tempo and loop
+markers, plus a track for every module channel that plays notes. Tracks are
+named `Channel 1`, `Channel 2` and so on, and each uses the MIDI channel of
+its number. A module has up to eight channels.
+
+Each `GBAMOD30` module becomes a song too. Songs are numbered in the order of
+the game's table of songs, and the modules that the table doesn't name follow
+them. Four games have no table, and their songs are numbered in the order of
+the modules' addresses. The games number their songs in that order too.
+The modules of these games have up to ten channels. The track of the tenth
+uses MIDI channel 11.
+
+The beat and the bars are chosen as for Krawall's modules: 1, 2, 4, 8 or more
+rows per quarter note, in 4/4 or 12/8, with bars that follow the pattern
+boundaries. A row takes 120 MIDI ticks, and the tempo gives it its length. A
+tick within a row goes on the nearest MIDI tick. The driver counts rows and
+ticks in samples of its mixer. `--frame-timing` therefore changes nothing.
+
+A note starts on its row. It ends where the next note of its channel starts,
+where its sample ends, or where its channel's volume falls to 0. The game's
+mixer pauses a sample while its channel's volume is 0. When the volume rises
+again, a new note starts from the point where the sample paused.
+
+The driver divides a semitone into eight pitches, or into 64 in a `GBAMOD30`
+module. A note takes the nearest
+key, and a pitch bend gives the rest where it's 3 cents or more. Slides,
+vibratos and arpeggios bend their notes at each tick. Each track sets the bend
+range that its widest bend requires. Every note has velocity 127, and CC11
+follows the channel's volume, tick by tick during a volume slide.
+
+The game sets a volume for its music, up to 64. The driver takes the
+difference between that volume and 64 off each channel's volume. Quiet notes
+then fall silent, and the balance of the channels shifts. The conversion plays
+each module at the volume that the game sets when it starts. `--info` gives
+that volume.
+
+The builds that play `GBAMOD30` modules multiply instead. The mixer plays a
+channel at its volume times the music's volume and a master volume, each over
+64. A game can set either one above 64. No note falls silent. The conversion
+plays each module at the two volumes that the game sets when it starts.
+
+A loop is detected when an order and row come back with the same speed and
+tempo. The MIDI file marks it with `loopStart` and `loopEnd`. Where the second
+pass starts its notes unlike the first, with another sample, level or pitch,
+the marked loop starts at the second pass. A jingle ends in a loop of empty
+rows. Its MIDI file has no loop and ends where that loop would start.
+
+A `GBAMOD30` module loops only while the driver's loop flag is set. The games
+set the flag for their music and clear it for a few jingles. A module without
+the flag stops after its last order, and its MIDI file ends there. A jump in
+a module's patterns loops it without the flag. The build of *Super Puzzle
+Fighter II Turbo* has no flag.
+
+*Pinball Challenge Deluxe* starts a jingle through a routine that returns to
+the music at the jingle's first jump. A piece that the game starts only that
+way plays once in its MIDI file, up to that jump. `--info` marks it as a
+jingle. A piece that the game starts as music loops where its jumps lead back.
+A piece that nothing in the game starts plays as the driver would play it.
+
+### SoundFont from Logik State's driver
+
+Each module's SoundFont has a preset for each sample and point that its notes
+start from. The samples are the game's 8-bit samples, widened to 16 bits, with
+their loops. Each sample's rate puts ProTracker's C-2, the driver's pitch 200,
+on key 60 and includes the sample's fine tune. Where a loop ends before its
+sample does, the driver plays the whole sample once and then the loop. The
+SoundFont's sample holds those points in that order. A note that starts within
+its sample, after a pause, plays a zone that starts there. With
+`--single-sf2`, the presets of all the modules are numbered together, in the
+order the modules first play them, with 128 to a bank.
+
+A game with `GBAMOD30` modules has one bank of samples for all of them. Each
+song's SoundFont has the samples that the song plays. A sample's rate puts
+the module's note 49 on key 60, with the sample's relative note and fine
+tune.
+
 ### Sequence listing (`--dump`)
 
 The listing shows every track command with its address, raw bytes and
@@ -1615,6 +1730,62 @@ SoundFonts.
   semitones. The MIDI file's bends follow a curve. They differ by up to 2
   cents.
 
+### Logik State's driver
+
+* **Mixer character.** The mixer mixes at 21024 Hz in mono and writes 8-bit
+  output. Nine of the games with `GBAMOD30` modules mix at 10512 Hz. It plays
+  each sample point by point, without interpolation. A
+  SoundFont player interpolates and plays the same samples more cleanly. In
+  renders of five songs each of *Aero the Acro-Bat* and *Zapper* by FluidSynth
+  2.6.2, the bands from 8 kHz up are up to 24 dB below the recordings of mGBA
+  0.11.0. FluidSynth rendered them with its reverb and chorus on. It applies
+  0.4 of a zone's attenuation, and it plays every note 1.5 dB louder than the
+  SoundFont specifies (see [FluidSynth](#fluidsynth)). The mixer also cuts
+  each channel's output to 8 bits before it adds the channels. A quiet note
+  loses detail there. The conversion plays it at its level. In the builds for
+  `GBAMOD30` modules, the cut rounds down. A channel whose sound is smaller
+  than one step of the output then still moves the output by a step, and the
+  game plays a faint noise where the conversion is almost silent. In song 1
+  of *Totally Spies! 2: Undercover*, that noise fills the rests, about 23 dB
+  under the song's loudest passages.
+* **The game's settings.** The conversion plays each song at the music volume
+  that the game sets when it starts. *Aero the Acro-Bat* sets 48 of 64,
+  *Zapper* 32 of 64, the default of its options, and *Pinball Challenge
+  Deluxe* 63 of 64. The driver takes the difference between that volume and
+  64 off each channel's volume, and a channel at that difference or less is
+  silent. At 48, *Aero the Acro-Bat* plays all but 18 of its 51,211 notes. At
+  32, *Zapper* plays 68,719 of its 125,285 notes, and the others stay silent
+  in the MIDI files. `--music-volume 64` converts at the full volume. A change
+  of the volume in the game's options and the game's fades aren't followed.
+  The builds for `GBAMOD30` modules multiply by the music's volume and by a
+  master volume. The conversion plays at the two volumes that each game sets
+  when it starts its first songs, and `--info` gives them. Both can be above
+  64. `--music-volume` there changes only the level of the whole song.
+* **The sound's switch.** *Aero the Acro-Bat* switches the sound off for a
+  moment at its start, and *Pinball Challenge Deluxe* does so when a table
+  starts. In mGBA, that leaves the console's sample channels at half volume.
+  The conversion plays at that level. *Pinball Challenge Deluxe* plays its
+  title's music before the switch, at twice the level of its files. *Medal of
+  Honor: Infiltrator* switches the sound off for a frame in its menus, and its
+  conversion plays at the half level too. The music of its title and menus
+  plays before that, at twice the level of its files. In *Alex Rider:
+  Stormbreaker*, *Alien Hominid*, *Family Feud* and *Need for Speed: Porsche
+  Unleashed*, only the pause menu switches the sound off. Their conversions
+  play at the full level.
+* **Slides in *Pinball Challenge Deluxe*.** This build slides a note's pitch
+  as a step through its sample, and a slide down can take the step to 0 or
+  below. The sample then stands still or plays backwards. The conversion
+  plays such a note at level 0 from there. That happens to 12 notes of the
+  game's pieces, for 2.9 s in all. The driver also holds a sample's last
+  output after its end, as a constant level that no listener hears. The
+  conversion ends the note there.
+* **Overflow.** The mixer's sum wraps where it passes a byte's range. The
+  conversion plays those places without the wrap.
+* **The rate in *Need for Speed: Underground 2*.** The game starts the driver
+  again at 21024 Hz for one song and at 10512 Hz for the others. The
+  conversion models every song at 10512 Hz. The rate changes the mixer's
+  character and the rounding of a tick's length, by a fraction of a percent.
+
 ### FluidSynth
 
 SoundFont output follows the specification, apart from the attenuation of
@@ -1659,8 +1830,9 @@ off.
 
 `docs/konami.md`, `docs/rare.md`, `docs/quintet.md`, `docs/rd1.md`,
 `docs/rd2.md`, `docs/alphadream.md`, `docs/mp2k.md`, `docs/brownie.md`,
-`docs/krawall.md` and `docs/ubimilan.md` document the drivers and their data
-formats in full, including how the tool locates them. The code of the drivers
+`docs/krawall.md`, `docs/ubimilan.md` and `docs/logikstate.md` document the
+drivers and their data formats in full, including how the tool locates them.
+The code of the drivers
 comes from ntdlib. A folder for each driver in `src/` connects it to the
 interface in `src/music.h`.
 
@@ -1671,7 +1843,7 @@ under an ARM emulator, and comparison scripts. See `tools/README.md`.
 ## License
 
 `agbsf2` is released under the MIT License; see `LICENSE`. The ROM and GSF
-reader and all ten sound drivers, with their conversions, come from ntdlib,
+reader and all eleven sound drivers, with their conversions, come from ntdlib,
 under the MIT License. ntdlib's notice is in `externals/ntdlib/LICENSE` and in
 `THIRD_PARTY_NOTICES`. ntdlib's DEFLATE decoder is adapted from Mark Adler's
 puff under the zlib license. Its notice is in

@@ -45,7 +45,8 @@ driver's files.
 
 Driver-specific scripts are in `tools/konami/`, `tools/rare/`, `tools/quintet/`,
 `tools/rd2/`, `tools/mp2k/`, `tools/brownie/`, `tools/krawall/`,
-`tools/ubimilan/`, `tools/rd1/` and `tools/alphadream/`. Run the commands below
+`tools/ubimilan/`, `tools/rd1/`, `tools/alphadream/` and `tools/logikstate/`.
+Run the commands below
 from the repository root.
 
 ## Konami's driver
@@ -938,7 +939,7 @@ python tools/ubimilan/driver_emu.py rom.gba render 3 600 ref.wav        # piece 
 Songs 14-22 of *Tomb Raider* are samples with no sequence. Both comparisons
 check the pieces and leave those songs out.
 
-*The Mummy* starts songs 1-16 with channel 9's kit switched off. `agbsf2
+*The Mummy* starts songs 1-15 with channel 9's kit switched off. `agbsf2
 --info` lists a second version of each, "with the kit". `compare_trace.py`
 traces the first version. The emulated engine then runs the game's switch with
 0 before such a piece starts. `compare_notes.py` checks both versions. With
@@ -955,7 +956,7 @@ their voices, and counts their frames instead.
 that the conversion on the beat has the same notes within 1.65 frames and the
 same SoundFonts. It then runs the game's code with hooks on the routines that
 start a sample on a voice and stop a voice. Each sample that sounds has to be a
-note on MIDI channel 10 on its frame, at the velocity that its volume gives,
+note on MIDI channel 11 on its frame, at the velocity that its volume gives,
 ending where the voice stops, with a zone that plays the sample's points at the
 mixer's rate. The PSG's notes that sound have to match the MIDI file's.
 
@@ -1026,3 +1027,129 @@ out. `driver_emu.py` picks the addresses by the ROM's game code. Those of
 `AZWE` and `BRIJ` are built in. The script calls the driver's init, the game's
 call of the echo routine, the play routine and the per-frame routine. It runs
 no BIOS call and no video.
+
+## Logik State's driver
+
+| Script | Description |
+|---|---|
+| `driver_emu.py` | runs the game's driver under the Unicorn ARM emulator: the player's variables and each mixer channel's record after each frame, and a render of the mixer's output |
+| `driver_emu_mod30.py` | runs the later builds that play GBAMOD30 modules under the Unicorn ARM emulator: the player's variables and each channel's record after each frame |
+| `compare_trace.py` | diffs `agbsf2 --trace` against the emulated driver, frame by frame, for every song |
+
+### Checking agbsf2 against Logik State's driver
+
+```sh
+python tools/logikstate/compare_trace.py rom.gba build/agbsf2 -j 4        # the model: every song, 12000 frames
+python tools/logikstate/driver_emu.py rom.gba render 5 1800 ref.wav       # song 5's first 1800 frames
+```
+
+`compare_trace.py` runs `agbsf2 --trace` and the game's code side by side.
+Frame by frame, the script compares the changes to the player's variables
+(the order, the place in the pattern, the speed and tempo, the counts of
+samples up to the next row and tick, and the pattern loop's row) and each of
+the mixer's eight channel records, in hex as the driver keeps them in RAM. It
+reports the first difference in each module that has one. `-j` compares
+several modules at once.
+
+The harness calls the driver's init and its play routine, sets the music's
+volume to the value that the game sets at its start, and then calls the
+routine that the game calls each frame. `driver_emu.py render` writes the mix
+buffer that the driver hands the DMA after each of those calls: 8 bits, mono,
+at the mixer's rate. Those are the bytes that reach the console's FIFOs.
+
+For a game with GBAMOD30 modules, `compare_trace.py` runs
+`driver_emu_mod30.py` in place of `driver_emu.py`. Its trace has a line `g`
+for the player's variables in a fixed order (the order, the row, the speed,
+the tempo, the ticks a second, a row's and a tick's lengths and the samples
+left of each, the ticks of the row twice, the break's flag, the playing flag
+and the fade) and a line for each channel's record. A record has the layout
+of the game's build, with the fields that the model keeps and zeros
+elsewhere. Each game's class in `GAMES` (or its entry in `LS_PLAY`) calls the
+driver as the game's code does: the init with the game's bank, rate and
+sound effect channels, the three volumes, the loop flag, the play routine and
+each frame's routines. The addresses come from the games' code. A few games
+need more from their start-up code: the IWRAM copy of the pointers to the
+step tables, or of the game's routine that clears memory. The script copies
+those as the game does. On 2026-11-12, every module of the 27 images
+matched for 12000 frames.
+
+No script checks a conversion's MIDI files and SoundFonts note by note yet.
+The conversion derives its notes from the same model that `compare_trace.py`
+checks.
+
+### Working out Logik State's driver
+
+The driver is Thumb code in ROM. Its mixing loop is ARM code that the init
+copies to RAM.
+
+1. **Find the modules.** Each module starts with the signature `GBAMOD2.`. The
+   driver's load routine compares a module's first two words with the
+   signature in its literal pool. The routine that calls the load
+   routine is the play routine, and the game's calls of it name the modules
+   and the bank of samples.
+2. **Find the frame routine.** The routines next to the play routine set the
+   three volumes and switch the sound on and off. The routine that points the
+   DMA at a mix buffer and mixes the other one is the frame routine. The
+   game's handler of the vertical blank calls it.
+3. **Disassemble and model.** Those routines were disassembled, and the
+   mixing loop as ARM code at its address in the ROM. The rows, the
+   ticks, the effects and the mixer's progress through each sample were
+   reimplemented from that reading.
+
+`driver_emu.py` picks the addresses by the ROM's game code. Those of the US
+releases of *Aero the Acro-Bat: Rascal Rival Revenge* (`AAOE`) and *Zapper:
+One Wicked Cricket!* (`AZPE`), and of the European release of *Pinball
+Challenge Deluxe* (`APLP`), are built in.
+For another game, add a class to `GAMES` with:
+
+* `init` and `memory`: the driver's init, and the address that the game passes
+  it for the mixer's code and the mix buffers.
+* `play` and `bank`: the routine that plays a module, and the bank of samples
+  that the game's calls pass it.
+* `set_music_volume` and `music_volume`: the routine that sets the music's
+  volume, and the volume that the game sets at its start. `agbsf2 --info`
+  shows both where it finds them.
+* `set_master_volume` and `set_effects_volume`: the routines before and after
+  it. They set the master volume and the sound effects' volume.
+* `frame`: the routine that the game calls each frame.
+* The player's variables: `speed`, `tempo`, `loop_row`, `tick_rate`, `order`,
+  `place`, `row_samples`, `row_left`, `tick_samples`, `tick_left`, `broke`,
+  `tick` and `arpeggio_tick`, and `channels`, the first of the eight channel
+  records. The row routine and the tick routine load their addresses.
+* `channel_size`: the size of a channel record, 0x4C or 0x54. A build with
+  records of 0x54 bytes has `tempo_size = 2` and `loop_row = None`: its tempo
+  is a halfword, and each record contains the pattern loop of its channel.
+
+*Pinball Challenge Deluxe* has the build that plays GBAMOD1 modules
+(`docs/logikstate.md`, "The GBAMOD1 build"). Its class, `PinballEurope`, has
+`mod1 = True`, and `driver_emu.py` runs it through `Mod1Emulator`. A song is a
+piece of a module: order 0 of a module, or an order after one whose pattern
+has a jump. `driver_emu.py` lists them as `agbsf2 --info` does, and plays each
+with no range of orders. A class of this build has:
+
+* `data`: the initialised data that the game's entry code copies to EWRAM:
+  its address in ROM and the first and last addresses in EWRAM. The
+  driver's variables start from it.
+* `init`, `load` and `effects_state`: the init, the load routine and the state into which the
+  game's main code loads module 0. The init gets its memory from the game's
+  allocator.
+* `mask`: the word that the mixer's RAM copy reads its mask from. The script
+  sets it to 0.
+* `play` and `frame`: the routine that plays a module from an order with a
+  range of orders, and the routine that the game calls each frame.
+* `music_option`, `effects_option` and `music_volume`: where the game's
+  options keep the two volumes, and the music's volume of the options'
+  default. The start routine copies the two volumes.
+* `master_volume`: the master volume's variable. The script sets it to 64
+  after the play routine.
+* `note_slide_scale` and `note_slide_scales`: the variable of the scale of the
+  slide to a note, and the scale that the game sets for each module by its
+  place among the modules. Other modules get 0x28.
+* The player's variables: `order`, `place`, `row_samples`, `row_left`,
+  `tick_samples`, `tick_left`, `tick`, `arpeggio_tick`, `broke`,
+  `first_order` and `last_order`, and `channels`, the first of the six
+  channel records of 0x3C bytes.
+
+`compare_trace.py` applies `--frames` to all the songs it compares. To run
+the songs at order 0 for more frames than the others, run it twice with
+`--songs`.
