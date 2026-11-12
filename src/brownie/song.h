@@ -9,8 +9,6 @@
 namespace agbsf2::brownie
 {
 
-using ntdlib::brownie::Command;
-using ntdlib::brownie::DecodeCommand;
 using ntdlib::brownie::DumpSong;
 
 } // namespace agbsf2::brownie

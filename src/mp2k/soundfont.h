@@ -9,9 +9,6 @@
 namespace agbsf2::mp2k
 {
 
-using ntdlib::sequence_export::mp2k::EnvelopeFor;
-using ntdlib::sequence_export::mp2k::RenderSynth;
 using ntdlib::sequence_export::mp2k::SoundfontBuilder;
-using ntdlib::sequence_export::mp2k::Synth;
 
 } // namespace agbsf2::mp2k

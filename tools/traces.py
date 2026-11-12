@@ -5,10 +5,11 @@
 Each script runs a game's driver under the driver_emu.py in the script's folder. driver_emu.py prints a trace in the
 same format as `agbsf2 --trace`. These functions run agbsf2, compare the two traces line by line and report the
 differences. They also read the song list of `agbsf2 --info` and parse a list of song numbers such as 0-3,7. The
-compare_notes.py scripts use parse_range() too.
+compare_notes.py scripts use parse_range() too. MP2K's compare_notes.py runs its jobs through map_jobs().
 """
 import argparse
 import contextlib
+import functools
 import io
 import multiprocessing
 import re
@@ -80,23 +81,47 @@ def first_difference(driver, model, context=0):
     share those lines."""
     for i, (a, b) in enumerate(zip(driver, model)):
         if a != b:
-            lines = ['frame %s differs:' % a.split()[0]]
+            words = a.split() or b.split()
+            lines = ['%s differs:' % ('frame ' + words[0] if words else 'line %d' % (i + 1))]
             if context:
                 lines.append('\n'.join('    both   %s' % line for line in driver[max(0, i - context):i]))
             return '\n'.join(lines + ['    driver %s' % a, '    agbsf2 %s' % b])
     if len(driver) != len(model):
         longer, name = (driver, 'the driver') if len(driver) > len(model) else (model, 'agbsf2')
         line = longer[min(len(driver), len(model))]
-        return 'only %s goes on, at frame %s: %s' % (name, line.split()[0], line)
+        where = 'frame ' + line.split()[0] if line.split() else 'line %d' % (min(len(driver), len(model)) + 1)
+        return 'only %s goes on, at %s: %s' % (name, where, line)
     return None
 
 
+class _WorkerExit(Exception):
+    """A SystemExit in a worker process, sent back to the main process."""
+
+
+def _guarded(function, job):
+    """Returns function(job). A worker of multiprocessing.Pool catches only Exception. A SystemExit would end the
+    worker without a result. pool.map() would then wait forever. _guarded() raises a _WorkerExit in place of the
+    SystemExit."""
+    try:
+        return function(job)
+    except SystemExit as e:
+        raise _WorkerExit(e.code) from None
+
+
+def map_jobs(pool, function, jobs, chunksize=None):
+    """Returns pool.map(function, jobs). A SystemExit in a worker is raised again in this process."""
+    try:
+        return pool.map(functools.partial(_guarded, function), jobs, chunksize=chunksize)
+    except _WorkerExit as e:
+        raise SystemExit(e.args[0]) from None
+
+
 def compare_all(compare, jobs, workers):
-    """Returns compare(job) for each job, in order. `workers` jobs run at once. Each job runs in a fresh process. A job's
-    traces and emulator can stay in memory until its process ends: 13 modules in one process reached 4 GB, where the
-    largest takes 1.5 GB alone."""
+    """Returns compare(job) for each job, in order. `workers` jobs run at once. Each job runs in a fresh process. A
+    job's traces and emulator can stay in memory until its process ends: 13 modules in one process reached 4 GB, where
+    the largest takes 1.5 GB alone."""
     with multiprocessing.Pool(workers, maxtasksperchild=1) as pool:
-        return pool.map(compare, jobs, chunksize=1)
+        return map_jobs(pool, compare, jobs, chunksize=1)
 
 
 def report(songs, results, label, units, frames):

@@ -15,11 +15,15 @@ the driver, frame by frame, then compare the default conversion with it.
 """
 import math
 import re
-import struct
 import subprocess
+import sys
 from pathlib import Path
 
-DRIVERS = ('konami', 'rare', 'quintet', 'rd2', 'mp2k', 'brownie', 'krawall', 'ubimilan')
+# The Standard MIDI File reader from ntdlib.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'externals' / 'ntdlib' / 'tools' / 'sequence_export'))
+import midi_file  # noqa: E402
+
+DRIVERS = ('konami', 'rare', 'quintet', 'rd1', 'rd2', 'alphadream', 'mp2k', 'brownie', 'krawall', 'ubimilan')
 # The names of the songs' other versions in the files' names, as patterns: Rare's tune under water, an R&D2 sequence
 # that another music number plays with other tracks muted, one with the player riding Yoshi, a Konami song in a game's
 # live stage, and a Ubisoft Milan piece with channel 9's kit, which the game starts without it.
@@ -65,46 +69,18 @@ def read_timing(path, by_track=False):
     Repeated values, such as settings restored at a loop start, do not count as changes. With `by_track`, each track's
     name stands for the channel, for a file whose tracks share MIDI channels."""
     data = Path(path).read_bytes()
-    division = struct.unpack('>H', data[12:14])[0]
+    division = midi_file.division_of(data)
     events, names = [], {}
-    pos, track = 14, 0
-    while pos < len(data):
-        size = struct.unpack('>I', data[pos + 4:pos + 8])[0]
-        body = data[pos + 8:pos + 8 + size]
-        pos += 8 + size
-        tick, i, status, index = 0, 0, 0, 0
-        while i < len(body):
-            delta = 0
-            while True:
-                b = body[i]
-                i += 1
-                delta = delta << 7 | (b & 0x7F)
-                if b < 0x80:
-                    break
-            tick += delta
-            index += 1
-            if body[i] >= 0x80:
-                status = body[i]
-                i += 1
+    for track, (_, track_events) in enumerate(midi_file.tracks_of(data)[1]):
+        for index, (tick, status, args) in enumerate(track_events, 1):
             if status == 0xFF:
-                kind, length = body[i], 0
-                i += 1
-                while True:
-                    b = body[i]
-                    i += 1
-                    length = length << 7 | (b & 0x7F)
-                    if b < 0x80:
-                        break
-                if kind == 0x51:
-                    events.append((tick, 0, track, index, 'tempo', 0, int.from_bytes(body[i:i + 3], 'big')))
-                elif kind == 0x03:
-                    names[track] = body[i:i + length].decode('latin-1')
-                i += length
+                if args[0] == 0x51:
+                    events.append((tick, 0, track, index, 'tempo', 0, int.from_bytes(args[2:5], 'big')))
+                elif args[0] == 0x03:
+                    length, start = midi_file.read_number(args, 1)
+                    names[track] = args[start:start + length].decode('latin-1')
                 continue
             kind, ch = status & 0xF0, status & 0x0F
-            n = 1 if kind in (0xC0, 0xD0) else 2
-            args = body[i:i + n]
-            i += n
             if kind == 0x90 and args[1]:
                 events.append((tick, 5, track, index, 'on', ch, args[0]))
             elif kind in (0x80, 0x90):
@@ -115,19 +91,9 @@ def read_timing(path, by_track=False):
                 events.append((tick, 3, track, index, ('cc', args[0]), ch, args[1]))
             elif kind == 0xE0:
                 events.append((tick, 4, track, index, 'bend', ch, args[0] | args[1] << 7))
-        track += 1
     events.sort()
 
-    tempos = [(0, 500000)] + [(e[0], e[6]) for e in events if e[4] == 'tempo']
-
-    def seconds(t):
-        s, at, tempo = 0.0, 0, 500000
-        for when, value in tempos:
-            if when > t:
-                break
-            s += (when - at) * tempo / division / 1e6
-            at, tempo = when, value
-        return s + (t - at) * tempo / division / 1e6
+    seconds = midi_file.tick_seconds(division, [(e[0], e[6]) for e in events if e[4] == 'tempo'])
 
     notes, changes, sounding, bank, program = {}, {}, {}, {}, {}
     for tick, _, track, _, kind, ch, value in events:

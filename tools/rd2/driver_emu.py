@@ -29,8 +29,8 @@ The script starts those sequences without Yoshi, like agbsf2's first version. --
 riding Yoshi, like agbsf2's <name>_NN_yoshi.
 
 The routine and RAM addresses are chosen by the ROM's game code. Those of The Legend of Zelda: A Link to the Past
-(AZLE), Super Mario Advance 2 (AA2E), Super Mario Advance 3 (A3AE) and Super Mario Advance 4 (AX4E) are built in. For another game, add an entry to
-GAMES (see docs/rd2.md).
+(AZLE), Super Mario Advance 2 (AA2E), Super Mario Advance 3 (A3AE) and Super Mario Advance 4 (AX4E) are built in. For
+another game, add an entry to GAMES (see docs/rd2.md).
 """
 import argparse
 import struct
@@ -39,7 +39,7 @@ import wave
 from pathlib import Path
 
 from unicorn import (UC_ARCH_ARM, UC_HOOK_CODE, UC_HOOK_INTR, UC_HOOK_MEM_UNMAPPED, UC_HOOK_MEM_WRITE,
-                     UC_MEM_READ_UNMAPPED, UC_MODE_ARM, Uc)
+                     UC_MEM_READ_UNMAPPED, UC_MODE_ARM, Uc, UcError)
 from unicorn.arm_const import (UC_ARM_REG_CPSR, UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R1,
                                UC_ARM_REG_R2, UC_ARM_REG_R3, UC_ARM_REG_R4, UC_ARM_REG_R6, UC_ARM_REG_R7,
                                UC_ARM_REG_SP)
@@ -228,7 +228,10 @@ class DriverEmulator:
         if access == UC_MEM_READ_UNMAPPED:
             uc.mem_map(address & ~0xFFF, 0x1000 if (address & 0xFFF) + size <= 0x1000 else 0x2000)
             return True
-        raise SystemExit('the driver accessed unmapped memory at %08x' % address)
+        # For an unmapped access, Unicorn's emu_start() raises UcError ahead of any exception from this hook.
+        # call() raises SystemExit with this message instead.
+        self.fault = 'the driver accessed unmapped memory at %08x' % address
+        return False
 
     def _io_write(self, uc, access, address, size, value, user):
         self.writes.append((address, size, value & ((1 << (8 * size)) - 1)))
@@ -271,7 +274,13 @@ class DriverEmulator:
         uc.reg_write(UC_ARM_REG_LR, RETURN_TRAP | 1)
         for i, a in enumerate(args):
             uc.reg_write(UC_ARM_REG_R0 + i, a)
-        uc.emu_start(address | (1 if thumb else 0), RETURN_TRAP, count=50_000_000)
+        self.fault = None
+        try:
+            uc.emu_start(address | (1 if thumb else 0), RETURN_TRAP, count=50_000_000)
+        except UcError:
+            if self.fault:
+                raise SystemExit(self.fault) from None
+            raise
 
     def read(self, address, size):
         return bytes(self.uc.mem_read(address, size))
@@ -404,11 +413,22 @@ class DriverEmulator:
             raw = self.read(base, VOICE_SIZE)
             if raw[1] == 0:
                 continue
-            u8 = lambda o: raw[o]
-            u16 = lambda o: struct.unpack_from('<H', raw, o)[0]
-            s16 = lambda o: struct.unpack_from('<h', raw, o)[0]
-            u32 = lambda o: struct.unpack_from('<I', raw, o)[0]
-            s32 = lambda o: struct.unpack_from('<i', raw, o)[0]
+
+            def u8(o):
+                return raw[o]
+
+            def u16(o):
+                return struct.unpack_from('<H', raw, o)[0]
+
+            def s16(o):
+                return struct.unpack_from('<h', raw, o)[0]
+
+            def u32(o):
+                return struct.unpack_from('<I', raw, o)[0]
+
+            def s32(o):
+                return struct.unpack_from('<i', raw, o)[0]
+
             track = u32(0x04)
             track = (track - a.tracks) // TRACK_SIZE if track else -1
             region = u32(0x54)

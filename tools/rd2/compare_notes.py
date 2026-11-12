@@ -56,6 +56,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for conversion.py, gbarom.py and traces.py, in tools/
 import conversion
+from conversion import midi_file
 import driver_emu
 import psg_model
 from gbarom import ROM_BASE, load_rom
@@ -136,45 +137,16 @@ def read_midi(path):
     """Returns the notes as dicts of channel, key, velocity, on and off seconds, bank and program, each channel's pitch
     bends and CC11 as {channel: (times, values)}, the bend ranges and the length in seconds."""
     data = Path(path).read_bytes()
-    division = struct.unpack('>H', data[12:14])[0]
+    division = midi_file.division_of(data)
     events = []
-    pos, track = 14, 0
-    while pos < len(data):
-        size = struct.unpack('>I', data[pos + 4:pos + 8])[0]
-        body = data[pos + 8:pos + 8 + size]
-        pos += 8 + size
-        tick, i, status, index = 0, 0, 0, 0
-        while i < len(body):
-            index += 1
-            delta = 0
-            while True:
-                b = body[i]
-                i += 1
-                delta = delta << 7 | (b & 0x7F)
-                if b < 0x80:
-                    break
-            tick += delta
-            if body[i] >= 0x80:
-                status = body[i]
-                i += 1
+    for track, (_, track_events) in enumerate(midi_file.tracks_of(data)[1]):
+        for index, (tick, status, args) in enumerate(track_events, 1):
             if status == 0xFF:
-                kind, length = body[i], 0
-                i += 1
-                while True:
-                    b = body[i]
-                    i += 1
-                    length = length << 7 | (b & 0x7F)
-                    if b < 0x80:
-                        break
-                if kind == 0x51:
-                    events.append((tick, track, index, 'tempo', 0, int.from_bytes(body[i:i + 3], 'big'), 0))
+                if args[0] == 0x51:
+                    events.append((tick, track, index, 'tempo', 0, int.from_bytes(args[2:5], 'big'), 0))
                 events.append((tick, track, index, 'meta', 0, 0, 0))
-                i += length
                 continue
             kind, ch = status & 0xF0, status & 0x0F
-            n = 1 if kind in (0xC0, 0xD0) else 2
-            args = body[i:i + n]
-            i += n
             if kind == 0x90 and args[1]:
                 events.append((tick, track, index, 'on', ch, args[0], args[1]))
             elif kind in (0x80, 0x90):
@@ -185,7 +157,6 @@ def read_midi(path):
                 events.append((tick, track, index, 'cc', ch, args[0], args[1]))
             elif kind == 0xE0:
                 events.append((tick, track, index, 'bend', ch, args[0] | args[1] << 7, 0))
-        track += 1
 
     # The order of events on a tick: the writer's, which puts note offs first and note ons last.
     order = {'tempo': 0, 'meta': 0, 'off': 1, 'program': 2, 'cc': 3, 'bend': 4, 'on': 5}
@@ -296,7 +267,7 @@ def driver_info(tool, rom_path):
     """Returns the pitch and frequency tables' addresses, the table of banks, the frames that each listed sequence
     lasts and the PSG's share of full scale. All come from agbsf2's --info report. The report gives each sequence's
     length in minutes and seconds, and the driver's revision. agbsf2 gives the PSG a share for each revision
-    (PsgShare() in src/rd2/soundfont.h)."""
+    (PsgShare() in ntdlib's include/ntdlib/sequence_export/rd2/soundfont.h)."""
     text = subprocess.run([tool, '--driver', 'rd2', '--info', rom_path], capture_output=True, encoding='utf-8',
                           check=True).stdout
     revision = re.search(r'^\s+(.+) revision of the driver', text, re.M).group(1)
@@ -433,10 +404,10 @@ def check_song(rom, raw_rom, tables, bank_starts, share, song, midi_path, sf2_pa
         return len(played) if len(played) >= end_frame else None
 
     def sound_end(f, i):
-        """Returns the frame where the PSG channel of note `i` of frame `f` falls silent, for a PSG voice's note: the one
-        after the last frame that starts with the channel sounding, before another note takes the channel. A note whose
-        voice another note takes in the same frame ends at once. A run that stops before the channel falls silent gives
-        None."""
+        """Returns the frame where the PSG channel of note `i` of frame `f` falls silent, for a PSG voice's note: the
+        one after the last frame that starts with the channel sounding, before another note takes the channel. A note
+        whose voice another note takes in the same frame ends at once. A run that stops before the channel falls silent
+        gives None."""
         started = played[f][0]
         v = started[i]['voice']
         if any(later['voice'] == v for later in started[i + 1:]):

@@ -87,6 +87,8 @@ on showResults(conversion)
 end showResults
 
 on lastPathComponent(p)
+	-- A folder's POSIX path ends in a slash. The tool names the folder without it.
+	if p ends with "/" and (length of p) > 1 then set p to text 1 thru -2 of p
 	set saved to AppleScript's text item delimiters
 	set AppleScript's text item delimiters to "/"
 	set parts to text items of p

@@ -7,11 +7,9 @@
 #include <cstdio>
 #include <memory>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "gba.h"
-#include "program.h"
 #include "quintet/convert.h"
 #include "quintet/driver.h"
 #include "quintet/sequencer.h"
@@ -70,11 +68,7 @@ public:
 
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
-        ntdlib::sequence_export::agb::Sf2File& f = shared_->File();
-        f.program = kProgramName;
-        f.SetTitle(rom_.Title());
-
-        return f.Write(path, error);
+        return WriteSoundfont(shared_->File(), rom_, path, error);
     }
 
     bool DumpSong(int song, const std::string& path, std::string& error) const override

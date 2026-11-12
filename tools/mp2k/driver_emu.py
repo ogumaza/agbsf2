@@ -16,8 +16,9 @@ makes), and captures what the engine produces:
 The routine addresses are chosen by the ROM's game code. Those of Pokemon Emerald (BPEE), Pokemon Ruby (AXVE), The
 Legend of Zelda: A Link to the Past & Four Swords (AZLE), The Legend of Zelda: The Minish Cap (BZME), Kingdom Hearts:
 Chain of Memories (B8CE), Super Robot Taisen: Original Generation 2 (B2RE), Pokemon Mystery Dungeon: Red Rescue Team
-(B24E) and Golden Sun: The Lost Age (AGFE), whose version of the engine Camelot changed, are built in. For another game,
-add its values to GAMES (see docs/mp2k.md).
+(B24E), Golden Sun: The Lost Age (AGFE), whose version of the engine Camelot changed, Fire Emblem: The Binding Blade
+(AFEJ), Fire Emblem (AE7E), Fire Emblem: The Sacred Stones (BE8E) and Tomato Adventure (AGLJ) are built in. For another
+game, add its values to GAMES (see docs/mp2k.md).
 """
 import argparse
 import struct
@@ -55,7 +56,7 @@ class Addresses:
     vsync = 0x082dfa10       # m4aSoundVSync, which the VCount interrupt calls
     song_table = 0x086b49f0
     player_table = 0x086b49c0
-    song_setup = None  # a routine of the game's that sets the driver up for a song up to 127 before it starts: r0 = song
+    song_setup = None  # a game routine that sets the driver up for a song up to 127 before it starts: r0 = song
 
 
 class AddressesAXVE(Addresses):

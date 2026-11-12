@@ -49,6 +49,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for conversion.py, gbarom.py and traces.py, in tools/
 import conversion
+from conversion import midi_file
 import driver_emu
 from gbarom import ROM_BASE, load_rom
 from traces import parse_range
@@ -135,45 +136,16 @@ def read_midi(path):
     """Returns the notes as dicts of channel, key, on and off seconds, bank and program, each channel's changes of CC10,
     CC11 and pitch bend as {(channel, 10, 11 or 'bend'): (times, values)}, the bend ranges and the length in seconds."""
     data = Path(path).read_bytes()
-    division = struct.unpack('>H', data[12:14])[0]
+    division = midi_file.division_of(data)
     events = []
-    pos, track = 14, 0
-    while pos < len(data):
-        size = struct.unpack('>I', data[pos + 4:pos + 8])[0]
-        body = data[pos + 8:pos + 8 + size]
-        pos += 8 + size
-        tick, i, status, index = 0, 0, 0, 0
-        while i < len(body):
-            index += 1
-            delta = 0
-            while True:
-                b = body[i]
-                i += 1
-                delta = delta << 7 | (b & 0x7F)
-                if b < 0x80:
-                    break
-            tick += delta
-            if body[i] >= 0x80:
-                status = body[i]
-                i += 1
+    for track, (_, track_events) in enumerate(midi_file.tracks_of(data)[1]):
+        for index, (tick, status, args) in enumerate(track_events, 1):
             if status == 0xFF:
-                kind, length = body[i], 0
-                i += 1
-                while True:
-                    b = body[i]
-                    i += 1
-                    length = length << 7 | (b & 0x7F)
-                    if b < 0x80:
-                        break
-                if kind == 0x51:
-                    events.append((tick, track, index, 'tempo', 0, int.from_bytes(body[i:i + 3], 'big'), 0))
+                if args[0] == 0x51:
+                    events.append((tick, track, index, 'tempo', 0, int.from_bytes(args[2:5], 'big'), 0))
                 events.append((tick, track, index, 'meta', 0, 0, 0))
-                i += length
                 continue
             kind, ch = status & 0xF0, status & 0x0F
-            n = 1 if kind in (0xC0, 0xD0) else 2
-            args = body[i:i + n]
-            i += n
             if kind == 0x90 and args[1]:
                 events.append((tick, track, index, 'on', ch, args[0], args[1]))
             elif kind in (0x80, 0x90):
@@ -184,21 +156,11 @@ def read_midi(path):
                 events.append((tick, track, index, 'cc', ch, args[0], args[1]))
             elif kind == 0xE0:
                 events.append((tick, track, index, 'bend', ch, args[0] | args[1] << 7, 0))
-        track += 1
 
     # The order of events on a tick: the writer's, which puts note offs first and note ons last.
     order = {'tempo': 0, 'meta': 0, 'off': 1, 'program': 2, 'cc': 3, 'bend': 4, 'on': 5}
     events.sort(key=lambda e: (e[0], order[e[3]], e[1], e[2]))
-    tempos = [(0, 500000)] + [(e[0], e[5]) for e in events if e[3] == 'tempo']
-
-    def seconds(tick):
-        s, at, tempo = 0.0, 0, 500000
-        for t, value in tempos:
-            if t > tick:
-                break
-            s += (t - at) * tempo / division / 1e6
-            at, tempo = t, value
-        return s + (tick - at) * tempo / division / 1e6
+    seconds = midi_file.tick_seconds(division, [(e[0], e[5]) for e in events if e[3] == 'tempo'])
 
     notes, open_notes, changes, ranges = [], {}, {}, {}
     bank, program, rpn = {}, {}, {}
@@ -379,7 +341,7 @@ def driver_frames(rom, song, frames):
                 if register in (0x64, 0x6C, 0x74, 0x7C) and value & 0x8000:
                     restarted[[0x64, 0x6C, 0x74, 0x7C].index(register)] = True
         flags = [emu.channel(c)[0] for c in range(channels)]
-        frame = [None] * channels
+        sounds = [None] * channels
         nr50, nr51 = regs.get(0x80, 0) & 0xFF, regs.get(0x80, 0) >> 8
         mix = [0.25, 0.5, 1.0, 1.0][regs.get(0x82, 0) & 3]
         scale = (mix * ((nr50 >> 4 & 7) + 1) / 8, mix * ((nr50 & 7) + 1) / 8)
@@ -410,7 +372,7 @@ def driver_frames(rom, song, frames):
             else:
                 level = 2 * volume
                 what = (regs.get(0x62 if h == 0 else 0x68, 0) >> 6) & 3
-            frame[h + 4 if effect else h] = dict(
+            sounds[h + 4 if effect else h] = dict(
                 left=level * scale[0] if nr51 & (0x10 << h) else 0, right=level * scale[1] if nr51 & (0x01 << h) else 0,
                 scale=(scale[0] if nr51 & (0x10 << h) else 0, scale[1] if nr51 & (0x01 << h) else 0),
                 pitch=frequency, pitches=frequencies, what=what)
@@ -427,7 +389,7 @@ def driver_frames(rom, song, frames):
             if running and owner is not None and owner < channels:
                 point, end, loop, volume = struct.unpack('<IIII', before)
                 level = (volume + 1) * 128 / 256
-                frame[owner] = dict(left=level, right=level, pitch=16777216 / period, what=(starts[x], end, loop))
+                sounds[owner] = dict(left=level, right=level, pitch=16777216 / period, what=(starts[x], end, loop))
 
         # A voice plays while the mixer runs and mixes it, until it reaches the end of a sample that doesn't loop. The
         # routine starts a sample where it sets the voice's next point, end or loop.
@@ -442,9 +404,9 @@ def driver_frames(rom, song, frames):
             if not emu.mixing or (v >= 2 and not all_voices) or (point == end and loop == end):
                 continue
             factor = 2 if mode & 1 else 4 if mode & 2 else 8 if mode & 4 else 1
-            frame[8 + v] = dict(left=left * 128 / 256, right=right * 128 / 256,
-                                pitch=16777216 / point_cycles / factor, what=(starts[v], end, loop))
-        out.append(frame)
+            sounds[8 + v] = dict(left=left * 128 / 256, right=right * 128 / 256,
+                                 pitch=16777216 / point_cycles / factor, what=(starts[v], end, loop))
+        out.append(sounds)
     return out
 
 

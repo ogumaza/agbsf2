@@ -210,8 +210,12 @@ def instrument(note_samples, volume_env, pan_env, fade, vibrato_depth, vibrato_r
 
 def s3m_patterns(fwd, bidi, one, later):
     """The S3M modules' patterns: every effect of the effect column, a few rows apart."""
-    i = lambda s: s + 1  # a sample's instrument number
-    v = lambda x: 0x10 + x
+    def i(s):  # a sample's instrument number
+        return s + 1
+
+    def v(x):
+        return 0x10 + x
+
     first = [
         (0, 0, note('C-4'), i(fwd), v(64), SPEED, 3), (0, 1, note('E-4'), i(one), None, BPM, 0x7D),
         (0, 2, note('G-4'), i(bidi), v(40), PAN, 0x20), (0, 3, note('C-5'), i(fwd), v(50), SPEED_BPM, 0x03),
@@ -263,8 +267,12 @@ def s3m_patterns(fwd, bidi, one, later):
 def xm_patterns(later, first):
     """The XM module's patterns: instruments with envelopes, the XM effects and the volume column's effects. `first` is
     the number of the instrument before the new ones."""
-    v = lambda x: 0x10 + x
-    vc = lambda kind, x: 0x60 + (kind << 4) + x
+    def v(x):
+        return 0x10 + x
+
+    def vc(kind, x):
+        return 0x60 + (kind << 4) + x
+
     events = [
         (0, 0, note('C-4'), 1, None, None, None), (0, 1, note('E-4'), 2, None, None, None),
         (0, 2, note('G-4'), 3, v(48), VOLSLIDE_XM, 0x02), (0, 3, note('C-5'), 3, vc(0, 5), None, None),

@@ -6,18 +6,12 @@
 
 #include "ntdlib/rare/driver.h"
 
-#include "rom.h"
-
 namespace agbsf2::rare
 {
 
 using ntdlib::rare::DetectDriver;
 using ntdlib::rare::DriverInfo;
 using ntdlib::rare::DriverOverrides;
-using ntdlib::rare::FadeFrames;
-using ntdlib::rare::kTempoScale;
-using ntdlib::rare::MusicVolume;
-using ntdlib::rare::SilencedChannels;
 using ntdlib::rare::TuneAddress;
 
 } // namespace agbsf2::rare

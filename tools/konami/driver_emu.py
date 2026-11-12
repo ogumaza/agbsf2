@@ -37,7 +37,7 @@ from pathlib import Path
 
 import numpy as np
 from unicorn import UC_ARCH_ARM, UC_HOOK_CODE, UC_HOOK_INTR, UC_HOOK_MEM_READ, UC_HOOK_MEM_WRITE, UC_MODE_ARM, Uc
-from unicorn.arm_const import UC_ARM_REG_CPSR, UC_ARM_REG_LR, UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_SP
+from unicorn.arm_const import UC_ARM_REG_CPSR, UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_SP
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for gbarom.py and psg_model.py, in tools/
 import psg_model
@@ -479,6 +479,7 @@ class AddressesATIJ(AddressesAY5E):
     fifo_buffer = 0x0300022C
     voices = 0x030001C4
 
+
 class AddressesAG2J(AddressesATIJ):
     """AG2J (Kami no Kijutsu: Illusion of the Evil Eyes): the driver of ATIJ, with its state at 0x030008A0."""
     init = 0x0804F490
@@ -523,6 +524,7 @@ class AddressesARVJ(AddressesAKYJ):
     mixer_position = 0x03004298
     fifo_buffer = 0x030042A0
     voices = 0x03004238
+
 
 class AddressesA8RJ(AddressesBRME):
     """A8RJ (Tennis no Ouji-sama 2003: Passion Red): the Hunter X Hunter revision of the driver. Its songs, output
@@ -680,7 +682,12 @@ class DriverEmulator:
                 self.sample_cycles = (0x10000 - (value & 0xFFFF)) * prescale
 
     def _svc(self, uc, intno, user):
-        # The only BIOS call the driver's setup makes is GetBiosChecksum.
+        # The only BIOS call that the driver's setup makes is GetBiosChecksum (0x0D). Unicorn calls this after the SWI
+        # instruction. The call number is the byte at pc - 2, in Thumb and in ARM code alike.
+        pc = uc.reg_read(UC_ARM_REG_PC)
+        number = uc.mem_read(pc - 2, 1)[0]
+        if number != 0x0D:
+            raise SystemExit('the driver made a BIOS call %x at %08x' % (number, pc))
         uc.reg_write(UC_ARM_REG_R0, 0xBAAE187F)
 
     def _io_write(self, uc, access, address, size, value, user):

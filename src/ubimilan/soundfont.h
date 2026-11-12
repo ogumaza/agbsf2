@@ -9,10 +9,6 @@
 namespace agbsf2::ubimilan
 {
 
-using ntdlib::sequence_export::ubimilan::ChannelName;
 using ntdlib::sequence_export::ubimilan::InstrumentSet;
-using ntdlib::sequence_export::ubimilan::kFirstDrumKey;
-using ntdlib::sequence_export::ubimilan::kNoiseBank;
-using ntdlib::sequence_export::ubimilan::PresetBank;
 
 } // namespace agbsf2::ubimilan

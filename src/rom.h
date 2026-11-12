@@ -9,8 +9,6 @@
 namespace agbsf2
 {
 
-using ntdlib::agb::Hex;
-using ntdlib::agb::kRomBase;
 using ntdlib::agb::Rom;
 
 } // namespace agbsf2

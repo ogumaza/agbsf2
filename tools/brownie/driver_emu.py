@@ -30,7 +30,7 @@ from pathlib import Path
 
 import numpy as np
 from unicorn import UC_ARCH_ARM, UC_HOOK_INTR, UC_HOOK_MEM_UNMAPPED, UC_HOOK_MEM_WRITE, UC_MEM_WRITE_UNMAPPED, \
-    UC_MODE_ARM, Uc
+    UC_MODE_ARM, Uc, UcError
 from unicorn.arm_const import UC_ARM_REG_CPSR, UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R7, \
     UC_ARM_REG_SP
 
@@ -146,7 +146,10 @@ class DriverEmulator:
         if access == UC_MEM_WRITE_UNMAPPED and address >= 0x10000000:
             uc.mem_map(address & ~0xFFF, 0x1000)
             return True
-        raise SystemExit('the driver accessed unmapped memory at %08x' % address)
+        # For an unmapped access, Unicorn's emu_start() raises UcError ahead of any exception from this hook.
+        # call() raises SystemExit with this message instead.
+        self.fault = 'the driver accessed unmapped memory at %08x' % address
+        return False
 
     def _io_write(self, uc, access, address, size, value, user):
         value &= (1 << (8 * size)) - 1
@@ -188,7 +191,13 @@ class DriverEmulator:
         # does.
         for r in range(13):
             uc.reg_write(UC_ARM_REG_R0 + r, args[r] if r < len(args) else 0)
-        uc.emu_start(address | (1 if thumb else 0), RETURN_TRAP, count=50_000_000)
+        self.fault = None
+        try:
+            uc.emu_start(address | (1 if thumb else 0), RETURN_TRAP, count=50_000_000)
+        except UcError:
+            if self.fault:
+                raise SystemExit(self.fault) from None
+            raise
 
     def u16(self, address):
         return struct.unpack('<H', self.uc.mem_read(address, 2))[0]

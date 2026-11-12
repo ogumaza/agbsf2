@@ -5,9 +5,11 @@
 #include "music.h"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -18,11 +20,21 @@
 #include "alphadream/soundfont.h"
 #include "rom.h"
 #include "sf2.h"
+#include "trace.h"
 
 namespace agbsf2::alphadream
 {
 namespace
 {
+
+// The bytes of a track record, and of a channel record as the trace prints it.
+using TrackBytes = std::array<uint8_t, 32>;
+using ChannelBytes = std::array<uint8_t, 12>;
+
+// Bytes 4 to 7 of a track record contain the address of the track data. The trace leaves them out. So does
+// driver_emu.py.
+constexpr size_t kDataAddressStart = 4;
+constexpr size_t kDataAddressEnd = 8;
 
 class AlphaDreamMusic : public Music
 {
@@ -61,10 +73,9 @@ public:
 
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
-        Sf2File f;
+        ntdlib::sequence_export::agb::Sf2File f;
         shared_->Build(rom_, info_, f);
-        f.SetTitle(rom_.Title());
-        return f.Write(path, error);
+        return WriteSoundfont(f, rom_, path, error);
     }
 
     bool DumpSong(int song, const std::string& path, std::string& error) const override
@@ -81,12 +92,14 @@ public:
         {
             return false;
         }
+
         Sequencer seq(rom_, info_, s);
-        std::array<std::array<uint8_t, 12>, kSampleTracks> last{};
-        std::array<std::array<uint8_t, 12>, kTracks - kSampleTracks> last_psg{};
+        std::array<ChannelBytes, kSampleTracks> last{};
+        std::array<ChannelBytes, kTracks - kSampleTracks> last_psg{};
         for (long long f = 0; f < frames; f++)
         {
             seq.Step();
+
             bool any = false;
             for (int t = 0; t < kTracks; t++)
             {
@@ -96,6 +109,7 @@ public:
             {
                 std::fprintf(out, "%lld p 1 flags 01 volume %04x divisor %d\n", f, seq.PlayerVolume(), kDefaultDivisor);
             }
+
             for (int t = 0; t < kTracks; t++)
             {
                 const TrackState& track = seq.Track(t);
@@ -103,51 +117,46 @@ public:
                 {
                     continue;
                 }
-                const std::array<uint8_t, 32> b = track.Bytes();
+
+                const TrackBytes b = track.Bytes();
                 std::fprintf(out, "%lld t 1.%d ", f, t);
-                for (size_t i = 0; i < 4; i++)
-                {
-                    std::fprintf(out, "%02x", b[i]);
-                }
+                PrintHex(out, std::span<const uint8_t>(b).first(kDataAddressStart));
                 std::fprintf(out, " ");
-                for (size_t i = 8; i < 32; i++)
-                {
-                    std::fprintf(out, "%02x", b[i]);
-                }
+                PrintHex(out, std::span<const uint8_t>(b).subspan(kDataAddressEnd));
                 std::fprintf(out, "\n");
             }
+
             for (int c = 0; c < kSampleTracks; c++)
             {
-                const std::array<uint8_t, 12> b = seq.Channel(c).TraceBytes();
+                const ChannelBytes b = seq.Channel(c).TraceBytes();
                 if (b == last[size_t(c)])
                 {
                     continue;
                 }
+
                 last[size_t(c)] = b;
                 std::fprintf(out, "%lld h %d ", f, c);
-                for (uint8_t x : b)
-                {
-                    std::fprintf(out, "%02x", x);
-                }
+                PrintHex(out, b);
                 std::fprintf(out, "\n");
             }
+
             for (int c = 0; c < kTracks - kSampleTracks; c++)
             {
-                const std::array<uint8_t, 12> b = seq.Psg(c).TraceBytes();
+                const ChannelBytes b = seq.Psg(c).TraceBytes();
                 if (b == last_psg[size_t(c)])
                 {
                     continue;
                 }
+
                 last_psg[size_t(c)] = b;
                 std::fprintf(out, "%lld q %d ", f, c);
-                for (uint8_t x : b)
-                {
-                    std::fprintf(out, "%02x", x);
-                }
+                PrintHex(out, b);
                 std::fprintf(out, "\n");
             }
         }
+
         warnings.insert(warnings.end(), seq.Warnings().begin(), seq.Warnings().end());
+
         return true;
     }
 
@@ -166,6 +175,7 @@ std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides&, std::string& 
     {
         return nullptr;
     }
+
     return std::make_unique<AlphaDreamMusic>(rom, std::move(info));
 }
 

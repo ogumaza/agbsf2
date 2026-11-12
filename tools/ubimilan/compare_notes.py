@@ -3,7 +3,7 @@
 
 """Check a conversion's MIDI files and SoundFonts against Ubisoft Milan's driver, note by note.
 
-    compare_notes.py ROM AGBSF2 FOLDER [--songs 0-13] [--frames 12000]
+    compare_notes.py ROM AGBSF2 FOLDER [--songs 0-13] [--frames 12000] [-v]
 
 FOLDER holds agbsf2's conversion of ROM: NAME_NN.mid and NAME_NN.sf2 for each piece of music, or
 NAME_ubimilan_NN.mid and NAME_ubimilan_NN.sf2 if another driver was detected first. A piece that the game starts with
@@ -45,12 +45,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for conversion.py, gbarom.py and traces.py, in tools/
 import conversion
+from conversion import midi_file
 import driver_emu
 import psg_model
 import traces
 from gbarom import ROM_BASE, load_rom
 
-FRAME_RATE = 16777216 / 280896
+CPU_CLOCK = 16777216
+FRAME_RATE = CPU_CLOCK / 280896
 MAX_SHIFT = 1.65  # frames that an event on the beat can be from the driver's frame, with a margin for the MIDI's ticks
 MIRROR = 0x0A000000
 KIT_MIDI_CHANNEL = 10  # the MIDI channel of the driver's channel 9, MIDI's channel 11, counted from 0
@@ -62,64 +64,26 @@ NOISE_RATE = 65536  # the noise drums' rate
 CENTS = 1.0  # the furthest that a PSG note's pitch can be from the driver's
 
 
-def read_number(body, i):
-    """Returns the variable-length number at body[i] and the index after it."""
-    value = 0
-    while True:
-        b = body[i]
-        i += 1
-        value = (value << 7) | (b & 0x7F)
-        if not b & 0x80:
-            return value, i
-
-
 def read_midi(path):
     """Returns the MIDI file's notes as dicts with the channel, key, velocity, bank, program and the frames on which it
     starts and ends, its length in frames, and for each channel the frames and values of its CC11 and bends, and its
     bend range."""
     data = Path(path).read_bytes()
-    division = struct.unpack('>H', data[12:14])[0]
-    events = []
-    pos = 14
-    while pos < len(data):
-        size = struct.unpack('>I', data[pos + 4:pos + 8])[0]
-        body = data[pos + 8:pos + 8 + size]
-        pos += 8 + size
-        tick, i, status = 0, 0, 0
-        while i < len(body):
-            delta, i = read_number(body, i)
-            tick += delta
-            if body[i] == 0xFF:
-                kind = body[i + 1]
-                length, at = read_number(body, i + 2)
-                if kind == 0x51:
-                    events.append((tick, 'tempo', int.from_bytes(body[at:at + 3], 'big')))
-                i = at + length
-                continue
-            if body[i] & 0x80:
-                status = body[i]
-                i += 1
-            size = 1 if status >> 4 in (0xC, 0xD) else 2
-            args = body[i:i + size]
-            i += size
-            events.append((tick, status, bytes(args)))
-
-    tempos = sorted((t, v) for t, k, v in events if k == 'tempo')
+    division = midi_file.division_of(data)
+    tracks = midi_file.tracks_of(data)[1]
+    events = [(tick, status, args) for _, track_events in tracks for tick, status, args in track_events
+              if status != 0xFF]
+    tempos = midi_file.tempo_changes(tracks)
+    seconds = midi_file.tick_seconds(division, tempos)
 
     def frames(tick):
-        seconds, at, tempo = 0.0, 0, 500000
-        for t, v in tempos:
-            if t > tick:
-                break
-            seconds += (t - at) * tempo / division / 1e6
-            at, tempo = t, v
-        return (seconds + (tick - at) * tempo / division / 1e6) * FRAME_RATE
+        return seconds(tick) * FRAME_RATE
 
     notes, open_notes, bank, program = [], {}, {}, {}
     controls = {}  # channel -> {'cc11': [(frame, value)], 'bend': [(frame, value)], 'range': semitones}
     rpn = {}
     last = 0
-    for tick, status, args in sorted((e for e in events if e[1] != 'tempo'), key=lambda e: e[0]):
+    for tick, status, args in sorted(events, key=lambda e: e[0]):
         last = max(last, tick)
         ch, kind = status & 0xF, status >> 4
         c = controls.setdefault(ch, {'cc11': [], 'bend': [], 'range': 2})
@@ -142,7 +106,7 @@ def read_midi(path):
             notes.append(note)
         elif kind in (0x8, 0x9) and (ch, args[0]) in open_notes:
             open_notes.pop((ch, args[0]))['off'] = frames(tick)
-    end = frames(max([last] + [t for t, _, _ in events]))
+    end = frames(max([last] + [t for t, _ in tempos]))
     for note in notes:
         if note['off'] is None:
             note['off'] = end
@@ -187,6 +151,9 @@ def read_sf2(path):
         last = struct.unpack('<H', bags[index + 1][:2])[0]
         return {struct.unpack('<H', g[:2])[0]: struct.unpack('<H', g[2:])[0] for g in generators[first:last]}
 
+    def signed(value):
+        return value - 0x10000 if value & 0x8000 else value
+
     presets = {}
     for p in range(len(phdr) - 1):
         program, bank, bag = struct.unpack('<HHH', phdr[p][20:26])
@@ -199,7 +166,6 @@ def read_sf2(path):
             if 53 not in g:
                 continue
             start, end, loop_start, loop_end, rate = struct.unpack('<IIIII', shdr[g[53]][20:40])
-            signed = lambda v: v - 0x10000 if v & 0x8000 else v
             sample = dict(points=struct.unpack('<%dh' % (end - start), smpl[2 * start:2 * end]), rate=rate,
                           loop=(loop_start - start, loop_end - start) if g.get(54, 0) & 1 else None,
                           root=g.get(58, shdr[g[53]][40]), cents=100 * signed(g.get(51, 0)) + signed(g.get(52, 0)))
@@ -250,7 +216,7 @@ def psg_frames(writes):
             apu.write(*w)
         state = []
         for c in range(4):
-            envelope = apu._half(CONTROL[c]) >> 8
+            envelope = apu.half(CONTROL[c]) >> 8
             rises = bool(envelope & 8 and envelope & 7)
             if c < 2:
                 ch = apu.square[c]
@@ -339,15 +305,15 @@ def check_song(rom, song, framed, frames_limit, kit):
     presets = read_sf2(framed.with_suffix('.sf2'))
     frames = min(frames_limit, int(round(end)) + 1)
     notes, psg = driver_notes(rom, song, frames, kit)
-    kit = sorted((n for n in midi_notes if n['channel'] == KIT_MIDI_CHANNEL), key=lambda n: n['on'])
-    rate = round(FRAME_RATE * 280896 / (16 * (0x10000 - driver_emu.addresses_for(rom).timer_reload)) * 8)
+    kit_notes = sorted((n for n in midi_notes if n['channel'] == KIT_MIDI_CHANNEL), key=lambda n: n['on'])
+    rate = round(CPU_CLOCK / (16 * (0x10000 - driver_emu.addresses_for(rom).timer_reload)) * 8)
 
     mirrored = sum(1 for n in notes if n['data'] >= MIRROR)
     expected = [n for n in notes if n['data'] < MIRROR and n['volume'] and n['on'] < end - 0.5]
-    if len(expected) != len(kit):
+    if len(expected) != len(kit_notes):
         problems.append('the driver starts %d samples that sound, but the MIDI file has %d notes on channel 11' %
-                        (len(expected), len(kit)))
-    for d, m in zip(expected, kit):
+                        (len(expected), len(kit_notes)))
+    for d, m in zip(expected, kit_notes):
         where = 'frame %d, voice %d' % (d['on'], d['voice'])
         if abs(m['on'] - d['on']) > 0.5:
             problems.append('%s: the MIDI note starts on frame %.2f' % (where, m['on']))

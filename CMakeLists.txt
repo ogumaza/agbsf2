@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.20)
-project(agbsf2 VERSION 1.9.3 LANGUAGES CXX)
+project(agbsf2 VERSION 1.9.4 LANGUAGES CXX)
 
 # The name of the macOS droplet app.
 set(AGBSF2_APP_NAME Agbsf2)
@@ -25,9 +25,8 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/externals/seqlib/CMakeLists.txt")
 endif()
 add_subdirectory(externals/seqlib EXCLUDE_FROM_ALL)
 
-# xsflib, a library for players and rippers of the PSF formats, is a submodule too. agbsf2 takes xsflib's PSF container,
-# console code and common files. The container doesn't require zlib: ntdlib's GBA module decompresses the programs
-# itself.
+# xsflib, a library for players and rippers of the PSF formats, is a submodule too. agbsf2 uses the console code and the
+# common files of xsflib. The GBA module of ntdlib uses the PSF container. It decompresses the programs without zlib.
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/externals/xsflib/CMakeLists.txt")
     message(FATAL_ERROR "externals/xsflib is missing. Run: git submodule update --init")
 endif()
@@ -40,6 +39,13 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/externals/ntdlib/CMakeLists.txt")
 endif()
 set(NTDLIB_SEQUENCE_EXPORT ON)
 add_subdirectory(externals/ntdlib EXCLUDE_FROM_ALL)
+
+# clang-cl's -Wmissing-designated-field-initializers asks for every field of a designated initializer. Filled-in fields
+# would copy the struct's defaults into each initializer, where they could drift from the struct. The warning is off
+# for agbsf2's targets. The libraries above keep it.
+if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    add_compile_options(-Wno-missing-designated-field-initializers)
+endif()
 
 add_library(agbsf2_core STATIC
     src/music.cpp
@@ -55,7 +61,7 @@ add_library(agbsf2_core STATIC
     src/alphadream/music.cpp
 )
 target_include_directories(agbsf2_core PUBLIC src)
-target_link_libraries(agbsf2_core PUBLIC seqlib::seqlib xsflib::psf_container ntdlib::sequence_export_mp2k ntdlib::sequence_export_konami
+target_link_libraries(agbsf2_core PUBLIC seqlib::seqlib ntdlib::sequence_export_mp2k ntdlib::sequence_export_konami
                       ntdlib::sequence_export_krawall ntdlib::sequence_export_quintet ntdlib::sequence_export_rare
                       ntdlib::sequence_export_rd2 ntdlib::sequence_export_brownie ntdlib::sequence_export_ubimilan
                       ntdlib::sequence_export_rd1 ntdlib::sequence_export_alphadream)
@@ -78,6 +84,8 @@ target_link_libraries(agbsf2 PRIVATE agbsf2_core xsflib::console)
 xsflib_add_version(agbsf2 VERSION ${PROJECT_VERSION} DEFINE AGBSF2_VERSION
                    DESCRIPTION "MIDI and SoundFont converter for GBA game music" PRODUCT agbsf2
                    COPYRIGHT "Copyright (c) 2026 the agbsf2 authors. MIT License.")
+# Windows: UTF-8 as the code page. An archive or a folder whose name the system's code page can't hold then opens.
+xsflib_add_utf8_manifest(agbsf2)
 include(GNUInstallDirs)
 install(TARGETS agbsf2 RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 install(FILES LICENSE THIRD_PARTY_NOTICES DESTINATION "${CMAKE_INSTALL_DATADIR}/agbsf2")
@@ -91,10 +99,10 @@ xsflib_add_droplet(agbsf2 VERSION ${PROJECT_VERSION} APP_NAME ${AGBSF2_APP_NAME}
 
 if(AGBSF2_BUILD_TESTS)
     enable_testing()
-    add_executable(agbsf2_tests tests/test_main.cpp tests/test_util.cpp tests/konami_test.cpp tests/rare_test.cpp
-                                tests/quintet_test.cpp tests/mp2k_test.cpp tests/rd2_test.cpp
-                                tests/brownie_test.cpp tests/krawall_test.cpp tests/ubimilan_test.cpp)
-    target_link_libraries(agbsf2_tests PRIVATE agbsf2_core seqlib::testing)
+    add_executable(agbsf2_tests tests/test_main.cpp tests/konami_test.cpp tests/rare_test.cpp tests/quintet_test.cpp
+                                tests/mp2k_test.cpp tests/rd2_test.cpp tests/brownie_test.cpp tests/krawall_test.cpp
+                                tests/ubimilan_test.cpp)
+    target_link_libraries(agbsf2_tests PRIVATE agbsf2_core ntdlib::testing)
     add_test(NAME agbsf2_tests COMMAND agbsf2_tests)
 
     # Test the droplet app's conversion report using a stand-in for the program.

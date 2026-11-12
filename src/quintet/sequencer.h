@@ -6,25 +6,10 @@
 
 #include "ntdlib/quintet/sequencer.h"
 
-#include "quintet/driver.h"
-#include "quintet/song.h"
-#include "rom.h"
-
 namespace agbsf2::quintet
 {
 
 using ntdlib::quintet::Channel;
-using ntdlib::quintet::Event;
-using ntdlib::quintet::Fifo;
-using ntdlib::quintet::FifoFrames;
-using ntdlib::quintet::kNr13;
-using ntdlib::quintet::kNr21;
-using ntdlib::quintet::kNr23;
-using ntdlib::quintet::kNr30;
-using ntdlib::quintet::kNr31;
-using ntdlib::quintet::kNr33;
-using ntdlib::quintet::kNr41;
-using ntdlib::quintet::kNr43;
 using ntdlib::quintet::Sequencer;
 
 } // namespace agbsf2::quintet

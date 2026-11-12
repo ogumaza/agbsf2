@@ -40,8 +40,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for conversion.py, gbarom.py and traces.py, in tools/
 import conversion
+from conversion import midi_file
 import driver_emu
-from gbarom import load_rom
+from gbarom import ROM_BASE, load_rom
 from traces import parse_range
 
 FRAME_RATE = 16777216 / 280896
@@ -52,50 +53,19 @@ def read_midi(path):
     changes, volume changes and pitch bends as (seconds, channel, value), each channel's bend range in semitones, and
     its length in seconds."""
     data = Path(path).read_bytes()
-    division = struct.unpack('>H', data[12:14])[0]
+    division = midi_file.division_of(data)
     events = []
-    pos = 14
-    track = 0
-    while pos < len(data):
-        size = struct.unpack('>I', data[pos + 4:pos + 8])[0]
-        body = data[pos + 8:pos + 8 + size]
-        pos += 8 + size
-        tick, i, status = 0, 0, 0
-        index = 0
-        while i < len(body):
-            index += 1
-            delta = 0
-            while True:
-                b = body[i]
-                i += 1
-                delta = (delta << 7) | (b & 0x7F)
-                if b < 0x80:
-                    break
-            tick += delta
-            if body[i] >= 0x80:
-                status = body[i]
-                i += 1
-            if status in (0xF0, 0xF7, 0xFF):
-                kind, length = None, 0
-                if status == 0xFF:
-                    kind = body[i]
-                    i += 1
-                while True:
-                    b = body[i]
-                    i += 1
-                    length = (length << 7) | (b & 0x7F)
-                    if b < 0x80:
-                        break
-                if kind == 0x51:
-                    events.append((tick, track, index, 'tempo', 0, int.from_bytes(body[i:i + 3], 'big'), 0))
-                elif kind == 0x2F:
+    for track, (_, track_events) in enumerate(midi_file.tracks_of(data)[1]):
+        for index, (tick, status, args) in enumerate(track_events, 1):
+            if status in (0xF0, 0xF7):
+                continue
+            if status == 0xFF:
+                if args[0] == 0x51:
+                    events.append((tick, track, index, 'tempo', 0, int.from_bytes(args[2:5], 'big'), 0))
+                elif args[0] == 0x2F:
                     events.append((tick, track, index, 'end', 0, 0, 0))
-                i += length
                 continue
             kind, ch = status & 0xF0, status & 0x0F
-            n = 1 if kind in (0xC0, 0xD0) else 2
-            args = body[i:i + n]
-            i += n
             if kind == 0x90 and args[1] > 0:
                 events.append((tick, track, index, 'on', ch, args[0], args[1]))
             elif kind in (0x80, 0x90):
@@ -106,22 +76,12 @@ def read_midi(path):
                 events.append((tick, track, index, 'cc', ch, args[0], args[1]))
             elif kind == 0xE0:
                 events.append((tick, track, index, 'bend', ch, args[0] | args[1] << 7, 0))
-        track += 1
 
     # A player takes the events of a tick track by track, each track's in the order the file gives them.
     events.sort(key=lambda e: (e[0], e[1], e[2]))
 
     # Ticks to seconds, through the tempo changes.
-    tempos = [(0, 500000)] + [(e[0], e[5]) for e in events if e[3] == 'tempo']
-
-    def seconds(tick):
-        s, at, tempo = 0.0, 0, 500000
-        for t, value in tempos:
-            if t > tick:
-                break
-            s += (t - at) * tempo / division / 1e6
-            at, tempo = t, value
-        return s + (tick - at) * tempo / division / 1e6
+    seconds = midi_file.tick_seconds(division, [(e[0], e[5]) for e in events if e[3] == 'tempo'])
 
     notes, programs, volumes, bends = [], [], [], []
     end = seconds(max(e[0] for e in events))
@@ -259,8 +219,8 @@ def driver_notes(rom, song, frames, silenced=()):
                     note['release'] = f
                 current[v.index] = None
             if begins:
-                sample = struct.unpack('<I', rom[v.instrument - 0x08000000 + 16:v.instrument - 0x08000000 + 20])[0] \
-                    if 0x08000000 <= v.instrument < 0x08000000 + len(rom) else 0
+                sample = struct.unpack('<I', rom[v.instrument - ROM_BASE + 16:v.instrument - ROM_BASE + 20])[0] \
+                    if ROM_BASE <= v.instrument < ROM_BASE + len(rom) else 0
                 note = dict(channel=v.channel, key=v.key, velocity=v.velocity - 1, start=f, release=None,
                             released=False, instrument=v.instrument, sample=sample, steps={},
                             envelope=dict(attack=settings[v.channel][0]))
@@ -304,7 +264,7 @@ def expected_envelope(rom, instrument, envelope, fade):
     """Returns the generators that agbsf2 gives the volume envelope of the instrument at `instrument` (attack,
     decay, sustain and release, each None where the zone leaves the default), for the settings that `envelope` gives
     each phase. A setting of 0x80 or more, or one missing, leaves the instrument's."""
-    at = instrument - 0x08000000
+    at = instrument - ROM_BASE
     attack, decay, sustain, release = struct.unpack('<4I', rom[at + 36:at + 52])
 
     def frames(setting, index):

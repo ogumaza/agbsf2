@@ -6,9 +6,6 @@
 
 #include "ntdlib/krawall/song.h"
 
-#include "krawall/driver.h"
-#include "rom.h"
-
 namespace agbsf2::krawall
 {
 

@@ -40,9 +40,10 @@ from unicorn import UC_HOOK_CODE
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for conversion.py, gbarom.py and traces.py, in tools/
 import conversion
+from conversion import midi_file
 import driver_emu
 from gbarom import ROM_BASE, load_rom
-from traces import parse_range
+from traces import map_jobs, parse_range
 
 FRAME_RATE = 16777216 / 280896
 TRACK_LEVELS = 16  # a track's right and left levels (volMR and volML), in its MusicPlayerTrack
@@ -61,52 +62,22 @@ def read_midi(path):
     (seconds, channel, value), each channel's bend range in semitones, its length in seconds, and the MIDI channel of
     each of the song's tracks. The file's track names give the song's tracks."""
     data = Path(path).read_bytes()
-    division = struct.unpack('>H', data[12:14])[0]
+    division = midi_file.division_of(data)
     events = []
     names, channels = {}, {}
-    pos = 14
-    track = 0
-    while pos < len(data):
-        size = struct.unpack('>I', data[pos + 4:pos + 8])[0]
-        body = data[pos + 8:pos + 8 + size]
-        pos += 8 + size
-        tick, i, status, index = 0, 0, 0, 0
-        while i < len(body):
-            index += 1
-            delta = 0
-            while True:
-                b = body[i]
-                i += 1
-                delta = (delta << 7) | (b & 0x7F)
-                if b < 0x80:
-                    break
-            tick += delta
-            if body[i] >= 0x80:
-                status = body[i]
-                i += 1
+    for track, (_, track_events) in enumerate(midi_file.tracks_of(data)[1]):
+        for index, (tick, status, args) in enumerate(track_events, 1):
             if status == 0xFF:
-                kind = body[i]
-                length = 0
-                i += 1
-                while True:
-                    b = body[i]
-                    i += 1
-                    length = (length << 7) | (b & 0x7F)
-                    if b < 0x80:
-                        break
-                if kind == 0x51:
-                    events.append((tick, track, index, 'tempo', 0, int.from_bytes(body[i:i + 3], 'big'), 0))
-                elif kind == 0x2F:
+                if args[0] == 0x51:
+                    events.append((tick, track, index, 'tempo', 0, int.from_bytes(args[2:5], 'big'), 0))
+                elif args[0] == 0x2F:
                     events.append((tick, track, index, 'end', 0, 0, 0))
-                elif kind == 0x03:
-                    names[track] = body[i:i + length].decode('latin-1')
-                i += length
+                elif args[0] == 0x03:
+                    length, start = midi_file.read_number(args, 1)
+                    names[track] = args[start:start + length].decode('latin-1')
                 continue
             kind, ch = status & 0xF0, status & 0x0F
             channels.setdefault(track, ch)
-            n = 1 if kind in (0xC0, 0xD0) else 2
-            args = body[i:i + n]
-            i += n
             if kind == 0x90 and args[1] > 0:
                 events.append((tick, track, index, 'on', ch, args[0], args[1]))
             elif kind in (0x80, 0x90):
@@ -117,22 +88,12 @@ def read_midi(path):
                 events.append((tick, track, index, 'cc', ch, args[0], args[1]))
             elif kind == 0xE0:
                 events.append((tick, track, index, 'bend', ch, args[0] | args[1] << 7, 0))
-        track += 1
 
     # A player takes the events of a tick track by track, and within a track in the file's order, which puts a note
     # that plays with the program before a change ahead of the change.
     events.sort(key=lambda e: (e[0], e[1], e[2]))
 
-    tempos = [(0, 500000)] + [(e[0], e[5]) for e in events if e[3] == 'tempo']
-
-    def seconds(tick):
-        s, at, tempo = 0.0, 0, 500000
-        for t, value in tempos:
-            if t > tick:
-                break
-            s += (t - at) * tempo / division / 1e6
-            at, tempo = t, value
-        return s + (tick - at) * tempo / division / 1e6
+    seconds = midi_file.tick_seconds(division, [(e[0], e[5]) for e in events if e[3] == 'tempo'])
 
     notes, pans, expressions, bends = [], [], [], []
     end = seconds(max(e[0] for e in events))
@@ -557,9 +518,17 @@ def has_tracks(rom, song):
         o = address - ROM_BASE
         return struct.unpack('<I', rom[o:o + 4])[0] if 0 <= o <= len(rom) - 4 else 0
 
+    # The player table as driver_emu.py reads it. An entry of zeros is a player with no tracks. The table goes on past
+    # such an entry. The first other entry outside RAM ends the table.
     addr = driver_emu.addresses_for(rom)
     players = 0
-    while players < 64 and 0x02000000 <= u32(addr.player_table + 12 * players) < 0x03008000:
+    while players < 64:
+        entry = addr.player_table + 12 * players
+        if u32(entry) == 0 and u32(entry + 4) == 0 and u32(entry + 8) == 0:
+            players += 1
+            continue
+        if not 0x02000000 <= u32(entry) < 0x03008000:
+            break
         players += 1
     header = u32(addr.song_table + 8 * song) - ROM_BASE
     player = u32(addr.song_table + 8 * song + 4) & 0xFFFF
@@ -582,7 +551,7 @@ def main():
     jobs = [(a.rom, song, str(midis[song]) if song in midis else None, a.frames, a.verbose) for song in songs]
     if a.jobs > 1:
         with multiprocessing.Pool(a.jobs) as pool:
-            results = pool.map(check_job, jobs)
+            results = map_jobs(pool, check_job, jobs)
     else:
         results = [check_job(j) for j in jobs]
 

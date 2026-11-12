@@ -1,9 +1,9 @@
 puff (zlib licence)
 ===================
 
-The DEFLATE decoder in ntdlib's src/agb/inflate.cpp, in externals/ntdlib,
-is adapted from Mark Adler's puff. It has been rewritten as a C++ class, with
-zlib header and Adler-32 checks. The original notice follows.
+The DEFLATE decoder in externals/ntdlib/src/common/inflate.cpp is adapted
+from puff by Mark Adler. It has been rewritten as a C++ class, with zlib header
+and Adler-32 checks. The original notice follows.
 
   Copyright (C) 2002-2013 Mark Adler, all rights reserved
   version 2.3, 21 Jan 2013

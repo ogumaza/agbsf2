@@ -9,8 +9,6 @@
 namespace agbsf2::ubimilan
 {
 
-using ntdlib::ubimilan::kMaxFrames;
-using ntdlib::ubimilan::Note;
 using ntdlib::ubimilan::Sequencer;
 
 } // namespace agbsf2::ubimilan

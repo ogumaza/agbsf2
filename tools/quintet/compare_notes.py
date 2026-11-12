@@ -3,7 +3,7 @@
 
 """Check a conversion's MIDI files and SoundFonts against the game's driver, frame by frame.
 
-    compare_notes.py ROM AGBSF2 FOLDER [--songs 0-22] [--frames 12000]
+    compare_notes.py ROM AGBSF2 FOLDER [--songs 0-22] [--frames 12000] [-v]
 
 FOLDER holds agbsf2's conversion of ROM: NAME_NN.mid and NAME_NN.sf2 for each song, or NAME_quintet_NN.mid and
 NAME_quintet_NN.sf2 if detection finds another of the game's drivers first. For every song, the driver runs under
@@ -44,6 +44,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for conversion.py, gbarom.py and traces.py, in tools/
 import conversion
+from conversion import midi_file
 import driver_emu
 from gbarom import ROM_BASE, load_rom
 from traces import parse_range
@@ -126,45 +127,16 @@ def read_midi(path):
     which the tempos' rounding can have moved the start), each channel's changes of CC10, CC11 and pitch bend as
     {(channel, 10, 11 or 'bend'): (times, values)}, the bend ranges and the length in seconds."""
     data = Path(path).read_bytes()
-    division = struct.unpack('>H', data[12:14])[0]
+    division = midi_file.division_of(data)
     events = []
-    pos, track = 14, 0
-    while pos < len(data):
-        size = struct.unpack('>I', data[pos + 4:pos + 8])[0]
-        body = data[pos + 8:pos + 8 + size]
-        pos += 8 + size
-        tick, i, status, index = 0, 0, 0, 0
-        while i < len(body):
-            index += 1
-            delta = 0
-            while True:
-                b = body[i]
-                i += 1
-                delta = delta << 7 | (b & 0x7F)
-                if b < 0x80:
-                    break
-            tick += delta
-            if body[i] >= 0x80:
-                status = body[i]
-                i += 1
+    for track, (_, track_events) in enumerate(midi_file.tracks_of(data)[1]):
+        for index, (tick, status, args) in enumerate(track_events, 1):
             if status == 0xFF:
-                kind, length = body[i], 0
-                i += 1
-                while True:
-                    b = body[i]
-                    i += 1
-                    length = length << 7 | (b & 0x7F)
-                    if b < 0x80:
-                        break
-                if kind == 0x51:
-                    events.append((tick, track, index, 'tempo', 0, int.from_bytes(body[i:i + 3], 'big'), 0))
+                if args[0] == 0x51:
+                    events.append((tick, track, index, 'tempo', 0, int.from_bytes(args[2:5], 'big'), 0))
                 events.append((tick, track, index, 'meta', 0, 0, 0))
-                i += length
                 continue
             kind, ch = status & 0xF0, status & 0x0F
-            n = 1 if kind in (0xC0, 0xD0) else 2
-            args = body[i:i + n]
-            i += n
             if kind == 0x90 and args[1]:
                 events.append((tick, track, index, 'on', ch, args[0], args[1]))
             elif kind in (0x80, 0x90):
@@ -175,21 +147,11 @@ def read_midi(path):
                 events.append((tick, track, index, 'cc', ch, args[0], args[1]))
             elif kind == 0xE0:
                 events.append((tick, track, index, 'bend', ch, args[0] | args[1] << 7, 0))
-        track += 1
 
     # The order of events on a tick: the writer's, which puts note offs first and note ons last.
     order = {'tempo': 0, 'meta': 0, 'off': 1, 'program': 2, 'cc': 3, 'bend': 4, 'on': 5}
     events.sort(key=lambda e: (e[0], order[e[3]], e[1], e[2]))
-    tempos = [(0, 500000)] + [(e[0], e[5]) for e in events if e[3] == 'tempo']
-
-    def seconds(tick):
-        s, at, tempo = 0.0, 0, 500000
-        for t, value in tempos:
-            if t > tick:
-                break
-            s += (t - at) * tempo / division / 1e6
-            at, tempo = t, value
-        return s + (tick - at) * tempo / division / 1e6
+    seconds = midi_file.tick_seconds(division, [(e[0], e[5]) for e in events if e[3] == 'tempo'])
 
     notes, open_notes, changes, ranges = [], {}, {}, {}
     bank, program, rpn = {}, {}, {}

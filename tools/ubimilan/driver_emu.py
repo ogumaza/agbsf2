@@ -30,7 +30,8 @@ import wave
 from pathlib import Path
 
 import numpy as np
-from unicorn import UC_ARCH_ARM, UC_HOOK_CODE, UC_HOOK_INTR, UC_HOOK_MEM_UNMAPPED, UC_HOOK_MEM_WRITE, UC_MODE_ARM, Uc
+from unicorn import (UC_ARCH_ARM, UC_HOOK_CODE, UC_HOOK_INTR, UC_HOOK_MEM_UNMAPPED, UC_HOOK_MEM_WRITE, UC_MODE_ARM, Uc,
+                     UcError)
 from unicorn.arm_const import UC_ARM_REG_CPSR, UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R1, \
     UC_ARM_REG_SP
 
@@ -129,7 +130,10 @@ class DriverEmulator:
         raise SystemExit('the driver made a BIOS call at %08x' % uc.reg_read(UC_ARM_REG_PC))
 
     def _unmapped(self, uc, access, address, size, value, user):
-        raise SystemExit('the driver accessed unmapped memory at %08x' % address)
+        # For an unmapped access, Unicorn's emu_start() raises UcError ahead of any exception from this hook.
+        # call() raises SystemExit with this message instead.
+        self.fault = 'the driver accessed unmapped memory at %08x' % address
+        return False
 
     def _play(self, uc, address, size, user):
         description = uc.reg_read(UC_ARM_REG_R0)
@@ -160,7 +164,13 @@ class DriverEmulator:
         uc.reg_write(UC_ARM_REG_LR, RETURN_TRAP | 1)
         for r in range(13):
             uc.reg_write(UC_ARM_REG_R0 + r, args[r] if r < len(args) else 0)
-        uc.emu_start(address | (1 if thumb else 0), RETURN_TRAP, count=50_000_000)
+        self.fault = None
+        try:
+            uc.emu_start(address | (1 if thumb else 0), RETURN_TRAP, count=50_000_000)
+        except UcError:
+            if self.fault:
+                raise SystemExit(self.fault) from None
+            raise
 
     def songs(self):
         """Returns the addresses of the pieces of music: the sound bank's resources whose first byte is 0, in order."""

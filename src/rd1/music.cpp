@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
+
 // Nintendo R&D1's MIDI-file driver behind the Music interface.
 
 #include "music.h"
 
-#include <cstdint>
 #include <cstdio>
 #include <map>
 #include <memory>
@@ -11,20 +11,24 @@
 #include <utility>
 #include <vector>
 
-#include "gba.h"
 #include "program.h"
 #include "rd1/convert.h"
 #include "rd1/driver.h"
 #include "rd1/sequencer.h"
+#include "rd1/song.h"
 #include "rd1/soundfont.h"
 #include "rom.h"
 #include "sf2.h"
+#include "trace.h"
 
 namespace agbsf2::rd1
 {
-
 namespace
 {
+
+// The player volume that the trace prints. The model keeps no player volume. driver_emu.py prints the player field at
+// +0x26.
+constexpr int kTraceVolume = 256;
 
 class Rd1Music : public Music
 {
@@ -71,9 +75,7 @@ public:
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
         ntdlib::sequence_export::agb::Sf2File f = shared_->Build();
-        f.program = kProgramName;
-        f.SetTitle(rom_.Title());
-        return f.Write(path, error);
+        return WriteSoundfont(f, rom_, path, error);
     }
 
     bool DumpSong(int song, const std::string& path, std::string& error) const override
@@ -90,12 +92,14 @@ public:
         {
             return false;
         }
+
         Sequencer seq(rom_, info_, record);
         if (!seq.Valid())
         {
             warnings.push_back(seq.Error());
             return false;
         }
+
         std::map<int, ChannelRecord> last;
         for (long long f = 0; f < frames; f++)
         {
@@ -104,9 +108,11 @@ public:
             {
                 break;
             }
+
             std::fprintf(out, "%lld p %d song %08x tracks %d bpm %d step %u volume %d fade %04x/%04x mode %d\n", f,
-                         record.player, record.address, seq.TrackCount(), seq.Bpm(), seq.TickStep(), 256,
+                         record.player, record.address, seq.TrackCount(), seq.Bpm(), seq.TickStep(), kTraceVolume,
                          seq.FadeLevel(), seq.FadeStep(), seq.FadeMode());
+
             for (int t = 0; t < seq.TrackCount(); t++)
             {
                 const TrackState& s = seq.Track(t);
@@ -116,6 +122,7 @@ public:
                                  s.at - record.midi, s.wait, s.status);
                 }
             }
+
             for (int c = 0; c < seq.ChannelCount(); c++)
             {
                 const ChannelRecord& r = seq.Channel(c);
@@ -124,16 +131,16 @@ public:
                 {
                     continue;
                 }
+
                 last[c] = r;
                 std::fprintf(out, "%lld c %d.%d ", f, record.player, c);
-                for (uint8_t b : r.bytes)
-                {
-                    std::fprintf(out, "%02x", b);
-                }
+                PrintHex(out, r.bytes);
                 std::fprintf(out, "\n");
             }
         }
+
         warnings.insert(warnings.end(), seq.Warnings().begin(), seq.Warnings().end());
+
         return true;
     }
 
@@ -149,11 +156,13 @@ std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides&, std::string& 
 {
     DriverOverrides overrides;
     overrides.program = kProgramName;
+
     DriverInfo info;
     if (!DetectDriver(rom, overrides, info, error))
     {
         return nullptr;
     }
+
     return std::make_unique<Rd1Music>(rom, std::move(info));
 }
 

@@ -332,9 +332,6 @@ fluidsynth -ni -F song10.wav game/game_10.sf2 game/game_10.mid
 
 * `--info` lists each song's length and loop without converting the song. A
   song that fails to convert still gets a length.
-* On Windows, the console window waits for Enter even when the output is
-  redirected, the console's code page isn't restored afterwards, and redirected
-  output and error messages can come out in a different order.
 * With `--single-sf2`, the instruments of some games don't fit in one
   SoundFont. The format allows at most 65535 zones, generators and modulators.
   `agbsf2` then stops with "soundfont too large". Among these games are
@@ -926,6 +923,7 @@ named after its bank and number.
   drum can then play up to 3 dB louder or quieter than in the game.
 * **PSG voices** play the Game Boy's square waves, the voice's 32-step wave, or
   noise from the Game Boy's LFSR, with a zone for each key's noise setting.
+  The square and wave zones are tuned as the driver's frequency table is.
   Their level relative to the samples matches the driver's mix. As with MP2K,
   their samples hold that level, rather than their zones' attenuation.
   The driver steps some voices through a table of duties or noise widths, a
@@ -1277,6 +1275,9 @@ For Krawall, it lists the module's header and orders, and each pattern's rows,
 with each channel's note, instrument, volume column and effect. For Ubisoft
 Milan's driver, it lists each sequence of the piece, with each command's frame.
 Nintendo R&D2's listing also follows each track that `F8` starts.
+For Nintendo R&D1's driver, it lists every event of the song's MIDI file. For
+AlphaDream's driver, it lists each track's commands, and follows a goto forward
+to its target.
 Use the listing to study a song or check the format documentation against real
 data.
 
@@ -1402,11 +1403,10 @@ SoundFonts.
   *A Link to the Past* never turns it on.
 * **PSG.** The MIDI file changes a square's or the noise's CC11 at the start
   of a frame. The PSG's envelope steps the volume at 64 Hz. The hardware's step
-  can then come up to a frame before the step in the MIDI file. The PSG's notes
-  keep equal-tempered keys. Below 100%, the wave channel scales each 4-bit
-  step of the wave and drops the fraction. The SoundFont plays the wave
-  unrounded at the level's share. At 25% and 50%, the game's wave then plays a
-  little quieter and coarser.
+  can then come up to a frame before the step in the MIDI file. Below 100%, the
+  wave channel scales each 4-bit step of the wave and drops the fraction. The
+  SoundFont plays the wave unrounded at the level's share. At 25% and 50%, the
+  game's wave then plays a little quieter and coarser.
 * **Mixer character.** The driver mixes in stereo at 10512 Hz without
   interpolation, and writes 8-bit output. A SoundFont player plays the same
   samples more cleanly.
@@ -1674,8 +1674,8 @@ under an ARM emulator, and comparison scripts. See `tools/README.md`.
 reader and all ten sound drivers, with their conversions, come from ntdlib,
 under the MIT License. ntdlib's notice is in `externals/ntdlib/LICENSE` and in
 `THIRD_PARTY_NOTICES`. ntdlib's DEFLATE decoder is adapted from Mark Adler's
-puff under the zlib license. Its notice is in ntdlib's `src/agb/inflate.cpp`
-and in `THIRD_PARTY_NOTICES`. The MIDI
+puff under the zlib license. Its notice is in
+`externals/ntdlib/src/common/inflate.cpp` and in `THIRD_PARTY_NOTICES`. The MIDI
 and SoundFont code comes from seqlib, under the MIT License. Its notice is in
 `externals/seqlib/LICENSE` and in `THIRD_PARTY_NOTICES`. The PSF container
 reader, the file and console code and the parsing of numbers come from

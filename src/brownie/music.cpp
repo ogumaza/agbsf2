@@ -4,10 +4,12 @@
 
 #include "music.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -18,24 +20,14 @@
 #include "brownie/song.h"
 #include "brownie/soundfont.h"
 #include "gba.h"
-#include "program.h"
 #include "rom.h"
 #include "sf2.h"
+#include "trace.h"
 
 namespace agbsf2::brownie
 {
 namespace
 {
-
-// Prints bytes in hex, as driver_emu.py's trace does.
-void PrintHex(std::FILE* out, const uint8_t* bytes, size_t size)
-{
-    for (size_t i = 0; i < size; i++)
-    {
-        std::fprintf(out, "%02x", bytes[i]);
-    }
-    std::fprintf(out, "\n");
-}
 
 class BrownieMusic : public Music
 {
@@ -86,11 +78,7 @@ public:
     {
         SoundfontBuilder sf(rom_, uint32_t(info_.mix_rate));
         shared_->Build(sf, PsgTuning(rom_, info_).cents);
-        ntdlib::sequence_export::agb::Sf2File& f = sf.File();
-        f.program = kProgramName;
-        f.SetTitle(rom_.Title());
-
-        return f.Write(path, error);
+        return WriteSoundfont(sf.File(), rom_, path, error);
     }
 
     bool DumpSong(int song, const std::string& path, std::string& error) const override
@@ -122,22 +110,19 @@ public:
                 if (record[0])
                 {
                     std::fprintf(out, "%lld c%d ", f, c);
-                    PrintHex(out, record.data(), record.size());
+                    PrintHex(out, record);
+                    std::fprintf(out, "\n");
                 }
             }
 
             for (int v = 0; v < seq.VoiceCount(); v++)
             {
                 const std::array<uint8_t, 0x10> voice = seq.VoiceRecord(v);
-                bool any = false;
-                for (uint8_t b : voice)
-                {
-                    any = any || b;
-                }
-                if (any)
+                if (std::any_of(voice.begin(), voice.end(), [](uint8_t b) { return b != 0; }))
                 {
                     std::fprintf(out, "%lld v%d ", f, v);
-                    PrintHex(out, voice.data(), voice.size());
+                    PrintHex(out, voice);
+                    std::fprintf(out, "\n");
                 }
             }
 
@@ -145,7 +130,8 @@ public:
             {
                 last = seq.GetGlobals();
                 std::fprintf(out, "%lld g ", f);
-                PrintHex(out, last.data(), seq.GlobalsSize());
+                PrintHex(out, std::span<const uint8_t>(last).first(seq.GlobalsSize()));
+                std::fprintf(out, "\n");
             }
 
             if (f > 0 && !seq.Playing())

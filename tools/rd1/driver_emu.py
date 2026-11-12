@@ -26,7 +26,7 @@ import struct
 import sys
 from pathlib import Path
 
-from unicorn import UC_ARCH_ARM, UC_HOOK_INTR, UC_HOOK_MEM_UNMAPPED, UC_HOOK_MEM_WRITE, UC_MODE_ARM, Uc
+from unicorn import UC_ARCH_ARM, UC_HOOK_INTR, UC_HOOK_MEM_UNMAPPED, UC_HOOK_MEM_WRITE, UC_MODE_ARM, Uc, UcError
 from unicorn.arm_const import UC_ARM_REG_CPSR, UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_SP
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for gbarom.py, in tools/
@@ -35,7 +35,6 @@ from gbarom import ROM_BASE, load_rom
 RETURN_TRAP = 0x0F000000
 PLAYER_INIT_SIZE = 20  # an entry of the table that the init sets the players up from
 PLAYER_SIZE = 0x30
-BUS_SIZE = 0x30
 CHANNEL_SIZE = 32
 VOICE_SIZE = 32
 PSG_VOICES = 4
@@ -83,13 +82,6 @@ def u32_at(rom, address):
     return struct.unpack_from('<I', rom, address - ROM_BASE)[0]
 
 
-def literal(rom, address):
-    """Returns the literal that the Thumb `ldr rX, [pc, #n]` at `address` loads."""
-    op = struct.unpack_from('<H', rom, address - ROM_BASE)[0]
-    assert op >> 11 == 0x09, 'no ldr at %08x' % address
-    return u32_at(rom, ((address + 4) & ~3) + (op & 0xFF) * 4)
-
-
 def addresses_for(rom):
     code = bytes(rom[0xAC:0xB0])
     if code not in GAMES:
@@ -124,15 +116,17 @@ class DriverEmulator:
             entry = addr.player_init + PLAYER_INIT_SIZE * i
             head = struct.unpack_from('<H', rom, entry - ROM_BASE)[0]
             self.players.append({'channels': (head >> 5) & 0x1F, 'channel_records': u32_at(rom, entry + 4),
-                                 'bus': u32_at(rom, entry + 8), 'tracks': u32_at(rom, entry + 12),
-                                 'player': u32_at(rom, entry + 16)})
+                                 'tracks': u32_at(rom, entry + 12), 'player': u32_at(rom, entry + 16)})
         self.last_channels = {}
 
     def _svc(self, uc, intno, user):
         raise SystemExit('the driver made a BIOS call at %08x' % uc.reg_read(UC_ARM_REG_PC))
 
     def _unmapped(self, uc, access, address, size, value, user):
-        raise SystemExit('the driver accessed unmapped memory at %08x (pc %08x)' % (address, uc.reg_read(UC_ARM_REG_PC)))
+        # For an unmapped access, Unicorn's emu_start() raises UcError ahead of any exception from this hook.
+        # call() raises SystemExit with this message instead.
+        self.fault = 'the driver accessed unmapped memory at %08x (pc %08x)' % (address, uc.reg_read(UC_ARM_REG_PC))
+        return False
 
     def _io_write(self, uc, access, address, size, value, user):
         self.writes.append((address, size, value & ((1 << (8 * size)) - 1)))
@@ -144,7 +138,13 @@ class DriverEmulator:
         uc.reg_write(UC_ARM_REG_LR, RETURN_TRAP | 1)
         for r in range(13):
             uc.reg_write(UC_ARM_REG_R0 + r, args[r] & 0xFFFFFFFF if r < len(args) else 0)
-        uc.emu_start(address | 1, RETURN_TRAP, count=50_000_000)
+        self.fault = None
+        try:
+            uc.emu_start(address | 1, RETURN_TRAP, count=50_000_000)
+        except UcError:
+            if self.fault:
+                raise SystemExit(self.fault) from None
+            raise
 
     def read(self, address, size):
         return bytes(self.uc.mem_read(address, size))
@@ -176,8 +176,8 @@ class DriverEmulator:
             smf = u32_at(self.rom, record)
             lines.append('%d p %d song %08x tracks %d bpm %d step %d volume %d fade %04x/%04x mode %d' % (
                 n, i, record, (head >> 5) & 0x1F, (head >> 12) & 0x1FF, struct.unpack_from('<I', player, 0x10)[0],
-                struct.unpack_from('<H', player, 0x26)[0], struct.unpack_from('<H', player, 0x28)[0], struct.unpack_from('<H', player, 0x2A)[0],
-                (player[3] >> 3) & 7))
+                struct.unpack_from('<H', player, 0x26)[0], struct.unpack_from('<H', player, 0x28)[0],
+                struct.unpack_from('<H', player, 0x2A)[0], (player[3] >> 3) & 7))
             for t in range((head >> 5) & 0x1F):
                 track = self.read(p['tracks'] + self.addr.track_size * t, self.addr.track_size)
                 if track[0] & 1:
@@ -191,20 +191,22 @@ class DriverEmulator:
                     lines.append('%d c %d.%d %s' % (n, i, c, data.hex()))
         voices = self.u32(self.addr.voices_pointer)
         mixer = self.u32(self.addr.mixer_pointer)
-        bus_of = {p['channel_records'] + CHANNEL_SIZE * c: '%d.%d' % (i, c)
-                  for i, p in enumerate(self.players) for c in range(p['channels'])}
+        channel_of = {p['channel_records'] + CHANNEL_SIZE * c: '%d.%d' % (i, c)
+                      for i, p in enumerate(self.players) for c in range(p['channels'])}
         for v in range(self.u16(self.addr.voice_count)):
-            lines += self._voice_lines(n, 'v', v, self.read(voices + VOICE_SIZE * v, VOICE_SIZE), bus_of)
-            if lines and lines[-1].split()[1] == 'v' and lines[-1].split()[2] == str(v):
+            voice = self._voice_lines(n, 'v', v, self.read(voices + VOICE_SIZE * v, VOICE_SIZE), channel_of)
+            lines += voice
+            if voice:
                 m = self.read(mixer + VOICE_SIZE * v, VOICE_SIZE)
                 lines.append('%d m %d on %d volume %d left %d right %d step %x base %x at %x' % (
                     n, v, m[0] & 1, m[1], m[2], m[3], struct.unpack_from('<I', m, 0x18)[0],
                     struct.unpack_from('<I', m, 0x1C)[0], struct.unpack_from('<I', m, 0xC)[0]))
         for v in range(PSG_VOICES):
-            lines += self._voice_lines(n, 'q', v, self.read(self.addr.psg_voices + VOICE_SIZE * v, VOICE_SIZE), bus_of)
+            psg = self.read(self.addr.psg_voices + VOICE_SIZE * v, VOICE_SIZE)
+            lines += self._voice_lines(n, 'q', v, psg, channel_of)
         return lines
 
-    def _voice_lines(self, n, kind, v, data, bus_of):
+    def _voice_lines(self, n, kind, v, data, channel_of):
         if not data[0] & 1:
             return []
         head, = struct.unpack_from('<I', data, 0)
@@ -212,10 +214,10 @@ class DriverEmulator:
         envelope, = struct.unpack_from('<I', data, 0x1C)
         return ['%d %s %d key %d velocity %d channel %s instrument %08x pitch %d bend %d/%d mod %d pan %d '
                 'envelope %d level %06x' % (
-                    n, kind, v, (head >> 1) & 0x7F, data[1] & 0x7F, bus_of.get(channel, '%08x' % channel), instrument,
-                    head >> 15, struct.unpack_from('<h', data, 0x10)[0], struct.unpack_from('<h', data, 0x12)[0],
-                    struct.unpack_from('<h', data, 0x14)[0], struct.unpack_from('<h', data, 0x18)[0], envelope & 0xFF,
-                    envelope >> 8)]
+                    n, kind, v, (head >> 1) & 0x7F, data[1] & 0x7F, channel_of.get(channel, '%08x' % channel),
+                    instrument, head >> 15, struct.unpack_from('<h', data, 0x10)[0],
+                    struct.unpack_from('<h', data, 0x12)[0], struct.unpack_from('<h', data, 0x14)[0],
+                    struct.unpack_from('<h', data, 0x18)[0], envelope & 0xFF, envelope >> 8)]
 
 
 def trace(rom, song, frames):

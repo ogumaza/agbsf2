@@ -1,76 +1,99 @@
+#!/usr/bin/env python3
 # SPDX-License-Identifier: MIT
-# Counts the events of every MIDI file that a song record of WarioWare or Rhythm Tengoku points to.
-#   smfscan.py ROM SONG_TABLE
-import struct, sys, collections
-r = open(sys.argv[1], 'rb').read()
-O = 0x08000000
-T = int(sys.argv[2], 16)
-def u32(a): return struct.unpack_from('<I', r, a - O)[0]
-def be32(o): return struct.unpack_from('>I', r, o)[0]
-def be16(o): return struct.unpack_from('>H', r, o)[0]
-recs = []
-i = 0
-while True:
-    a = T + 8 * i
-    rec = u32(a)
-    if rec == 0:
-        i += 1
-        if i > 4000: break
-        continue
-    if not (O <= rec < O + len(r)) or not (O <= u32(rec) < O + len(r)) or r[u32(rec) - O:u32(rec) - O + 4] != b'MThd':
-        break
-    recs.append((i, rec)); i += 1
-cc = collections.Counter(); ccm = collections.Counter(); meta = collections.Counter(); kinds = collections.Counter()
-sysex = collections.Counter(); fmt = collections.Counter(); progs = collections.Counter(); markers = collections.Counter()
-cc_songs = collections.defaultdict(set)
-for idx, rec in recs:
-    o = u32(rec) - O
-    hl = be32(o + 4); f = be16(o + 8); nt = be16(o + 10); div = be16(o + 12)
-    fmt[(f, div)] += 1
-    p = o + 8 + hl
-    music = True
-    for t in range(nt):
-        assert r[p:p + 4] == b'MTrk', (idx, hex(p))
-        ln = be32(p + 4); q = p + 8; end = q + ln; st = 0
-        while q < end:
-            v = 0
-            while True:
-                b = r[q]; q += 1; v = (v << 7) | (b & 0x7F)
-                if b < 0x80: break
-            b = r[q]
-            if b & 0x80: st = b; q += 1
-            hi = st & 0xF0
-            if st == 0xFF:
-                ty = r[q]; q += 1
-                v = 0
-                while True:
-                    b = r[q]; q += 1; v = (v << 7) | (b & 0x7F)
-                    if b < 0x80: break
-                meta[ty] += 1
-                if ty == 6: markers[r[q:q + v]] += 1
-                q += v
-                if ty == 0x2F: break
-            elif st in (0xF0, 0xF7):
-                v = 0
-                while True:
-                    b = r[q]; q += 1; v = (v << 7) | (b & 0x7F)
-                    if b < 0x80: break
-                sysex[r[q:q + v].hex()] += 1; q += v
-            elif hi in (0x80, 0x90, 0xA0, 0xB0, 0xE0):
-                if hi == 0xB0: cc[r[q]] += 1; cc_songs[r[q]].add(idx); ccm[(r[q], r[q + 1])] += 1
-                kinds[hi] += 1; q += 2
-            elif hi in (0xC0, 0xD0):
-                kinds[hi] += 1
-                if hi == 0xC0: progs[r[q]] += 1
-                q += 1
-            else:
-                raise SystemExit('bad status %x at %x' % (st, q))
-        p = end
-print('songs', len(recs), 'formats', fmt)
-print('kinds', {hex(k): v for k, v in kinds.items()})
-print('meta', {hex(k): v for k, v in meta.items()}, 'markers', markers)
-print('sysex', sysex.most_common(10))
-print('cc', sorted((k, v, len(cc_songs[k])) for k, v in cc.items()))
-for k in sorted(cc):
-    vals = sorted({v for (c, v) in ccm if c == k})
-    print('  cc', k, 'values', vals if len(vals) < 20 else (len(vals), vals[:5], vals[-5:]))
+
+"""Counts the events of every MIDI file that a song record of WarioWare or Rhythm Tengoku points to.
+
+    smfscan.py ROM SONG_TABLE
+
+ROM is a .gba image or a GSF rip. SONG_TABLE is the song table's address in hex. Each entry of the table is 8 bytes
+long: the address of the song's record, then its player. A record starts with the address of the song's MIDI file.
+"""
+import argparse
+import collections
+import struct
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for conversion.py and gbarom.py, in tools/
+from conversion import midi_file  # noqa: E402
+from gbarom import ROM_BASE, load_rom  # noqa: E402
+
+LAST_ENTRY = 4000  # the scan stops at the first empty entry from this one on
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__.split('\n')[0])
+    p.add_argument('rom', type=Path)
+    p.add_argument('song_table', type=lambda s: int(s, 16))
+    a = p.parse_args()
+    rom = load_rom(a.rom)
+
+    def u32(address):
+        return struct.unpack_from('<I', rom, address - ROM_BASE)[0]
+
+    def in_rom(address):
+        return ROM_BASE <= address < ROM_BASE + len(rom)
+
+    records = []
+    entry = 0
+    while True:
+        record = u32(a.song_table + 8 * entry)
+        if record == 0:
+            entry += 1
+            if entry > LAST_ENTRY:
+                break
+            continue
+        if not in_rom(record) or not in_rom(u32(record)):
+            break
+        start = u32(record) - ROM_BASE
+        if rom[start:start + 4] != b'MThd':
+            break
+        records.append((entry, record))
+        entry += 1
+
+    cc, cc_values, meta, kinds, sysex, formats, markers = (collections.Counter() for _ in range(7))
+    cc_songs = collections.defaultdict(set)
+    for song, record in records:
+        start = u32(record) - ROM_BASE
+        header_size = struct.unpack_from('>I', rom, start + 4)[0]
+        form, track_count, division = struct.unpack_from('>HHH', rom, start + 8)
+        formats[(form, division)] += 1
+        end = start + 8 + header_size
+        for _ in range(track_count):
+            assert rom[end:end + 4] == b'MTrk', (song, hex(end))
+            end += 8 + struct.unpack_from('>I', rom, end + 4)[0]
+        for track, (_, events) in enumerate(midi_file.tracks_of(rom[start:end])[1]):
+            for tick, status, data in events:
+                kind = status & 0xF0
+                if status == 0xFF:
+                    meta[data[0]] += 1
+                    if data[0] == 0x06:
+                        size, at = midi_file.read_number(data, 1)
+                        markers[data[at:at + size]] += 1
+                    if data[0] == 0x2F:
+                        break
+                elif status in (0xF0, 0xF7):
+                    sysex[data.hex()] += 1
+                elif kind in (0x80, 0x90, 0xA0, 0xB0, 0xE0):
+                    if kind == 0xB0:
+                        cc[data[0]] += 1
+                        cc_songs[data[0]].add(song)
+                        cc_values[(data[0], data[1])] += 1
+                    kinds[kind] += 1
+                elif kind in (0xC0, 0xD0):
+                    kinds[kind] += 1
+                else:
+                    raise SystemExit('bad status %x in song %d, track %d, at tick %d' % (status, song, track, tick))
+
+    print('songs', len(records), 'formats', formats)
+    print('kinds', {hex(k): v for k, v in kinds.items()})
+    print('meta', {hex(k): v for k, v in meta.items()}, 'markers', markers)
+    print('sysex', sysex.most_common(10))
+    print('cc', sorted((k, v, len(cc_songs[k])) for k, v in cc.items()))
+    for k in sorted(cc):
+        values = sorted({v for (c, v) in cc_values if c == k})
+        print('  cc', k, 'values', values if len(values) < 20 else (len(values), values[:5], values[-5:]))
+
+
+if __name__ == '__main__':
+    main()

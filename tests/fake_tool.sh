@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: MIT
 
 # Stands in for the program in droplet_test.applescript. For each file it prints what the program prints,
-# picked by the file's name: good.gba converts, one of partial.gba's songs can't be written, bad.gba
-# has no driver, set-01.minigsf converts its set, and set-02.minigsf holds the same music.
+# picked by the file's name: good.gba converts, folder is a folder, one of partial.gba's songs can't
+# be written, bad.gba has no driver, set-01.minigsf converts its set, and set-02.minigsf holds the
+# same music. A path with a slash at the end names the folder before it. basename gives that folder's name.
 # Like the program, it exits with 1 if anything failed.
 
 status=0
@@ -40,9 +41,14 @@ for path in "$@"; do
     set-02.minigsf)
         echo "$name: same music as set.gsflib, already converted"
         ;;
+    folder)
+        echo "$name: it's a folder, not a ROM or GSF file" >&2
+        status=1
+        ;;
     *)
-        echo "$name: no Konami, Rare, Quintet, Nintendo R&D1, Nintendo R&D2, AlphaDream, Brownie Brown, Ubisoft Milan, Krawall or MP2K sound driver found: this game's music uses" \
-             "another engine, or a driver version that agbsf2 doesn't support" >&2
+        echo "$name: no Konami, Rare, Quintet, Nintendo R&D1, Nintendo R&D2, AlphaDream, Brownie Brown," \
+             "Ubisoft Milan, Krawall or MP2K sound driver found: this game's music uses another engine, or a driver" \
+             "version that agbsf2 doesn't support" >&2
         status=1
         ;;
     esac

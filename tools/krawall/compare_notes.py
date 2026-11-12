@@ -38,6 +38,7 @@ from unicorn.arm_const import UC_ARM_REG_FP, UC_ARM_REG_R0, UC_ARM_REG_R1, UC_AR
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for conversion.py, gbarom.py and traces.py, in tools/
 import conversion
+from conversion import midi_file
 import driver_emu
 from gbarom import ROM_BASE, load_rom
 from traces import parse_range
@@ -187,16 +188,22 @@ def expected_notes(ticks, c, end):
     return notes
 
 
+def round_half_up(x):
+    """Rounds a value of 0 or more to the nearest whole number. Halves go up. C++'s std::lround() does the same."""
+    whole = math.floor(x)
+    return int(whole) + (1 if x - whole >= 0.5 else 0)
+
+
 def levels_to_controllers(left, right):
-    """Returns the CC10 and CC11 that agbsf2's LevelsToControllers() works out for levels on each side (full scale
+    """Returns the CC10 and CC11 that seqlib's LevelsToControllers() works out for levels on each side (full scale
     128). CC10 is None when both levels are 0."""
     gl, gr = left / 128, right / 128
     amp = math.sqrt(gl * gl + gr * gr)
     if amp <= 0:
         return None, 0
-    cc10 = 64 if left == right else min(127, max(0, round(math.atan2(gr, gl) / (math.pi / 2) * 127)))
+    cc10 = 64 if left == right else min(127, max(0, round_half_up(math.atan2(gr, gl) / (math.pi / 2) * 127)))
     loudest = math.sqrt(2) * 127 / 128
-    return cc10, min(127, max(0, round(127 * math.sqrt(amp / loudest))))
+    return cc10, min(127, max(0, round_half_up(127 * math.sqrt(amp / loudest))))
 
 
 def without_final_silence(notes, stereo):
@@ -214,35 +221,7 @@ def without_final_silence(notes, stereo):
 
 def midi_length(path):
     """Returns the seconds to the end of a MIDI file's longest track."""
-    data = Path(path).read_bytes()
-    division = struct.unpack('>H', data[12:14])[0]
-    tempos, end, pos = [], 0, 14
-    while pos < len(data):
-        size = struct.unpack('>I', data[pos + 4:pos + 8])[0]
-        body, pos = data[pos + 8:pos + 8 + size], pos + 8 + size
-        tick, i, status = 0, 0, 0
-        while i < len(body):
-            delta = 0
-            while True:
-                delta, i = delta << 7 | (body[i] & 0x7F), i + 1
-                if body[i - 1] < 0x80:
-                    break
-            tick += delta
-            if body[i] >= 0x80:
-                status, i = body[i], i + 1
-            if status == 0xFF:
-                kind, length, i = body[i], body[i + 1], i + 2
-                if kind == 0x51:
-                    tempos.append((tick, int.from_bytes(body[i:i + 3], 'big')))
-                i += length
-            else:
-                i += 1 if status & 0xF0 in (0xC0, 0xD0) else 2
-        end = max(end, tick)
-    seconds, at, tempo = 0.0, 0, 500000
-    for when, value in sorted(tempos):
-        seconds += (min(when, end) - at) * tempo / division / 1e6
-        at, tempo = min(when, end), value
-    return seconds + (end - at) * tempo / division / 1e6
+    return midi_file.length_seconds(Path(path).read_bytes())
 
 
 def value_at(changes, ch, kind, t, default):

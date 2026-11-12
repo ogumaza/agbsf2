@@ -6,11 +6,6 @@
 
 #include "ntdlib/sequence_export/alphadream/convert.h"
 
-#include "alphadream/driver.h"
-#include "alphadream/soundfont.h"
-#include "music.h"
-#include "rom.h"
-
 namespace agbsf2::alphadream
 {
 

@@ -6,11 +6,6 @@
 
 #include "ntdlib/sequence_export/quintet/convert.h"
 
-#include "music.h"
-#include "quintet/driver.h"
-#include "quintet/soundfont.h"
-#include "rom.h"
-
 namespace agbsf2::quintet
 {
 

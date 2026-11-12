@@ -10,13 +10,13 @@
 #include <exception>
 #include <filesystem>
 #include <limits>
-#include <memory>
 #include <optional>
 #include <set>
 #include <string>
 #include <system_error>
 #include <vector>
 
+#include "xsflib/cli/tool.h"
 #include "xsflib/console.h"
 #include "xsflib/text.h"
 
@@ -35,6 +35,8 @@ using namespace agbsf2;
 namespace
 {
 
+constexpr int kSongLimit = 4096; // the highest number that --songs and --song-count accept
+
 // Prints the help text to `f`.
 void Usage(FILE* f)
 {
@@ -43,8 +45,8 @@ void Usage(FILE* f)
                  "\n"
                  "usage: %s [options] <file> [<file> ...]\n"
                  "\n"
-                 "Converts every song in each GBA ROM (.gba) or GSF rip (.gsflib, .minigsf) to\n"
-                 "a MIDI file and a matching SoundFont, for games whose music uses Konami's,\n"
+                 "Converts every song in each GBA ROM (.gba) or GSF rip (.gsf, .gsflib, .minigsf)\n"
+                 "to a MIDI file and a matching SoundFont, for games whose music uses Konami's,\n"
                  "Rare's, Quintet's, Nintendo R&D1's, Nintendo R&D2's, AlphaDream's, Brownie\n"
                  "Brown's or Ubisoft Milan's sound driver, Nintendo's MP2K or Krawall. A game\n"
                  "with more than one of them has each one's songs converted. The results go in\n"
@@ -116,7 +118,17 @@ void Usage(FILE* f)
                  "                        write to the PSG's registers (frame w address size\n"
                  "                        value), the track (frame t countdown command next\n"
                  "                        plays ending) and each mixer voice that plays (frame\n"
-                 "                        v0 position loop-start end loop-end volume loops)\n"
+                 "                        v0 position loop-start end loop-end volume loops);\n"
+                 "                        in Nintendo R&D1's, the player while the song plays\n"
+                 "                        (frame p player song address, then its fields), each\n"
+                 "                        track that plays (frame t player.track at offset wait\n"
+                 "                        status) and the record of each channel when it changes\n"
+                 "                        (frame c player.channel, then the record in hex); in\n"
+                 "                        AlphaDream's, the player while a track plays (frame\n"
+                 "                        p), each track that plays (frame t 1.track, then its\n"
+                 "                        record in hex) and the record of each sample channel\n"
+                 "                        and PSG channel when it changes (frame h or q, the\n"
+                 "                        channel, then the record in hex)\n"
                  "      --trace-frames N  frames to trace (default: 3000)\n"
                  "  -q, --quiet           only print warnings and errors\n"
                  "  -h, --help            show this help\n"
@@ -161,7 +173,7 @@ bool ParseNumber(const std::string& s, long long& out, int base)
 bool ParseNumber(const std::string& s, double& out)
 {
     const std::optional<xsflib::DecimalNumber> value = xsflib::ReadDecimal(s, {true});
-    if (!value || s.c_str()[value->length] != '\0')
+    if (!value || value->length != s.size())
     {
         return false;
     }
@@ -189,7 +201,7 @@ bool ParseList(const std::string& s, std::set<int>& values)
         const std::string first = item.substr(0, dash);
         const std::string last = dash == std::string::npos ? first : item.substr(dash + 1);
         long long a = 0, b = 0;
-        if (!ParseNumber(first, a, 10) || !ParseNumber(last, b, 10) || a < 0 || b < a || b > 4096)
+        if (!ParseNumber(first, a, 10) || !ParseNumber(last, b, 10) || a < 0 || b < a || b > kSongLimit)
         {
             return false;
         }
@@ -400,9 +412,9 @@ std::optional<int> ParseArgs(const std::vector<std::string>& args, Options& o)
             {
                 return 2;
             }
-            if (!ParseNumber(v, n, 10) || n < 1 || n > 4096)
+            if (!ParseNumber(v, n, 10) || n < 1 || n > kSongLimit)
             {
-                OptionError("--song-count needs a number from 1 to 4096");
+                OptionError("--song-count needs a number from 1 to " + std::to_string(kSongLimit));
                 return 2;
             }
 
@@ -552,11 +564,7 @@ void PrintInfo(const Rom& rom, const std::vector<FoundMusic>& drivers, const std
 int Trace(const Music& music, const Options& o)
 {
     std::vector<std::string> warnings;
-    if (!music.Trace(o.trace_song, o.trace_frames, stdout, warnings))
-    {
-        std::fprintf(stderr, "%s: song %d is invalid\n", kProgramName, o.trace_song);
-        return 1;
-    }
+    const bool traced = music.Trace(o.trace_song, o.trace_frames, stdout, warnings);
 
     for (const std::string& w : music.Warnings())
     {
@@ -565,6 +573,12 @@ int Trace(const Music& music, const Options& o)
     for (const std::string& w : warnings)
     {
         std::fprintf(stderr, "warning: %s\n", w.c_str());
+    }
+
+    if (!traced)
+    {
+        std::fprintf(stderr, "%s: song %d is invalid\n", kProgramName, o.trace_song);
+        return 1;
     }
 
     return 0;
@@ -755,9 +769,9 @@ void PrintTally(const Tally& tally, const fs::path& out_dir)
     std::printf("\noutput: %s\n", Utf8(fs::absolute(out_dir, ec).lexically_normal()).c_str());
 }
 
-// Converts one input file, which messages call `label`. `done` holds the ROM images already converted or listed in this
-// run, and `failed` those in which detection found no music it could read. A set of several mini-GSFs is then read
-// once.
+// Converts one input file, which messages call `label`. `done` lists the ROM images already converted or listed in this
+// run. `failed` lists those in which detection found no music it could read, and those whose output folder couldn't be
+// created. With the two lists, detection runs once for a set of several mini-GSFs.
 int ConvertFile(const std::string& input, const std::string& label, const Options& o, std::vector<fs::path>& done,
                 std::vector<fs::path>& failed)
 {
@@ -835,8 +849,6 @@ int ConvertFile(const std::string& input, const std::string& label, const Option
         return 1;
     }
 
-    done.push_back(source);
-
     const std::string name = SafeFileName(o.name.empty() ? Utf8(source.stem()) : o.name);
     const fs::path out_dir = OutputFolder(source, name, o);
     std::error_code ec;
@@ -844,8 +856,11 @@ int ConvertFile(const std::string& input, const std::string& label, const Option
     if (ec)
     {
         std::fprintf(stderr, "%s: can't create %s: %s\n", label.c_str(), Utf8(out_dir).c_str(), ec.message().c_str());
+        failed.push_back(source);
         return 1;
     }
+
+    done.push_back(source);
 
     // Report the game. Warnings are printed even with --quiet, which leaves out the line that names the file, so then
     // the warnings and errors about the file start with its name.
@@ -902,9 +917,6 @@ int ConvertFile(const std::string& input, const std::string& label, const Option
 // Converts every input the arguments name. Returns the exit code.
 int Run(const std::vector<std::string>& args)
 {
-    // Keep progress and errors in order when both go to one pipe (the macOS droplet).
-    xsflib::console::LineBufferOutput();
-
     Options o;
     if (const std::optional<int> exit_code = ParseArgs(args, o))
     {
@@ -953,11 +965,10 @@ int Run(const std::vector<std::string>& args)
 
 int main(int argc, char** argv)
 {
-    // On Windows: the arguments from the wide command line, UTF-8 output, and a window that waits after files are
-    // dropped on the program, or after a double-click.
-    xsflib::console::UseUtf8Output(false);
-    const int result = Run(xsflib::console::Arguments(argc, argv));
-    xsflib::console::WaitInOwnWindow(stdout, "\nPress Enter to close this window.");
+    // On Windows, the arguments come from the wide command line and the output is UTF-8. A window that Windows opened
+    // for agbsf2 alone waits for Enter before it closes. Line-buffered output keeps progress and errors in order when
+    // both go to one pipe (the macOS droplet).
+    const xsflib::cli::ToolConsole console{.line_buffered = true, .prompt_stream = stdout};
 
-    return result;
+    return xsflib::cli::RunTool([&] { return Run(xsflib::console::Arguments(argc, argv)); }, console);
 }

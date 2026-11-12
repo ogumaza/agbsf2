@@ -20,8 +20,8 @@ sound effects' file. The script plays a sound effect through the game's routine 
 playing. The sound effect channels then take the place of the music channels in the channel list.
 
 The routine and RAM addresses are chosen by the ROM's game code. Those of Super Robot Taisen A (ASRJ), R (AJ9J), D
-(A6SJ) and J (B6JJ) are built in, and those of the games whose driver loads a music file (LoadedFiles). Another game
-requires other values; see GAMES and docs/quintet.md.
+(A6SJ) and J (B6JJ) are built in, and those of Suta Komi: Star Communicator (ASKJ) and of the games whose driver loads a
+music file (LoadedFiles). Another game requires other values; see GAMES and docs/quintet.md.
 """
 import argparse
 import struct
@@ -31,7 +31,7 @@ from pathlib import Path
 
 import numpy as np
 from unicorn import (UC_ARCH_ARM, UC_HOOK_INTR, UC_HOOK_MEM_READ, UC_HOOK_MEM_UNMAPPED, UC_HOOK_MEM_WRITE, UC_MODE_ARM,
-                     Uc)
+                     Uc, UcError)
 from unicorn.arm_const import UC_ARM_REG_CPSR, UC_ARM_REG_LR, UC_ARM_REG_R0, UC_ARM_REG_SP
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # for gbarom.py and psg_model.py, in tools/
@@ -416,7 +416,10 @@ class DriverEmulator:
         raise SystemExit('the driver made a BIOS call')
 
     def _unmapped(self, uc, access, address, size, value, user):
-        raise SystemExit('the driver accessed unmapped memory at %08x' % address)
+        # For an unmapped access, Unicorn's emu_start() raises UcError ahead of any exception from this hook.
+        # call() raises SystemExit with this message instead.
+        self.fault = 'the driver accessed unmapped memory at %08x' % address
+        return False
 
     def _io_write(self, uc, access, address, size, value, user):
         if address in FIFO_DATA:
@@ -443,7 +446,13 @@ class DriverEmulator:
         uc.reg_write(UC_ARM_REG_LR, RETURN_TRAP | 1)
         for i, a in enumerate(args):
             uc.reg_write(UC_ARM_REG_R0 + i, a)
-        uc.emu_start(address | (1 if thumb else 0), RETURN_TRAP, count=50_000_000)
+        self.fault = None
+        try:
+            uc.emu_start(address | (1 if thumb else 0), RETURN_TRAP, count=50_000_000)
+        except UcError:
+            if self.fault:
+                raise SystemExit(self.fault) from None
+            raise
 
     def u16(self, address):
         return struct.unpack('<H', self.uc.mem_read(address, 2))[0]

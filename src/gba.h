@@ -10,9 +10,6 @@ namespace agbsf2
 {
 
 using ntdlib::agb::FrameSeconds;
-using ntdlib::agb::kFrameCycles;
-using ntdlib::agb::kFrameRate;
-using ntdlib::agb::kSecondCycles;
 using ntdlib::agb::PrintWrite;
 using ntdlib::agb::RegisterWrite;
 

@@ -12,6 +12,18 @@ python3 -m venv .venv
 pip install -r tools/requirements.txt
 ```
 
+pip installs these packages:
+
+- Unicorn (GPL 2.0), the ARM emulator that runs the drivers
+- Capstone (BSD 3-Clause), the disassembler that `gbadis.py` uses
+- NumPy (BSD 3-Clause), for renders and audio comparisons
+
+The repository contains none of their code.
+
+The scripts also read MIDI files with ntdlib's
+`externals/ntdlib/tools/sequence_export/midi_file.py`. If your clone has no
+submodules, run `git submodule update --init` first.
+
 `compare_audio.py` also needs `ffmpeg`, and rendering a MIDI file for comparison
 needs a SoundFont player such as `fluidsynth`.
 
@@ -22,8 +34,8 @@ These scripts in `tools/` serve more than one driver:
 | `gbarom.py` | loads a `.gba` ROM or a GSF rip; used by the other scripts |
 | `gbadis.py` | recursive-descent Thumb/ARM disassembler that resolves literal pools, marks code a GSF rip has zeroed out, and can read code at the address the game copies it to |
 | `psg_model.py` | Game Boy APU model that renders a driver's PSG register writes to audio |
-| `conversion.py` | finds a driver's MIDI files in a folder of `agbsf2`'s output, and compares a conversion on the song's beat with one made with `--frame-timing`; used by the `compare_notes.py` scripts |
-| `traces.py` | runs `agbsf2 --trace` and compares that trace with the one that the emulated driver prints, line by line; used by the `compare_trace.py` scripts. The `compare_notes.py` scripts use its parser for `--songs` |
+| `conversion.py` | finds a driver's MIDI files in a folder of `agbsf2`'s output, and compares a conversion on the song's beat with one made with `--frame-timing`; used by the `compare_notes.py` scripts. It imports ntdlib's MIDI file reader, `externals/ntdlib/tools/sequence_export/midi_file.py`, for them |
+| `traces.py` | runs `agbsf2 --trace` and compares that trace with the one that the emulated driver prints, line by line; used by the `compare_trace.py` scripts but Konami's. Konami's script and the `compare_notes.py` scripts use its parser for `--songs`; MP2K's `compare_notes.py` also runs its jobs through `map_jobs()` |
 
 A conversion includes songs from every driver found in the game. Files from
 drivers other than the first include the driver's name. The `compare_trace.py`
@@ -104,12 +116,18 @@ Yu-Gi-Oh! Ultimate Masters Edition: World Championship Tournament 2006 (`BY6J`,
 of the Duelist (`BY7E`), Yu-Gi-Oh! GX: Duel Academy (`BYGE`), Yu-Gi-Oh! World
 Championship Tournament 2004 (`BYWP`), Rave Master: Special Attack Force
 (`BRME`), Yu-Gi-Oh! The Eternal Duelist Soul (`AY5E`), Yu-Gi-Oh! Worldwide
-Edition (`AYWE`) and Yu-Gi-Oh! Dungeon Dice Monsters (`AYDE`) are built in.
-So are those of GetBackers Dakkanya (`AGBJ`), Yu-Gi-Oh! Duel Monsters 5 Expert 1
-(`AY5J`), Animal Yokochou (`BAYJ`), Groove Adventure Rave 2 (`ARIJ`), Hikaru no
-Go 1 and 2 (`AHKJ`, `AKEJ`), Yu-Gi-Oh! Duel Monsters 6 Expert 2 (`AY6J`),
-Mermaid Melody Pichi Pichi Pitch (`BMAJ`), Mermaid Melody Pichi Pichitto Live
-Start! (`B3MJ`) and Tennis no Ouji-sama 2004 (`B4GJ`, `B4SJ`). For another
+Edition (`AYWE`), Yu-Gi-Oh! Dungeon Dice Monsters (`AYDE`) and Yu-Gi-Oh! Double
+Pack 2 (`BYVE`) are built in. So are those of GetBackers Dakkanya (`AGBJ`),
+Yu-Gi-Oh! Duel Monsters 5 Expert 1 (`AY5J`), Animal Yokochou (`BAYJ`), Groove
+Adventure Rave 2 (`ARIJ`), Hikaru no Go 1 and 2 (`AHKJ`, `AKEJ`), Yu-Gi-Oh! Duel
+Monsters 6 Expert 2 (`AY6J`), Mermaid Melody Pichi Pichi Pitch (`BMAJ`), Mermaid
+Melody Pichi Pichitto Live Start! (`B3MJ`), Tennis no Ouji-sama 2004 (`B4GJ`,
+`B4SJ`), Tennis no Ouji-sama (`ATIJ`), Kami no Kijutsu: Illusion of the Evil
+Eyes (`AG2J`), Captain Tsubasa: Eikou no Kiseki (`AKYJ`), Groove Adventure Rave
+(`ARVJ`), Hunter X Hunter: Minna Tomodachi Daisakusen!! (`A8NJ`), Tennis no
+Ouji-sama 2003: Passion Red and Cool Blue (`A8RJ`, `A9LJ`), Tennis no
+Ouji-sama: Aim at the Victory! (`AVAJ`), Gegege no Kitaro (`BGKJ`) and Minna no
+Ouji-sama (`BMOJ`). For another
 game, find the same routines, starting from the patterns in
 `docs/konami.md`, and add them to `GAMES`. A game whose driver has the same code
 as one of these usually places the routines at different addresses. Match
@@ -191,10 +209,11 @@ and the largest pitch deviation.
 notes still count towards the mixer's limit of 8 voices, so the result is what
 the game would play with those channels muted.
 
-The driver's init sets the music volume to 128. In *Donkey Kong Country 3*
-(`BDQE`), `driver_emu.py` sets it to 69 after it requests a tune. The game sets
-the same volume for most tunes. At that volume the mixer leaves out the notes
-of a channel at volume 0. The model does the same.
+The driver's init sets the music volume to 128. After it requests a tune,
+`driver_emu.py` sets the volume that the game's code gives the tune. In *Donkey
+Kong Country 3* (`BDQE`), it runs the game's routine that works out the volume.
+The mixer of that revision leaves out the notes of a channel at volume 0. The
+model does the same.
 
 *Donkey Kong Country 3* plays tune 12 on channels 0-3 above water and on
 channels 4-8 under water. The game holds the channels of the other arrangement
@@ -242,9 +261,12 @@ the patterns in `docs/rare.md`, and add them to `GAMES`:
 * `channel_volume`, the channels' controller 7 values, comes from the
   controller handler, and so does `envelope_settings` in a revision with
   controllers 20-23: the 4 bytes for each channel that they set.
-* In a revision with a music volume, `music_volume` is the word that holds it.
-  After each request, the script sets it to the volume at which `agbsf2` plays
-  the game's tunes.
+* `volume_setter` is the routine that sets the music volume. After each
+  request, the script calls it with the tune's volume. In a game whose routine
+  works out the volume, `volume_routine` is that routine, and `volume_option`
+  gives the options' music level and where the game keeps it. Otherwise
+  `volumes` gives each tune's volume, from the game's calls of the setter, or
+  `volume` gives every tune's.
 * In a revision with channel levels, `channel_levels` is the 16 bytes that hold
   them. `water` gives a tune that the game plays above and under water, with
   the channels of each arrangement. `docs/rare.md` describes the game's routine
@@ -330,7 +352,15 @@ routines call into. From there:
 
 `driver_emu.py` picks the addresses by the ROM's game code. Those of *Super
 Robot Taisen A* (`ASRJ`), *D* (`A6SJ`), *R* (`AJ9J`) and *J* (`B6JJ`) are
-built in. For another game, add an entry to `GAMES` with:
+built in, and those of *Suta Komi: Star Communicator* (`ASKJ`), with the S
+revision of the driver. So are those of the games whose driver of the J
+revision loads a music file: *Bouken Yuuki Plaston GP* (`A2PJ`), *Blender
+Bros.* (`ABRE`), *Robopon 2: Ring Version* and *Cross Version* (`ARPE`,
+`ACVE`), *Bouken Yuuki Densetsu Plaston Gate* (`APJJ`), *Bouken Yuuki PlaStar
+World: Densetsu no Plust Gate EX* (`BPDJ`), *Legend of Dynamic: Goushouden*
+(`AVDJ`), *Doubutsu no Shima no Chobi Gurumi* (`A8DJ`), *Gachasute! Dyna Device
+Red* and *Blue* (`AAIJ`, `ABIJ`) and *Magical Fengshen* (`AJOJ`). For another
+game, add an entry to `GAMES` with:
 
 * `sound_init`, `play` and `frame`: the game's routines that call the
   driver's init and set up its files, play a song by number, and run the
@@ -344,6 +374,14 @@ built in. For another game, add an entry to `GAMES` with:
 * `songs`: the number of songs in the music file. `agbsf2 --info` gives it.
 * `countdown`: the offset of the countdown in a channel's record, `0x18` in
   the A revision and `0x1A` in the J revision.
+* In a game whose driver loads a music file, `init_calls` gives the driver's
+  routines that the game calls after `sound_init`, before it plays, with their
+  arguments. `loader` is the driver's routine that loads a music file into its
+  tables, and `files` gives the first word of each music file that the loader
+  reads, in `agbsf2`'s order.
+* A game that sends programs to another console, each with its copy of the
+  driver, lists them in `programs`. A program's `image` is its copy in the ROM.
+  It runs from EWRAM, where its routines' addresses are.
 
 ## Nintendo R&D2's driver
 
@@ -441,9 +479,10 @@ copies to IWRAM. From there:
 3. **Model.** The driver was reimplemented from that reading.
 
 `driver_emu.py` picks the addresses by the ROM's game code. The addresses of
-three games are built in: *The Legend of Zelda: A Link to the Past & Four
-Swords* (`AZLE`), *Super Mario Advance 2: Super Mario World* (`AA2E`) and
-*Super Mario Advance 3: Yoshi's Island* (`A3AE`). *Super Mario Advance 2* has
+four games are built in: *The Legend of Zelda: A Link to the Past & Four
+Swords* (`AZLE`), *Super Mario Advance 2: Super Mario World* (`AA2E`), *Super
+Mario Advance 3: Yoshi's Island* (`A3AE`) and *Super Mario Advance 4: Super
+Mario Bros. 3* (`AX4E`). *Super Mario Advance 2* has
 an older revision of the driver. For another game, add an entry to `GAMES`
 with:
 
@@ -497,8 +536,8 @@ revision.
 
 | Script | Description |
 |---|---|
-| `driver_emu.py` | runs the driver of *Mario & Luigi: Superstar Saga* under the Unicorn ARM emulator: after each frame, the player that plays, its tracks, the sample channels' and PSG channels' records, and the writes to the sound registers |
-| `compare_trace.py` | diffs `agbsf2 --trace` against the emulated driver, frame by frame: the player, its tracks and the sample channels' records |
+| `driver_emu.py` | runs the driver of *Mario & Luigi: Superstar Saga* and of two Hamtaro games under the Unicorn ARM emulator: after each frame, the player that plays, its tracks, the sample channels' and PSG channels' records, and the writes to the sound registers |
+| `compare_trace.py` | diffs `agbsf2 --trace` against the emulated driver, frame by frame: the player, its tracks, and the sample channels' and PSG channels' records |
 
 ### Checking agbsf2 against AlphaDream's driver
 
@@ -507,9 +546,10 @@ python tools/alphadream/compare_trace.py rom.gba build/agbsf2 -j 2    # the mode
 python tools/alphadream/driver_emu.py rom.gba trace 41 600            # song 41's first 600 frames
 ```
 
-`compare_trace.py` leaves out the PSG channels' records and the writes to the
-sound registers. The model doesn't keep the PSG's envelopes. `driver_emu.py`
-picks the addresses by the ROM's game code. Those of `A88E` are built in. The
+`compare_trace.py` leaves out the writes to the sound registers. `driver_emu.py`
+picks the addresses by the ROM's game code. Those of *Mario & Luigi: Superstar
+Saga* (`A88E`), *Tottoko Hamtaro: Hamu-Hamu Sports* (`B85A`) and *Tottoko
+Hamtaro 4* (`A84J`) are built in. The
 script calls the driver's init, the mixer's setup and the start routine on
 player 1, then each frame the per-frame routine and the mixer. It runs no BIOS
 call but the LZ77 decompression, and no video.
@@ -596,8 +636,8 @@ menus use MP2K, *The Legend of Zelda: The Minish Cap* (`BZME`), *Kingdom
 Hearts: Chain of Memories* (`B8CE`), *Super Robot Taisen: Original Generation
 2* (`B2RE`), *Pokémon Mystery Dungeon: Red Rescue Team* (`B24E`), *Golden
 Sun: The Lost Age* (`AGFE`), *Fire Emblem: The Binding Blade* (`AFEJ`), *Fire
-Emblem* (`AE7E`) and *Fire Emblem: The Sacred Stones* (`BE8E`) are built in.
-For
+Emblem* (`AE7E`), *Fire Emblem: The Sacred Stones* (`BE8E`) and *Tomato
+Adventure* (`AGLJ`) are built in. For
 another game, find the same routines and tables, and add them to `GAMES`:
 `init`, `song_start`, `main` and `vsync` are `m4aSoundInit`,
 `m4aSongNumStart`, `m4aSoundMain` and `m4aSoundVSync`, and `song_table` and
@@ -941,8 +981,8 @@ The engine is Thumb code in ROM, and its mixer ARM code in IWRAM:
    reading.
 
 `driver_emu.py` picks the addresses by the ROM's game code. Those of *Tomb
-Raider: The Prophecy* (`AL9P`) are built in. For another game, add an entry to
-`GAMES` with:
+Raider: The Prophecy* (`AL9P`) and *The Mummy* (`AUME`) are built in. For
+another game, add an entry to `GAMES` with:
 
 * `file_lookup` and `bank_file`: the archive's lookup and the number of the
   file that the game's start hands the engine as its sound bank.
@@ -957,6 +997,8 @@ Raider: The Prophecy* (`AL9P`) are built in. For another game, add an entry to
   the first interrupt run it.
 * `track`, `voices` and `output`: the track, the mixer's voices and its output.
 * `timer_reload`: Timer 0's reload.
+* `kit_switch`: in a game that switches channel 9's kit on and off, the routine
+  that does it. To play a piece without the kit, the harness calls it first.
 
 The harness copies the mixer to IWRAM itself, because the game's copy goes
 through its memory manager. Unicorn has no DMA, and the harness does DMA 3's

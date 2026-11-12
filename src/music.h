@@ -78,11 +78,12 @@ public:
     virtual bool HasSong(int song) const = 0;
 
     // Returns the versions of a song that ConvertSong() writes, each to separate files. The first is the song as the
-    // game starts it. It has no name or suffix. Only the drivers of Rare, Nintendo R&D2 and Konami give more. Donkey
-    // Kong Country 3 plays Enchanted Riverbank above water and under water. Super Mario Advance 2 mutes one track of a
-    // sequence for one music number and another track for another. That game also plays a track of four sequences only
-    // while the player rides Yoshi. Two Mermaid Melody games play some songs both as a request leaves them and in a
-    // live stage. The live stage changes some of their tracks.
+    // game starts it. It has no name or suffix. Only the drivers of Rare, Nintendo R&D2, Konami and Ubisoft Milan
+    // return more. Donkey Kong Country 3 plays Enchanted Riverbank above water and under water. Super Mario Advance 2
+    // mutes one track of a sequence for one music number and another track for another. That game also plays a track of
+    // four sequences only while the player rides Yoshi. Two Mermaid Melody games play some songs both as a request
+    // leaves them and in a live stage. The live stage changes some of their tracks. The Mummy starts most of its pieces
+    // with the kit on channel 9 switched off. Each of them has a second version with the kit.
     virtual std::vector<SongVersion> Versions(int song) const;
 
     // Works out a song's length, loop and tracks the way ConvertSong() does, without writing anything.
@@ -152,9 +153,6 @@ std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std
 std::vector<FoundMusic> OpenAllMusic(const Rom& rom, const Overrides& overrides, std::string& error,
                                      std::vector<std::string>& unread);
 
-using ntdlib::agb::kMaxSilentEndSeconds;
-using ntdlib::agb::LoopLength;
-using ntdlib::agb::TrackLayout;
 using ntdlib::sequence_export::agb::SongNumber;
 using ntdlib::sequence_export::agb::SongStem;
 

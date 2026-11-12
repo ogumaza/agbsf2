@@ -21,10 +21,9 @@ using Open = std::unique_ptr<Music> (*)(const Rom&, const Overrides&, std::strin
 // The drivers in the order detection looks for them, with the names that --driver takes. Rare's, Quintet's, Nintendo
 // R&D2's, Nintendo R&D1's, AlphaDream's, Brownie Brown's and Ubisoft Milan's drivers, MP2K and Krawall come first.
 // Their detection uses code alone. Konami's detection can fall back on a scan of the data. A scan might mistake another
-// driver's data for a song table.
-// R&D2's comes before MP2K, since a game can play most of its music with R&D2's driver and the rest with MP2K.
-// AlphaDream's comes before MP2K too. Mario & Luigi: Superstar Saga plays its music with it, and MP2K plays only the
-// Mario Bros. Classic that the game holds.
+// driver's data for a song table. R&D2's comes before MP2K, since a game can play most of its music with R&D2's driver
+// and the rest with MP2K. AlphaDream's comes before MP2K too. Mario & Luigi: Superstar Saga plays its music with it,
+// and MP2K plays only the Mario Bros. Classic that the game holds.
 const struct
 {
     Driver driver;

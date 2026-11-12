@@ -11,9 +11,7 @@ namespace agbsf2
 {
 
 using ntdlib::agb::PathFromUtf8;
-using ntdlib::agb::ReadFile;
 using ntdlib::agb::Utf8;
-using ntdlib::agb::WriteFile;
 using ntdlib::sequence_export::agb::SafeFileName;
 
 } // namespace agbsf2

@@ -9,7 +9,6 @@
 namespace agbsf2::konami
 {
 
-using ntdlib::sequence_export::konami::Kind;
 using ntdlib::sequence_export::konami::SoundfontBuilder;
 
 } // namespace agbsf2::konami

@@ -74,11 +74,7 @@ public:
 
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
-        ntdlib::sequence_export::agb::Sf2File& f = shared_->File();
-        f.program = kProgramName;
-        f.SetTitle(rom_.Title(), " (bank = song number)");
-
-        return f.Write(path, error);
+        return WriteSoundfont(shared_->File(), rom_, path, error, " (bank = song number)");
     }
 
     bool DumpSong(int song, const std::string& path, std::string& error) const override
@@ -137,6 +133,7 @@ private:
 std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std::string& error)
 {
     DriverOverrides ov;
+    ov.program = kProgramName;
     ov.song_table = overrides.song_table;
     ov.song_count = overrides.song_count;
     ov.sample_table = overrides.sample_table;

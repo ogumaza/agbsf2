@@ -32,7 +32,7 @@ class APU:
         self.reg = {}
         self.square = [dict(duty=0, dac=False, on=False, x=0, phase=0.0, length=0, length_on=False, env=new_envelope())
                        for _ in range(2)]
-        self.wave = dict(dac=False, bank=0, volcode=0, force75=False, x=0, on=False, pos=0.0,
+        self.wave = dict(dac=False, bank=0, banks=1, volcode=0, force75=False, x=0, on=False, pos=0.0,
                          ram=[bytearray(16), bytearray(16)], length=0, length_on=False)
         self.noise = dict(dac=False, on=False, nr43=0, lfsr=0x7FFF, acc=0.0, length=0, length_on=False,
                           env=new_envelope())
@@ -46,7 +46,7 @@ class APU:
         for i in range(size):
             self._write8(address + i, (value >> (8 * i)) & 0xFF)
 
-    def _half(self, base):
+    def half(self, base):
         return self.reg.get(base, 0) | (self.reg.get(base + 1, 0) << 8)
 
     @staticmethod
@@ -61,11 +61,11 @@ class APU:
     def _write8(self, a, b):
         self.reg[a] = b
         if a in (0x04000060, 0x04000061):
-            v = self._half(0x04000060)
+            v = self.half(0x04000060)
             self.sweep.update(time=(v >> 4) & 7, down=bool(v & 8), shift=v & 7)
         elif a in (0x04000062, 0x04000063, 0x04000068, 0x04000069):
             ch = 0 if a < 0x04000068 else 1
-            v = self._half(0x04000062 if ch == 0 else 0x04000068)
+            v = self.half(0x04000062 if ch == 0 else 0x04000068)
             sq = self.square[ch]
             sq.update(duty=(v >> 6) & 3, dac=(v & 0xF800) != 0)
             if not self.hardware:
@@ -76,7 +76,7 @@ class APU:
                 sq['on'] = False
         elif a in (0x04000064, 0x04000065, 0x0400006C, 0x0400006D):
             ch = 0 if a < 0x04000068 else 1
-            v = self._half(0x04000064 if ch == 0 else 0x0400006C)
+            v = self.half(0x04000064 if ch == 0 else 0x0400006C)
             sq = self.square[ch]
             sq['x'] = v & 0x7FF
             sq['length_on'] = bool(v & 0x4000)
@@ -84,7 +84,7 @@ class APU:
                 sq['on'] = sq['dac']
                 sq['phase'] = 0.0
                 if self.hardware:
-                    self._trigger_envelope(sq['env'], self._half(0x04000062 if ch == 0 else 0x04000068))
+                    self._trigger_envelope(sq['env'], self.half(0x04000062 if ch == 0 else 0x04000068))
                 if sq['length'] == 0:
                     sq['length'] = 64
                 if ch == 0:
@@ -94,16 +94,17 @@ class APU:
                         sq['on'] = False
         elif a == 0x04000070:
             w = self.wave
-            w.update(dac=bool(b & 0x80), bank=(b >> 6) & 1)
+            # Bit 5 sets the 64-step mode. That mode plays the selected bank, then the other one (GBATEK, NR30).
+            w.update(dac=bool(b & 0x80), bank=(b >> 6) & 1, banks=2 if b & 0x20 else 1)
             if not w['dac']:
                 w['on'] = False
         elif a in (0x04000072, 0x04000073):
-            v = self._half(0x04000072)
+            v = self.half(0x04000072)
             self.wave.update(volcode=(v >> 13) & 3, force75=bool(v & 0x8000))
             if a & 1 == 0:
                 self.wave['length'] = 256 - (v & 0xFF)
         elif a in (0x04000074, 0x04000075):
-            v = self._half(0x04000074)
+            v = self.half(0x04000074)
             w = self.wave
             w['x'] = v & 0x7FF
             w['length_on'] = bool(v & 0x4000)
@@ -116,7 +117,7 @@ class APU:
             # The CPU writes the bank that isn't playing.
             self.wave['ram'][1 - self.wave['bank']][a - 0x04000090] = b
         elif a in (0x04000078, 0x04000079):
-            v = self._half(0x04000078)
+            v = self.half(0x04000078)
             n = self.noise
             n['dac'] = (v & 0xF800) != 0
             if not self.hardware:
@@ -126,14 +127,14 @@ class APU:
             if not n['dac']:
                 n['on'] = False
         elif a in (0x0400007C, 0x0400007D):
-            v = self._half(0x0400007C)
+            v = self.half(0x0400007C)
             n = self.noise
             n['nr43'] = v & 0xFF
             n['length_on'] = bool(v & 0x4000)
             if a & 1 and v & 0x8000:
                 n.update(on=n['dac'], lfsr=0x7FFF, acc=0.0)
                 if self.hardware:
-                    self._trigger_envelope(n['env'], self._half(0x04000078))
+                    self._trigger_envelope(n['env'], self.half(0x04000078))
                 if n['length'] == 0:
                     n['length'] = 64
         elif a == 0x04000080:
@@ -195,8 +196,8 @@ class APU:
                     sq['phase'] += 1048576.0 / (2048 - sq['x']) / RATE
             w = self.wave
             if w['on'] and w['dac']:
-                idx = int(w['pos']) & 31
-                byte = w['ram'][w['bank']][idx >> 1]
+                idx = int(w['pos']) % (32 * w['banks'])
+                byte = w['ram'][w['bank'] ^ (idx >> 5)][(idx & 31) >> 1]
                 s = byte >> 4 if idx % 2 == 0 else byte & 15
                 vals[2] = s * 3 // 4 if w['force75'] else [0, s, s >> 1, s >> 2][w['volcode']]
                 w['pos'] += 2097152.0 / (2048 - w['x']) / RATE

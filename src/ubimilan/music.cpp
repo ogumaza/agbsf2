@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "gba.h"
-#include "program.h"
 #include "rom.h"
 #include "sf2.h"
 #include "ubimilan/convert.h"
@@ -81,12 +80,9 @@ public:
 
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
-        Sf2File f;
-        f.program = kProgramName;
+        ntdlib::sequence_export::agb::Sf2File f;
         shared_->Build(rom_, info_, f);
-        f.SetTitle(rom_.Title());
-
-        return f.Write(path, error);
+        return WriteSoundfont(f, rom_, path, error);
     }
 
     bool DumpSong(int song, const std::string& path, std::string& error) const override

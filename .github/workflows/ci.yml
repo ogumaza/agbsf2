@@ -7,7 +7,7 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore: ["**.md", "docs/**", "LICENSE"]
+    paths-ignore: ["**.md", "docs/**", "tools/**", "LICENSE"]
   workflow_dispatch:
 
 concurrency:

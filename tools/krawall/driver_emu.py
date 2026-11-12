@@ -19,11 +19,11 @@ same two buffers and a frame's samples each time. It captures what the player an
 
 MODULE is the address of the module's header in hex. `agbsf2 --info` lists the addresses. In a game whose modules
 are packed in music files, MODULE is the address of a music file instead. The game's routine then plays the file's
-module. `--info` lists each file with its module. krapPlay() plays the module in loop mode. With --song, krapPlay() plays song N of a module whose orders separate songs with +++, in song
-mode. Song mode loops back to the song's start at the song's end. With --jingle, krapPlay() plays the module once, in
-the jingle mode. With no module playing, the jingle mode plays the module to its end and stops. The routine and RAM
-addresses are chosen by the ROM's game code. Those of the supported games are built in. Another game requires its
-values in GAMES (see tools/README.md).
+module. `--info` lists each file with its module. krapPlay() plays the module in loop mode. With --song, krapPlay()
+plays song N of a module whose orders separate songs with +++, in song mode. Song mode loops back to the song's start at
+the song's end. With --jingle, krapPlay() plays the module once, in the jingle mode. With no module playing, the jingle
+mode plays the module to its end and stops. The routine and RAM addresses are chosen by the ROM's game code. Those of
+the supported games are built in. Another game requires its values in GAMES (see tools/README.md).
 """
 import argparse
 import ctypes
@@ -35,7 +35,7 @@ import wave
 from pathlib import Path
 
 from unicorn import UC_ARCH_ARM, UC_HOOK_INTR, UC_HOOK_MEM_UNMAPPED, UC_MEM_READ_UNMAPPED, UC_MODE_ARM, UC_PROT_ALL, \
-    Uc
+    Uc, UcError
 from unicorn.arm_const import UC_ARM_REG_CPSR, UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R1, \
     UC_ARM_REG_R2, UC_ARM_REG_R3, UC_ARM_REG_R4, UC_ARM_REG_SP
 
@@ -350,7 +350,8 @@ class EverythingOrNothing(Build2003):
     plays = 0x03001F24
     module_table = 0
     jingles = ()
-    play_table = (0x0804F498, 25)  # the module, the mode and the song of each piece that the routine at 0x08022260 plays
+    # The module, the mode and the song of each piece that the routine at 0x08022260 plays.
+    play_table = (0x0804F498, 25)
 
 
 class Build1_2_2_17(Build2003):
@@ -473,7 +474,6 @@ class Eragon(Build2004):
     jingles = ()
 
 
-
 class CocotoKartRacer(Build2004):
     """BC5P (Cocoto Kart Racer): the 2005-04-21 build of Krawall. The start-up code copies IWRAM's code and its data in
     two parts. The game's init calls kragInit(1) at 0x0800CC00. The game plays five modules once, in mode 0, from direct
@@ -580,6 +580,7 @@ class HorseAndPonyLetsRide2(LetsRideDreamer):
     play = 0x0800FCEC
     dma_address = 0x0800EC64
 
+
 class RacingFever(Build2003):
     """BRWP (Racing Fever): build 1.2.2.14 of 2002/09/12. Its sound init calls kragInit(1), kramQualityMode(0x12) and
     krapSetMusicVol(0, 0). The build reads quality 0x12 as mode 0. The game's routine at 0x080042A4 sets the music
@@ -657,9 +658,9 @@ class ThirdAge(Build2003):
 
 
 class Urbz(ThirdAge):
-    """BOCE (The Urbz: Sims in the City): the 2003/09/01 build of Krawall, with the RAM of The Third Age's. The boot sets
-    the music volume to 255 from its settings. agbsf2 keeps 128, as for The Sims: Bustin' Out. The table at 0x0948F560
-    gives each piece's module, mode and song."""
+    """BOCE (The Urbz: Sims in the City): the 2003/09/01 build of Krawall, with the RAM of The Third Age's. The boot
+    sets the music volume to 255 from its settings. agbsf2 keeps 128, as for The Sims: Bustin' Out. The table at
+    0x0948F560 gives each piece's module, mode and song."""
     iwram = (0x09FF5664, 0x1598)
     ewram = (0x09FF6BFC, 0x27F8)
     after_init = ((0x080681F0, (1,)), (0x08068460, (0x40080,)), (0x080683D8, (2,)))
@@ -669,8 +670,8 @@ class Urbz(ThirdAge):
 
 
 class Robots(ThirdAge):
-    """BRTE (Robots): the 2003/09/01 build of Krawall, with the RAM of The Third Age's. The boot sets the music volume to
-    255 at 0x0803534C. agbsf2 keeps 128, as for The Sims: Bustin' Out."""
+    """BRTE (Robots): the 2003/09/01 build of Krawall, with the RAM of The Third Age's. The boot sets the music volume
+    to 255 at 0x0803534C. agbsf2 keeps 128, as for The Sims: Bustin' Out."""
     iwram = (0x08FDCCEC, 0x1598)
     ewram = (0x08FDE284, 0x27F8)
     after_init = ((0x0803F1EC, (1,)), (0x0803F45C, (0x40080,)), (0x0803F3D4, (2,)))
@@ -860,8 +861,9 @@ GAMES = {b'ASIE': TheSims, b'B63E': BigMuthaTruckers, b'BBVE': Babar, b'BC5P': C
          b'BHTE': HarryPotter, b'BJBE': EverythingOrNothing, b'BJKE': Juka, b'BL9E': LetsRideDreamer,
          b'BNPE': PrincessNatasha, b'BRWP': RacingFever, b'BYPP': HorseAndPonyLetsRide2, b'BYXE': PuppyLuv,
          b'B3AE': ThirdAge, b'B4UE': ShrekSuperSlam, b'BAKE': KoalaBrothers, b'BEAE': CareBears,
-         b'BFKE': FranklinTheTurtle, b'BHVE': ScurgeHive, b'BLOE': LandBeforeTime, b'BOCE': Urbz, b'BQCE': CrashOfTheTitans,
-         b'BRTE': Robots, b'MGBA': Build1_2_2_10, b'0000': Build1_2_2_15, bytes(4): Build1_2_2_17}
+         b'BFKE': FranklinTheTurtle, b'BHVE': ScurgeHive, b'BLOE': LandBeforeTime, b'BOCE': Urbz,
+         b'BQCE': CrashOfTheTitans, b'BRTE': Robots, b'MGBA': Build1_2_2_10, b'0000': Build1_2_2_15,
+         bytes(4): Build1_2_2_17}
 
 
 def addresses_for(rom):
@@ -927,7 +929,10 @@ class KrawallEmulator:
         if access == UC_MEM_READ_UNMAPPED:
             uc.mem_map(address & ~0xFFF, 0x1000 if (address & 0xFFF) + size <= 0x1000 else 0x2000)
             return True
-        raise SystemExit('unmapped access at %08x (pc %08x)' % (address, uc.reg_read(UC_ARM_REG_PC)))
+        # For an unmapped access, Unicorn's emu_start() raises UcError ahead of any exception from this hook.
+        # call() raises SystemExit with this message instead.
+        self.fault = 'unmapped access at %08x (pc %08x)' % (address, uc.reg_read(UC_ARM_REG_PC))
+        return False
 
     def _svc(self, uc, intno, user):
         """The BIOS calls that Krawall makes: Div, and the CpuSet and CpuFastSet that clear and copy its records."""
@@ -967,7 +972,13 @@ class KrawallEmulator:
         uc.reg_write(UC_ARM_REG_LR, RETURN_TRAP | (1 if thumb else 0))
         for i, v in enumerate(args):
             uc.reg_write(UC_ARM_REG_R0 + i, v)
-        uc.emu_start(address | (1 if thumb else 0), RETURN_TRAP, count=100_000_000)
+        self.fault = None
+        try:
+            uc.emu_start(address | (1 if thumb else 0), RETURN_TRAP, count=100_000_000)
+        except UcError:
+            if self.fault:
+                raise SystemExit(self.fault) from None
+            raise
 
     def read(self, address, size):
         return bytes(self.uc.mem_read(address, size))

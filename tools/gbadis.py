@@ -36,7 +36,7 @@ class Disassembler:
         self.labels = {}
         self.literals = {}
         self.xrefs = {}
-        self.stripped = set()  # addresses the walk reached in code that a GSF rip zeroed out
+        self.stripped = {}  # address -> thumb, for the addresses the walk reached in code that a GSF rip zeroed out
         self.undecodable = {}  # address -> thumb, where the walk reached bytes that aren't an instruction
         self.md = {True: Cs(CS_ARCH_ARM, CS_MODE_THUMB), False: Cs(CS_ARCH_ARM, CS_MODE_ARM)}
         for md in self.md.values():
@@ -52,8 +52,8 @@ class Disassembler:
     def word(self, addr):
         return struct.unpack('<I', self.read(addr, 4))[0]
 
-    def readable(self, addr):
-        return self.read(addr, 4) is not None
+    def readable(self, addr, size=4):
+        return self.read(addr, size) is not None
 
     def literal_address(self, ins, thumb):
         m = re.search(r'\[pc, #(-?0x[0-9a-f]+|-?\d+)\]', ins.op_str)
@@ -64,10 +64,11 @@ class Disassembler:
         work = list(entries)
         while work:
             addr, thumb = work.pop()
-            while addr not in self.insns and addr not in self.stripped and self.readable(addr):
-                code = self.read(addr, 4)
-                if code == b'\0\0\0\0':
-                    self.stripped.add(addr)
+            while addr not in self.insns and addr not in self.stripped and self.readable(addr, 2 if thumb else 4):
+                # A Thumb instruction can end a region with 2 bytes.
+                code = self.read(addr, 4) or self.read(addr, 2)
+                if code == bytes(len(code)):
+                    self.stripped[addr] = thumb
                     self.labels.setdefault(addr, 'STRIPPED_%08x' % addr)
                     break
                 ins = next(self.md[thumb].disasm(code, addr), None)
@@ -99,7 +100,7 @@ class Disassembler:
 
     def listing(self):
         prev = None
-        for addr in sorted(set(self.insns) | set(self.literals) | self.stripped | set(self.undecodable)):
+        for addr in sorted(set(self.insns) | set(self.literals) | set(self.stripped) | set(self.undecodable)):
             if prev is not None and addr > prev:
                 print('        ; gap %x bytes' % (addr - prev))
             if addr in self.labels:
@@ -129,7 +130,7 @@ class Disassembler:
                 prev = addr + 4
             else:
                 print('%08x: <stripped>' % addr)
-                prev = addr + 2
+                prev = addr + (2 if self.stripped[addr] else 4)
 
 
 def main():
@@ -139,14 +140,20 @@ def main():
     p.add_argument('--copy', action='append', default=[], metavar='SRC:DST:SIZE',
                    help='map SIZE bytes of the ROM at SRC to DST, all in hex')
     a = p.parse_args()
-    copies = [tuple(int(v, 16) for v in c.split(':')) for c in a.copy]
+    try:
+        copies = [tuple(int(v, 16) for v in c.split(':')) for c in a.copy]
+    except ValueError:
+        p.error('--copy takes SRC:DST:SIZE, in hex')
     if any(len(c) != 3 for c in copies):
-        p.error('--copy takes SRC:DST:SIZE')
+        p.error('--copy takes SRC:DST:SIZE, in hex')
     dis = Disassembler(load_rom(a.rom), copies)
     entries = []
     for arg in a.entries:
         thumb = not arg.upper().startswith('A')
-        addr = int(arg.lstrip('Aa'), 16) & ~1
+        try:
+            addr = int(arg.lstrip('Aa'), 16) & ~1
+        except ValueError:
+            p.error('an entry point is an address in hex, with an A in front for ARM code: %s' % arg)
         dis.labels[addr] = 'sub_%08x' % addr
         entries.append((addr, thumb))
     dis.run(entries)

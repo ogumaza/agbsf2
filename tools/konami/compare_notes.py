@@ -62,6 +62,7 @@ from unicorn import UC_HOOK_MEM_WRITE
 # For conversion.py, gbarom.py, psg_model.py and traces.py, in tools/
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import conversion
+from conversion import midi_file
 from driver_emu import DriverEmulator
 from gbarom import ROM_BASE, load_rom
 from psg_model import DUTY
@@ -145,55 +146,23 @@ def read_midi(path):
     """Returns [(track name, [(frame, status, data...)])], leaving out meta events, and the length in frames, with each
     tick at the frame it stands for under the file's tempo map."""
     data = Path(path).read_bytes()
-    division = struct.unpack_from('>H', data, 12)[0]
-    tempos = [(0, 500000)]
+    _, midi_tracks = midi_file.tracks_of(data)
+    seconds = midi_file.tick_seconds(midi_file.division_of(data), midi_file.tempo_changes(midi_tracks))
     tracks = []
     length = 0
-    pos = 14
-    while pos < len(data):
-        end = pos + 8 + struct.unpack_from('>I', data, pos + 4)[0]
-        pos += 8
-        tick, status, name, events = 0, 0, '', []
-
-        def varlen():
-            nonlocal pos
-            value = 0
-            while True:
-                b = data[pos]
-                pos += 1
-                value = (value << 7) | (b & 0x7F)
-                if not b & 0x80:
-                    return value
-
-        while pos < end:
-            tick += varlen()
-            if data[pos] == 0xFF:
-                meta = data[pos + 1]
-                pos += 2
-                size = varlen()
-                if meta == 0x03:
-                    name = data[pos:pos + size].decode('latin-1')
-                if meta == 0x51:
-                    tempos.append((tick, int.from_bytes(data[pos:pos + 3], 'big')))
-                pos += size
-                continue
-            if data[pos] & 0x80:
-                status = data[pos]
-                pos += 1
-            count = 1 if status & 0xF0 in (0xC0, 0xD0) else 2
-            events.append((tick, status & 0xF0) + tuple(data[pos:pos + count]))
-            pos += count
+    for _, track_events in midi_tracks:
+        name, events = '', []
+        for tick, status, args in track_events:
+            if status != 0xFF:
+                events.append((tick, status & 0xF0) + tuple(args))
+            elif args[0] == 0x03:
+                size, start = midi_file.read_number(args, 1)
+                name = args[start:start + size].decode('latin-1')
         tracks.append((name, events))
-        length = max(length, tick)
+        length = max(length, track_events[-1][0] if track_events else 0)
 
     def frame(t):
-        seconds, at, tempo = 0.0, 0, 500000
-        for when, value in sorted(tempos, key=lambda tempo: tempo[0]):
-            if when > t:
-                break
-            seconds += (when - at) * tempo / division / 1e6
-            at, tempo = when, value
-        return round((seconds + (t - at) * tempo / division / 1e6) / FRAME_SECONDS)
+        return round(seconds(t) / FRAME_SECONDS)
 
     return [(name, [(frame(e[0]),) + e[1:] for e in events]) for name, events in tracks], frame(length)
 
@@ -637,78 +606,78 @@ def main():
     songs = parse_range(a.songs) if a.songs else sorted(set(lengths) | {s for s, _ in midi_files})
 
     # The same conversion with each event on the driver's frame.
-    temporary = tempfile.TemporaryDirectory()
-    conversion.frame_timed(a.agbsf2, a.rom, 'konami', temporary.name, a.songs)
-    on_frames = {(song, version): path for song, version, path in conversion.midi_files(temporary.name, 'konami', True)}
+    with tempfile.TemporaryDirectory() as temporary:
+        conversion.frame_timed(a.agbsf2, a.rom, 'konami', temporary, a.songs)
+        on_frames = {(song, version): path
+                     for song, version, path in conversion.midi_files(temporary, 'konami', True)}
 
-    # Each song as a request leaves it, and the song's version in a live stage if FOLDER has one.
-    total = Report()
-    checked = 0
-    versions = {(s, '') for s in songs} | {k for k in midi_files if k[0] in songs}
-    for song, version in sorted(v for v in versions if not a.live or v[1] == 'live'):
-        report = Report()
-        label = 'song %2d%s' % (song, ' ' + version if version else '')
-        midi_path = midi_files.get((song, version))
-        if midi_path is not None:
-            framed = on_frames.get((song, version))
-            if framed is None:
-                report.differ(label, 'the conversion with --frame-timing has no MIDI file')
-                midi_path = None
-            else:
-                problems, worst = conversion.compare_timing(midi_path, framed, FRAME_SECONDS, MAX_SHIFT)
-                if midi_path.with_suffix('.sf2').read_bytes() != framed.with_suffix('.sf2').read_bytes():
-                    problems.append('the SoundFonts differ')
-                for problem in problems:
-                    report.differ('%s on the beat' % label, problem)
-                report.deviation('move onto the beat (frames)', worst, '')
-        if midi_path is not None:
-            soundfont = SoundFont(midi_path.with_suffix('.sf2'))
-            tracks, frames = read_midi(framed)  # the song ends, and its notes are released, on the last tick
-            driver, rate, addr = run_driver(rom, song, frames, version == 'live')
-            track_names = list(PSG_TRACKS) + ['Voice %d' % v for v in range(addr.voice_count)]
-            present = dict(tracks[1:])
-            # The tracks are checked by name, so notes on the first track, on a track of another name, or on one whose
-            # name a later track has too, would go unchecked.
-            for i, (name, events) in enumerate(tracks):
-                if i and name in track_names and present[name] is events:
-                    continue
-                if any(e[1] == 0x90 and e[3] for e in events):
-                    why = ('a later track has the same name' if i and name in track_names else
-                           'it stands for none of the driver\'s voices and channels')
-                    report.differ(label, 'MIDI track %d (%s) has notes, but %s' % (i, name, why))
-            notes = 0
-            for name in track_names:
-                if name not in present:
-                    check_silent(name, driver, addr, report)
-                    continue
-                midi = midi_frames(present[name], frames)
-                if name in PSG_TRACKS:
-                    notes += check_psg_track(soundfont, PSG_TRACKS[name], midi, driver, addr, report, name)
+        # Each song as a request leaves it, and the song's version in a live stage if FOLDER has one.
+        total = Report()
+        checked = 0
+        versions = {(s, '') for s in songs} | {k for k in midi_files if k[0] in songs}
+        for song, version in sorted(v for v in versions if not a.live or v[1] == 'live'):
+            report = Report()
+            label = 'song %2d%s' % (song, ' ' + version if version else '')
+            midi_path = midi_files.get((song, version))
+            if midi_path is not None:
+                framed = on_frames.get((song, version))
+                if framed is None:
+                    report.differ(label, 'the conversion with --frame-timing has no MIDI file')
+                    midi_path = None
                 else:
-                    voice = int(name.split()[1])
-                    notes += check_sample_track(rom, tables, soundfont, voice, midi, driver, rate, addr,
-                                                report, name)
-            played = '%5d notes' % notes
-        elif song in lengths and not version:
-            # agbsf2 writes no files for a song that plays no notes.
-            frames = max(1, lengths[song])
-            driver, _, addr = run_driver(rom, song, frames)
-            track_names = list(PSG_TRACKS) + ['Voice %d' % v for v in range(addr.voice_count)]
-            for name in track_names:
-                check_silent(name, driver, addr, report)
-            played = 'no MIDI file'
-        else:
-            continue
+                    problems, worst = conversion.compare_timing(midi_path, framed, FRAME_SECONDS, MAX_SHIFT)
+                    if midi_path.with_suffix('.sf2').read_bytes() != framed.with_suffix('.sf2').read_bytes():
+                        problems.append('the SoundFonts differ')
+                    for problem in problems:
+                        report.differ('%s on the beat' % label, problem)
+                    report.deviation('move onto the beat (frames)', worst, '')
+            if midi_path is not None:
+                soundfont = SoundFont(midi_path.with_suffix('.sf2'))
+                tracks, frames = read_midi(framed)  # the song ends, and its notes are released, on the last tick
+                driver, rate, addr = run_driver(rom, song, frames, version == 'live')
+                track_names = list(PSG_TRACKS) + ['Voice %d' % v for v in range(addr.voice_count)]
+                present = dict(tracks[1:])
+                # The tracks are checked by name, so notes on the first track, on a track of another name, or on one
+                # whose name a later track has too, would go unchecked.
+                for i, (name, events) in enumerate(tracks):
+                    if i and name in track_names and present[name] is events:
+                        continue
+                    if any(e[1] == 0x90 and e[3] for e in events):
+                        why = ('a later track has the same name' if i and name in track_names else
+                               'it stands for none of the driver\'s voices and channels')
+                        report.differ(label, 'MIDI track %d (%s) has notes, but %s' % (i, name, why))
+                notes = 0
+                for name in track_names:
+                    if name not in present:
+                        check_silent(name, driver, addr, report)
+                        continue
+                    midi = midi_frames(present[name], frames)
+                    if name in PSG_TRACKS:
+                        notes += check_psg_track(soundfont, PSG_TRACKS[name], midi, driver, addr, report, name)
+                    else:
+                        voice = int(name.split()[1])
+                        notes += check_sample_track(rom, tables, soundfont, voice, midi, driver, rate, addr,
+                                                    report, name)
+                played = '%5d notes' % notes
+            elif song in lengths and not version:
+                # agbsf2 writes no files for a song that plays no notes.
+                frames = max(1, lengths[song])
+                driver, _, addr = run_driver(rom, song, frames)
+                track_names = list(PSG_TRACKS) + ['Voice %d' % v for v in range(addr.voice_count)]
+                for name in track_names:
+                    check_silent(name, driver, addr, report)
+                played = 'no MIDI file'
+            else:
+                continue
 
-        checked += 1
-        print('%s: %5d frames, %s, %d differences' % (label, frames, played, len(report.differences)), flush=True)
-        for d in report.differences[:10]:
-            print('    ' + d)
-        total.differences += report.differences
-        for what, (value, where) in report.worst.items():
-            total.deviation(what, value, '%s %s' % (label, where))
+            checked += 1
+            print('%s: %5d frames, %s, %d differences' % (label, frames, played, len(report.differences)), flush=True)
+            for d in report.differences[:10]:
+                print('    ' + d)
+            total.differences += report.differences
+            for what, (value, where) in report.worst.items():
+                total.deviation(what, value, '%s %s' % (label, where))
 
-    temporary.cleanup()
     if not checked:
         raise SystemExit('found none of the songs to check')
     print()

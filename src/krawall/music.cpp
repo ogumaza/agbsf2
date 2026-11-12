@@ -20,6 +20,7 @@
 #include "program.h"
 #include "rom.h"
 #include "sf2.h"
+#include "trace.h"
 
 namespace agbsf2::krawall
 {
@@ -42,10 +43,7 @@ void PrintChanged(std::FILE* out, long long frame, const char* name, const std::
 
     last = record;
     std::fprintf(out, "%lld %s ", frame, name);
-    for (uint8_t b : record)
-    {
-        std::fprintf(out, "%02x", b);
-    }
+    PrintHex(out, record);
     std::fprintf(out, "\n");
 }
 
@@ -96,10 +94,7 @@ public:
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
         ntdlib::sequence_export::agb::Sf2File f = shared_->Build(rom_, info_);
-        f.program = kProgramName;
-        f.SetTitle(rom_.Title());
-
-        return f.Write(path, error);
+        return WriteSoundfont(f, rom_, path, error);
     }
 
     bool DumpSong(int song, const std::string& path, std::string& error) const override
@@ -170,6 +165,7 @@ private:
 std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std::string& error)
 {
     DriverOverrides ov;
+    ov.program = kProgramName;
     ov.module_table = overrides.song_table;
     ov.module_count = overrides.song_count;
 
