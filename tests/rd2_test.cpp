@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 
-// Unit tests of the Nintendo R&D2 Music class. The tests in ntdlib check the driver. These tests build synthetic
+// Unit tests of the Nintendo R&D2 Music class. The tests in agblib check the driver. These tests build synthetic
 // cartridges in memory. No game ROM is needed.
 
 #include <memory>
 #include <string>
 
-#include "ntdlib/testing/rd2_cart.h"
+#include "agblib/testing/rd2_cart.h"
 #include "seqlib/testing/check.h"
 
 #include "driver_tests.h"
@@ -18,17 +18,17 @@ namespace agbsf2::rd2
 namespace
 {
 
-using ntdlib::testing::rd2_cart::Cart;
-using ntdlib::testing::rd2_cart::kEffectData;
-using ntdlib::testing::rd2_cart::kPlain;
-using ntdlib::testing::rd2_cart::kSequenceData;
-using ntdlib::testing::rd2_cart::TrackData;
+using agblib::testing::rd2_cart::Cart;
+using agblib::testing::rd2_cart::kEffectData;
+using agblib::testing::rd2_cart::kPlain;
+using agblib::testing::rd2_cart::kSequenceData;
+using agblib::testing::rd2_cart::TrackData;
 
+// The game's play-music routine mutes tracks of sequence 1: track 2 for music 2, and track 1 for the other music
+// numbers that play it. Music 1 plays the sequence first and gives the first version. Music 2 makes a second version.
+// Music 3 mutes the same track as music 1 and makes no version. The Music interface returns the versions.
 void TestMutedTracks()
 {
-    // The game's play-music routine mutes tracks of sequence 1: track 2 for music 2, and track 1 for the other music
-    // numbers that play it. Music 1 plays the sequence first and gives the first version. Music 2 makes a second
-    // version. Music 3 mutes the same track as music 1 and makes no version.
     Cart cart;
     cart.Sequences({{TrackData().Bytes({0xC2, kPlain}).Note(50, 20, 127).Wait(20).End()},
                     {TrackData().Bytes({0xC2, kPlain}).Note(60, 6, 127).Wait(6).End(),
@@ -38,7 +38,6 @@ void TestMutedTracks()
     const Rom rom = cart.ToRom();
     std::string error;
 
-    // The Music interface returns the versions.
     const std::unique_ptr<Music> music = agbsf2::OpenMusic(rom, Overrides(), error);
 
     SEQLIB_REQUIRE(music != nullptr);
@@ -66,9 +65,9 @@ void TestEffects()
     SEQLIB_CHECK_EQ(music->InspectSong(1, ConvertSettings()).address, kEffectData + 6);
 }
 
+// The Music interface finds the driver, names it, and reports a sequence's tracks and address.
 void TestMusic()
 {
-    // The Music interface finds the driver, names it, and reports a sequence's tracks and address.
     Cart cart;
     cart.Sequences({{TrackData().Bytes({0xC2, kPlain}).Note(60, 6, 127).Wait(6).End()}});
     const Rom rom = cart.ToRom();

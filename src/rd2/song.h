@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 
-// Nintendo R&D2's sequence format, from ntdlib.
+// Nintendo R&D2's sequence format, from agblib.
 
 #pragma once
 
-#include "ntdlib/rd2/song.h"
+#include "agblib/rd2/song.h"
 
 namespace agbsf2::rd2
 {
 
-using ntdlib::rd2::DumpSong;
+using agblib::rd2::DumpSong;
 
 } // namespace agbsf2::rd2

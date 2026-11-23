@@ -89,13 +89,43 @@ Its notice follows.
 ntdlib (MIT License)
 ====================
 
-The ROM and GSF reader and all eleven sound drivers, with their conversions,
-come from ntdlib, in externals/ntdlib.
+The code that agblib builds on, such as the ARM interpreter and the
+common form of a sequence's commands, comes from ntdlib, in externals/ntdlib.
 Its notice follows.
 
   MIT License
 
   Copyright (c) 2026 the ntdlib authors
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all
+  copies or substantial portions of the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
+
+agblib (MIT License)
+====================
+
+The ROM and GSF reader and all fourteen sound drivers, with their conversions,
+come from agblib, in externals/agblib.
+Its notice follows.
+
+  MIT License
+
+  Copyright (c) 2026 the agblib authors
 
   Permission is hereby granted, free of charge, to any person obtaining a copy
   of this software and associated documentation files (the "Software"), to deal

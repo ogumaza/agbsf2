@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 
-// Krawall's detection and modules, from ntdlib.
+// Krawall's detection and modules, from agblib.
 
 #pragma once
 
-#include "ntdlib/krawall/driver.h"
+#include "agblib/krawall/driver.h"
 
 namespace agbsf2::krawall
 {
 
-using ntdlib::krawall::DetectDriver;
-using ntdlib::krawall::DriverInfo;
-using ntdlib::krawall::DriverOverrides;
+using agblib::krawall::DetectDriver;
+using agblib::krawall::DriverInfo;
+using agblib::krawall::DriverOverrides;
 
 } // namespace agbsf2::krawall

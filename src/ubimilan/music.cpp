@@ -29,7 +29,7 @@ namespace
 class UbiMilanMusic : public Music
 {
 public:
-    // Keeps a reference to `rom`, which has to outlive this.
+    // Keeps a reference to `rom`. The ROM has to outlive this.
     UbiMilanMusic(const Rom& rom, DriverInfo info)
         : Music("Ubisoft Milan's sound driver", info.log, info.warnings), rom_(rom), info_(std::move(info))
     {
@@ -80,7 +80,7 @@ public:
 
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
-        ntdlib::sequence_export::agb::Sf2File f;
+        agblib::sequence_export::agb::Sf2File f;
         shared_->Build(rom_, info_, f);
         return WriteSoundfont(f, rom_, path, error);
     }

@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 
-// Ubisoft Milan's conversion, from ntdlib.
+// Ubisoft Milan's conversion, from agblib.
 
 #pragma once
 
-#include "ntdlib/sequence_export/ubimilan/convert.h"
+#include "agblib/sequence_export/ubimilan/convert.h"
 
 namespace agbsf2::ubimilan
 {
 
-using ntdlib::sequence_export::ubimilan::ConvertSong;
-using ntdlib::sequence_export::ubimilan::InspectSong;
-using ntdlib::sequence_export::ubimilan::SongVersions;
+using agblib::sequence_export::ubimilan::ConvertSong;
+using agblib::sequence_export::ubimilan::InspectSong;
+using agblib::sequence_export::ubimilan::SongVersions;
 
 } // namespace agbsf2::ubimilan

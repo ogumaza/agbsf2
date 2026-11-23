@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 
-// Krawall's conversion, from ntdlib.
+// Krawall's conversion, from agblib.
 
 #pragma once
 
-#include "ntdlib/sequence_export/krawall/convert.h"
+#include "agblib/sequence_export/krawall/convert.h"
 
 namespace agbsf2::krawall
 {
 
-using ntdlib::sequence_export::krawall::ConvertSong;
-using ntdlib::sequence_export::krawall::InspectSong;
+using agblib::sequence_export::krawall::ConvertSong;
+using agblib::sequence_export::krawall::InspectSong;
 
 } // namespace agbsf2::krawall

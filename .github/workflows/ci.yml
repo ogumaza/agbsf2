@@ -7,12 +7,16 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore: ["**.md", "docs/**", "tools/**", "LICENSE"]
+    paths-ignore: ["**.md", "docs/**", "LICENSE"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# A newer push waits for the run before it. A run that has started is never cancelled.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:

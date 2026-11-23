@@ -4,7 +4,8 @@
 -- app to convert their music to MIDI files and SoundFonts. Each file's results
 -- go in a folder beside it, with the same name.
 --
--- The command-line tool is inside the app, in Contents/Resources.
+-- The command-line tool is inside the app, in Contents/Resources. CMake appends xsflib's shared handlers
+-- (showResults, lastPathComponent, lastLine and joinLines) to this script when it builds the app.
 
 -- The command-line tool's file name, and the app's name for its dialogs.
 property toolName : "agbsf2"
@@ -12,11 +13,11 @@ property appTitle : "Agbsf2"
 
 on run
 	set theFiles to choose file with prompt "Choose GBA ROMs or GSF rips to convert:" with multiple selections allowed
-	showResults(convertFiles(theFiles, toolPath()))
+	showResults(convertFiles(theFiles, toolPath()), appTitle)
 end run
 
 on open theFiles
-	showResults(convertFiles(theFiles, toolPath()))
+	showResults(convertFiles(theFiles, toolPath()), appTitle)
 end open
 
 on toolPath()
@@ -66,48 +67,3 @@ on convertFiles(theFiles, tool)
 	if reportLines is {} then set end of reportLines to lastLine(toolOutput)
 	return {joinLines(reportLines), outputFolders}
 end convertFiles
-
-on showResults(conversion)
-	set {reportText, outputFolders} to conversion
-	if (count of outputFolders) is 0 then
-		display dialog reportText buttons {"OK"} default button 1 with title appTitle with icon caution
-	else
-		if (count of outputFolders) is 1 then
-			set openLabel to "Open Folder"
-		else
-			set openLabel to "Open Folders"
-		end if
-		set dialogReply to display dialog reportText buttons {"OK", openLabel} default button 2 with title appTitle
-		if button returned of dialogReply is openLabel then
-			repeat with d in outputFolders
-				do shell script "open " & quoted form of (d as text)
-			end repeat
-		end if
-	end if
-end showResults
-
-on lastPathComponent(p)
-	-- A folder's POSIX path ends in a slash. The tool names the folder without it.
-	if p ends with "/" and (length of p) > 1 then set p to text 1 thru -2 of p
-	set saved to AppleScript's text item delimiters
-	set AppleScript's text item delimiters to "/"
-	set parts to text items of p
-	set AppleScript's text item delimiters to saved
-	return item -1 of parts
-end lastPathComponent
-
-on lastLine(t)
-	set theLines to paragraphs of t
-	repeat with i from (count of theLines) to 1 by -1
-		if (item i of theLines) is not "" then return item i of theLines
-	end repeat
-	return t
-end lastLine
-
-on joinLines(theList)
-	set saved to AppleScript's text item delimiters
-	set AppleScript's text item delimiters to return
-	set joined to theList as text
-	set AppleScript's text item delimiters to saved
-	return joined
-end joinLines

@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 
-// The listing of a module of Logik State's driver, from ntdlib.
+// The listing of a module of Logik State's driver, from agblib.
 
 #pragma once
 
-#include "ntdlib/logikstate/song.h"
+#include "agblib/logikstate/song.h"
 
 namespace agbsf2::logikstate
 {
 
-using ntdlib::logikstate::DumpSong;
+using agblib::logikstate::DumpSong;
 
 } // namespace agbsf2::logikstate

@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 
-// AlphaDream's model of the driver, from ntdlib.
+// AlphaDream's model of the driver, from agblib.
 
 #pragma once
 
-#include "ntdlib/sequence_export/alphadream/sequencer.h"
+#include "agblib/sequence_export/alphadream/sequencer.h"
 
 namespace agbsf2::alphadream
 {
 
-namespace flag = ntdlib::sequence_export::alphadream::flag;
-using ntdlib::sequence_export::alphadream::Sequencer;
-using ntdlib::sequence_export::alphadream::TrackState;
+namespace flag = agblib::sequence_export::alphadream::flag;
+using agblib::sequence_export::alphadream::Sequencer;
+using agblib::sequence_export::alphadream::TrackState;
 
 } // namespace agbsf2::alphadream

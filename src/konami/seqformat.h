@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: MIT
 
-// Konami's commands, from ntdlib.
+// Konami's commands, from agblib.
 
 #pragma once
 
-#include "ntdlib/konami/seqformat.h"
+#include "agblib/konami/seqformat.h"
 
 namespace agbsf2::konami
 {
 
-using ntdlib::konami::OlderOutputStage;
-using ntdlib::konami::ReadSongHeader;
-using ntdlib::konami::RecordHasPan;
-using ntdlib::konami::SongHeader;
-using ntdlib::konami::TrackCount;
+using agblib::konami::OlderOutputStage;
+using agblib::konami::ReadSongHeader;
+using agblib::konami::RecordHasPan;
+using agblib::konami::SongHeader;
+using agblib::konami::TrackCount;
 
 } // namespace agbsf2::konami

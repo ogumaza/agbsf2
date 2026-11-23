@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 
-// Konami's SoundFonts, from ntdlib.
+// Konami's SoundFonts, from agblib.
 
 #pragma once
 
-#include "ntdlib/sequence_export/konami/soundfont.h"
+#include "agblib/sequence_export/konami/soundfont.h"
 
 namespace agbsf2::konami
 {
 
-using ntdlib::sequence_export::konami::SoundfontBuilder;
+using agblib::sequence_export::konami::SoundfontBuilder;
 
 } // namespace agbsf2::konami

@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 
-// Brownie Brown's conversion, from ntdlib.
+// Brownie Brown's conversion, from agblib.
 
 #pragma once
 
-#include "ntdlib/sequence_export/brownie/convert.h"
+#include "agblib/sequence_export/brownie/convert.h"
 
 namespace agbsf2::brownie
 {
 
-using ntdlib::sequence_export::brownie::ConvertSong;
-using ntdlib::sequence_export::brownie::InspectSong;
+using agblib::sequence_export::brownie::ConvertSong;
+using agblib::sequence_export::brownie::InspectSong;
 
 } // namespace agbsf2::brownie

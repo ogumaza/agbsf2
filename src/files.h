@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 
-// File access with UTF-8 paths, and safe file names, from ntdlib.
+// File access with UTF-8 paths, and safe file names, from agblib.
 
 #pragma once
 
-#include "ntdlib/agb/files.h"
-#include "ntdlib/sequence_export/agb/settings.h"
+#include "agblib/agb/files.h"
+#include "agblib/sequence_export/agb/settings.h"
 
 namespace agbsf2
 {
 
-using ntdlib::agb::PathFromUtf8;
-using ntdlib::agb::Utf8;
-using ntdlib::sequence_export::agb::SafeFileName;
+using agblib::agb::PathFromUtf8;
+using agblib::agb::Utf8;
+using agblib::sequence_export::agb::SafeFileName;
 
 } // namespace agbsf2

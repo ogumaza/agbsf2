@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: MIT
 
-// Ubisoft Milan's driver tables, from ntdlib.
+// Ubisoft Milan's driver tables, from agblib.
 
 #pragma once
 
-#include "ntdlib/ubimilan/driver.h"
+#include "agblib/ubimilan/driver.h"
 
 namespace agbsf2::ubimilan
 {
 
-using ntdlib::ubimilan::DetectDriver;
-using ntdlib::ubimilan::DriverInfo;
-using ntdlib::ubimilan::DriverOverrides;
-using ntdlib::ubimilan::KitPlays;
-using ntdlib::ubimilan::kVoiceCount;
-using ntdlib::ubimilan::MusicPiece;
-using ntdlib::ubimilan::ReadMusic;
+using agblib::ubimilan::DetectDriver;
+using agblib::ubimilan::DriverInfo;
+using agblib::ubimilan::DriverOverrides;
+using agblib::ubimilan::KitPlays;
+using agblib::ubimilan::kVoiceCount;
+using agblib::ubimilan::MusicPiece;
+using agblib::ubimilan::ReadMusic;
 
 } // namespace agbsf2::ubimilan

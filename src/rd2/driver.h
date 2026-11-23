@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: MIT
 
-// Nintendo R&D2's driver tables, from ntdlib.
+// Nintendo R&D2's driver tables, from agblib.
 
 #pragma once
 
-#include "ntdlib/rd2/driver.h"
+#include "agblib/rd2/driver.h"
 
 namespace agbsf2::rd2
 {
 
-using ntdlib::rd2::DetectDriver;
-using ntdlib::rd2::DriverInfo;
-using ntdlib::rd2::DriverOverrides;
-using ntdlib::rd2::Effect;
-using ntdlib::rd2::SongCount;
-using ntdlib::rd2::SongEffect;
+using agblib::rd2::DetectDriver;
+using agblib::rd2::DriverInfo;
+using agblib::rd2::DriverOverrides;
+using agblib::rd2::Effect;
+using agblib::rd2::SongCount;
+using agblib::rd2::SongEffect;
 
 } // namespace agbsf2::rd2

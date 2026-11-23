@@ -11,7 +11,7 @@ on run argv
 	set droplet to load script ((POSIX file (item 1 of argv)) as alias)
 	set tool to item 2 of argv
 
-	-- The Finder hands the droplet aliases, and an alias needs a file that exists.
+	-- The Finder hands the droplet aliases, and an alias requires a file that exists.
 	set tempFolder to do shell script "mktemp -d"
 	set theFiles to {}
 	-- A folder's POSIX path ends in a slash. The program names the folder without it.

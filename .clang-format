@@ -44,28 +44,20 @@ InsertBraces: true
 EmptyLineBeforeAccessModifier: Always
 # Includes go in the guide's groups: the related header, C system headers, C++
 # standard library headers, other libraries' headers, then the project's
-# headers. Other libraries are xsflib, ntdlib and seqlib in quotes, and the
-# third-party libraries in the first three categories in angle brackets (SDK/ is
-# the foobar2000 SDK). OS headers, such as <windows.h>, count as C system
-# headers. In the code of xsflib, ntdlib or seqlib, remove that library from
-# the list. A test, such as foo_test.cpp, or a platform's file, such as
-# foo_mac.cpp, has foo.h as its related header.
+# headers. Other libraries are xsflib, ntdlib, seqlib and agblib, in quotes. OS
+# headers, such as <windows.h>, count as C system headers. A test, such as
+# foo_test.cpp, or a platform's file, such as foo_mac.cpp, has foo.h as its
+# related header.
 IncludeBlocks: Regroup
 IncludeIsMainRegex: '([-_](test|unittest)|_mac|_windows|_other)?$'
 IncludeCategories:
-  - Regex: '^<(zlib|zconf|zstd|lzma|bzlib)\.h>$'
-    Priority: 3
-  - Regex: '^<(FLAC|FLAC\+\+|teakra|SDK)/'
-    Priority: 3
-  - Regex: '^<sfizz\.hpp>$'
-    Priority: 3
   - Regex: '^<ext/.*\.h>'
     Priority: 2
   - Regex: '^<.*\.h>'
     Priority: 1
   - Regex: '^<.*'
     Priority: 2
-  - Regex: '^"(xsflib|ntdlib|seqlib)/'
+  - Regex: '^"(xsflib|ntdlib|seqlib|agblib)/'
     Priority: 3
   - Regex: '.*'
     Priority: 4

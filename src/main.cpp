@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 // Converts the music of GBA games with Konami's, Rare's, Quintet's, Nintendo R&D1's, Nintendo R&D2's, AlphaDream's,
-// Brownie Brown's, Ubisoft Milan's or Logik State's sound driver, Nintendo's MP2K or Krawall, to MIDI files and
-// SoundFonts.
+// Brownie Brown's, Ubisoft Milan's, Logik State's or Webfoot Technologies' sound driver, one of Frontline Studios' two
+// players, Nintendo's MP2K or Krawall, to MIDI files and SoundFonts.
 
 #include <algorithm>
 #include <cmath>
@@ -36,8 +36,7 @@ using namespace agbsf2;
 namespace
 {
 
-constexpr int kSongLimit = 4096;     // the highest number that --songs and --song-count accept
-constexpr int kFullMusicVolume = 64; // the highest volume that --music-volume accepts, the full volume of the driver
+constexpr int kSongLimit = 4096; // the highest number that --songs and --song-count accept
 
 // Prints the help text to `f`.
 void Usage(FILE* f)
@@ -67,8 +66,11 @@ void Usage(FILE* f)
                  "                        Brown's, 0-3 are the music's PSG channels, 4-7 the sound\n"
                  "                        effects' and 8 and up the sample channels, in Ubisoft\n"
                  "                        Milan's, 0-2 are the PSG channels and 9 the kit, in\n"
-                 "                        Krawall, the module's channels, 0-31, and in Logik\n"
-                 "                        State's, the module's channels, 0-7)\n"
+                 "                        Krawall, the module's channels, 0-31, in Logik\n"
+                 "                        State's, the module's channels, 0-7, in Webfoot\n"
+                 "                        Technologies', the song's channels, 0-14, and in\n"
+                 "                        Frontline Studios' players, the module's channels,\n"
+                 "                        0-3)\n"
                  "      --single-sf2      write one SoundFont for all songs\n"
                  "      --voice-channels  give each of the driver's sound channels a MIDI channel\n"
                  "                        (MP2K), so that notes stop where the game cuts them\n"
@@ -83,8 +85,9 @@ void Usage(FILE* f)
                  "      --info            print each driver's detected tables and songs, then\n"
                  "                        exit\n"
                  "      --driver NAME     use only konami, rare, quintet, rd1, rd2, alphadream,\n"
-                 "                        brownie, ubimilan, logikstate, krawall or mp2k, instead\n"
-                 "                        of every driver detection finds\n"
+                 "                        brownie, ubimilan, logikstate, webfoot, frontline_mod,\n"
+                 "                        frontline_xm, krawall or mp2k, instead of every driver\n"
+                 "                        detection finds\n"
                  "      --song-table ADDR    use this song table address (hex; in Nintendo R&D2's\n"
                  "                           driver, the address of the game's settings for it,\n"
                  "                           in Ubisoft Milan's, the sound bank, and in Krawall,\n"
@@ -92,8 +95,10 @@ void Usage(FILE* f)
                  "      --song-count N       use this many songs\n"
                  "      --sample-table ADDR  use this sample table address (hex; Konami's driver)\n"
                  "      --mix-rate HZ        use this DirectSound mixer rate (Konami's driver)\n"
-                 "      --music-volume N     play at this music volume, 1-64, not at the volume that\n"
-                 "                           the game sets at its start (Logik State's driver)\n"
+                 "      --music-volume N     play at this music volume, not at the volume that the\n"
+                 "                           game sets at its start: 1-64 in Logik State's driver\n"
+                 "                           (1-256 for GBAMOD30 modules), 1-8 in Webfoot\n"
+                 "                           Technologies'\n"
                  "      --trace SONG      print the driver model's state after each frame of SONG:\n"
                  "                        in Konami's driver, each track's output (frame track\n"
                  "                        pitch b2 vol trig flags key, and 2 pan fields, which\n"
@@ -135,7 +140,17 @@ void Usage(FILE* f)
                  "                        and PSG channel when it changes (frame h or q, the\n"
                  "                        channel, then the record in hex); in Logik State's,\n"
                  "                        the player's variables (frame g) and each mixer\n"
-                 "                        channel's record (frame c0), in hex, when they change\n"
+                 "                        channel's record (frame c0), in hex, when they change;\n"
+                 "                        in Webfoot Technologies', the order, row, speed and\n"
+                 "                        tempo (frame g), each channel's record (frame c0) and\n"
+                 "                        each voice's record (frame v0), in hex, when they\n"
+                 "                        change; in Frontline Studios' MOD player, the order,\n"
+                 "                        row, speed, music volume and fade step (frame g) and\n"
+                 "                        each channel's record (frame c0), in hex, when they\n"
+                 "                        change; in Frontline Studios' XM-like player, the\n"
+                 "                        order, row, tick, speed, BPM and samples to the next\n"
+                 "                        tick (frame g) and each channel's record (frame c0), in\n"
+                 "                        hex, when they change\n"
                  "      --trace-frames N  frames to trace (default: 3000)\n"
                  "  -q, --quiet           only print warnings and errors\n"
                  "  -h, --help            show this help\n"
@@ -291,16 +306,12 @@ bool CheckOptions(Options& o)
         o.overrides.driver = Driver::kKonami;
     }
 
-    // Only Logik State's driver has a music volume to override.
-    if (o.overrides.music_volume)
+    // Only Logik State's and Webfoot Technologies' drivers have a music volume to override. Detection then looks for
+    // those two alone.
+    if (o.overrides.music_volume && o.overrides.driver != Driver::kAny && !TakesMusicVolume(o.overrides.driver))
     {
-        if (o.overrides.driver != Driver::kAny && o.overrides.driver != Driver::kLogikState)
-        {
-            OptionError("--music-volume is for Logik State's driver");
-            return false;
-        }
-
-        o.overrides.driver = Driver::kLogikState;
+        OptionError("--music-volume is for Logik State's and Webfoot Technologies' drivers");
+        return false;
     }
 
     return true;
@@ -408,7 +419,7 @@ std::optional<int> ParseArgs(const std::vector<std::string>& args, Options& o)
             {
                 OptionError(
                     "--driver needs konami, rare, quintet, rd1, rd2, alphadream, brownie, ubimilan, logikstate, "
-                    "krawall or mp2k");
+                    "webfoot, frontline_mod, frontline_xm, krawall or mp2k");
                 return 2;
             }
         }
@@ -461,9 +472,9 @@ std::optional<int> ParseArgs(const std::vector<std::string>& args, Options& o)
             {
                 return 2;
             }
-            if (!ParseNumber(v, n, 10) || n < 1 || n > kFullMusicVolume)
+            if (!ParseNumber(v, n, 10) || n < 1 || n > kTopMusicVolume)
             {
-                OptionError("--music-volume needs a volume from 1 to " + std::to_string(kFullMusicVolume));
+                OptionError("--music-volume needs a volume from 1 to " + std::to_string(kTopMusicVolume));
                 return 2;
             }
 
@@ -518,8 +529,8 @@ std::optional<int> ParseArgs(const std::vector<std::string>& args, Options& o)
     return std::nullopt;
 }
 
-// Returns a time as minutes and seconds, such as 1:35.23. It's rounded to hundredths before it's split, so that 59.999
-// seconds reads 1:00.00 and not 0:60.00.
+// Returns a time as minutes and seconds, such as 1:35.23. The time is rounded to hundredths before it's split. 59.999
+// seconds then reads 1:00.00, not 0:60.00.
 std::string TimeString(double seconds)
 {
     const long long hundredths = std::llround(seconds * 100);
@@ -529,10 +540,10 @@ std::string TimeString(double seconds)
     return b;
 }
 
-// Prints the --info report: the ROM's title, then for each driver the game has, its detection log and warnings,
-// followed by each song's data address, note-playing track count, length and loop points, calculated with the current
-// conversion options. The drivers come in the order detection finds them. With --driver, --song-table or --song-count
-// there's only one.
+// Prints the --info report: the ROM's title, then each driver that the game has. The part of a driver gives its
+// detection log and warnings, then each song's data address, its count of tracks that play notes, its length and its
+// loop points. The current conversion options set the lengths and the loops. The drivers come in the order that
+// detection finds them. With --driver, --song-table or --song-count, there's only one.
 void PrintInfo(const Rom& rom, const std::vector<FoundMusic>& drivers, const std::vector<std::string>& unread,
                const Options& o)
 {
@@ -593,8 +604,8 @@ void PrintInfo(const Rom& rom, const std::vector<FoundMusic>& drivers, const std
     }
 }
 
-// Prints the driver model's state after each frame of the song --trace names, which the driver's
-// tools/*/compare_trace.py compares with the driver.
+// Prints the driver model's state after each frame of the song --trace names, for a comparison with the game's
+// driver run under an emulator.
 int Trace(const Music& music, const Options& o)
 {
     std::vector<std::string> warnings;
@@ -618,7 +629,7 @@ int Trace(const Music& music, const Options& o)
     return 0;
 }
 
-// Reports the conversion result, including songs skipped because they play no notes. `song_label` comes before the
+// Reports the conversion result, including songs skipped because they make no sound. `song_label` comes before the
 // song's number. `version` comes after it: a space and the name of the song's version, or nothing. `tracks_chosen` is
 // true when --tracks chose the tracks.
 void ReportSong(const std::string& song_label, int song, const std::string& version, const SongReport& r,
@@ -627,7 +638,7 @@ void ReportSong(const std::string& song_label, int song, const std::string& vers
     if (r.silent)
     {
         std::printf("%s %2d%s: %s, skipped\n", song_label.c_str(), song, version.c_str(),
-                    tracks_chosen ? "no notes on the chosen tracks" : "plays no notes");
+                    tracks_chosen ? "no sound on the chosen tracks" : "makes no sound");
         return;
     }
 
@@ -648,7 +659,7 @@ void ReportSong(const std::string& song_label, int song, const std::string& vers
 struct Tally
 {
     int converted = 0;
-    int silent = 0;   // songs without notes on the chosen tracks, which aren't written
+    int silent = 0;   // songs that make no sound on the chosen tracks and aren't written
     int failures = 0; // songs that failed, and files that couldn't be written
 };
 
@@ -658,9 +669,9 @@ bool Picked(const Options& o, const Music& music, int song)
     return (o.songs.empty() || o.songs.count(song)) && music.HasSong(song);
 }
 
-// Converts the songs of one of a game's drivers to the files that `settings` names, and adds them to `tally`. Messages
-// put `song_label` before a song's number, and those on stderr start with `prefix`, apart from errors about the whole
-// file, which start with its name, `label`.
+// Converts the songs of one of a game's drivers to the files that `settings` names, and counts them in `tally`.
+// Messages put `song_label` before a song's number. Those on stderr start with `prefix`. An error about the whole file
+// starts with the file's name, `label`, instead.
 void ConvertSongs(Music& music, const ConvertSettings& settings, const std::string& song_label,
                   const std::string& label, const std::string& prefix, const Options& o, Tally& tally)
 {
@@ -792,7 +803,7 @@ void PrintTally(const Tally& tally, const fs::path& out_dir)
     std::printf("converted %d song%s", tally.converted, tally.converted == 1 ? "" : "s");
     if (tally.silent)
     {
-        std::printf(" (%d without notes skipped)", tally.silent);
+        std::printf(" (%d silent, skipped)", tally.silent);
     }
     if (tally.failures)
     {
@@ -803,9 +814,9 @@ void PrintTally(const Tally& tally, const fs::path& out_dir)
     std::printf("\noutput: %s\n", Utf8(fs::absolute(out_dir, ec).lexically_normal()).c_str());
 }
 
-// Converts one input file, which messages call `label`. `done` lists the ROM images already converted or listed in this
-// run. `failed` lists those in which detection found no music it could read, and those whose output folder couldn't be
-// created. With the two lists, detection runs once for a set of several mini-GSFs.
+// Converts one input file. Messages call the file `label`. `done` lists the ROM images already converted or listed in
+// this run. `failed` lists those in which detection found no music it could read, and those whose output folder
+// couldn't be created. With the two lists, detection runs once for a set of several mini-GSFs.
 int ConvertFile(const std::string& input, const std::string& label, const Options& o, std::vector<fs::path>& done,
                 std::vector<fs::path>& failed)
 {
@@ -817,9 +828,9 @@ int ConvertFile(const std::string& input, const std::string& label, const Option
         return 1;
     }
 
-    // A mini-GSF only selects a song of its library, so the output is the library's music and is named after it.
-    // Compare file identities so case differences and links don't cause duplicate conversions. A set's later mini-GSFs
-    // skip detection, which can take seconds.
+    // A mini-GSF only selects a song of its library. The output is the library's music and is named after the library.
+    // Comparing the files' identities keeps case differences and links from causing duplicate conversions. A set's
+    // later mini-GSFs skip detection. Detection can take seconds.
     const fs::path source = PathFromUtf8(rom.GsfLibrary().empty() ? input : rom.GsfLibrary());
     if (Listed(done, source))
     {
@@ -838,8 +849,8 @@ int ConvertFile(const std::string& input, const std::string& label, const Option
         return 1;
     }
 
-    // A game can have more than one driver. The report covers each, and a conversion converts each one's songs, but
-    // --trace follows the first, and the table overrides go to the first alone.
+    // A game can have more than one driver. The report covers each driver, and a conversion converts the songs of each.
+    // --trace follows the first driver, and the table overrides apply to the first driver alone.
     std::vector<std::string> unread;
     std::vector<FoundMusic> drivers = OpenAllMusic(rom, o.overrides, error, unread);
     if (drivers.empty())
@@ -896,8 +907,8 @@ int ConvertFile(const std::string& input, const std::string& label, const Option
 
     done.push_back(source);
 
-    // Report the game. Warnings are printed even with --quiet, which leaves out the line that names the file, so then
-    // the warnings and errors about the file start with its name.
+    // Report the game. Warnings are printed even with --quiet. --quiet leaves out the line that names the file. The
+    // warnings and errors about the file then start with its name.
     const std::string prefix = o.quiet ? label + ": " : "  ";
     if (!o.quiet)
     {
@@ -928,8 +939,8 @@ int ConvertFile(const std::string& input, const std::string& label, const Option
                      prefix.c_str());
     }
 
-    // The first driver's files are named after the game, and each other driver's after the game and the driver, whose
-    // name messages put before its songs' numbers.
+    // The files of the first driver are named after the game. The files of each other driver are named after the game
+    // and the driver. Messages put that driver's name before the numbers of its songs.
     Tally tally;
     for (size_t d = 0; d < drivers.size(); d++)
     {
@@ -966,9 +977,9 @@ int Run(const std::vector<std::string>& args)
             std::printf("\n");
         }
 
-        // On Windows a path that isn't valid UTF-8, such as a GSF's _lib name in another encoding, throws, and so does
-        // running out of memory. That ends this file's conversion, but not the others'. The message starts with the
-        // file's name, like the first line about any file, which the macOS droplet relies on.
+        // On Windows, a path that isn't valid UTF-8 throws, such as a GSF's _lib name in another encoding. Running out
+        // of memory throws too. Either ends the conversion of this file, but not of the others. The message starts with
+        // the file's name, like the first line about any file. The macOS droplet relies on that.
         std::string label = o.inputs[i];
         try
         {

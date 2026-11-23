@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 
-// The ROM, from ntdlib.
+// The ROM, from agblib.
 
 #pragma once
 
-#include "ntdlib/agb/rom.h"
+#include "agblib/agb/rom.h"
 
 namespace agbsf2
 {
 
-using ntdlib::agb::Rom;
+using agblib::agb::Rom;
 
 } // namespace agbsf2

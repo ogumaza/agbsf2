@@ -14,32 +14,42 @@
 #include <utility>
 #include <vector>
 
+#include "agblib/agb/trace.h"
+
 #include "alphadream/convert.h"
 #include "alphadream/driver.h"
 #include "alphadream/sequencer.h"
 #include "alphadream/soundfont.h"
 #include "rom.h"
 #include "sf2.h"
-#include "trace.h"
 
 namespace agbsf2::alphadream
 {
 namespace
 {
 
-// The bytes of a track record, and of a channel record as the trace prints it.
-using TrackBytes = std::array<uint8_t, 32>;
-using ChannelBytes = std::array<uint8_t, 12>;
+using agblib::agb::PrintChanged;
+using agblib::agb::PrintHex;
 
-// Bytes 4 to 7 of a track record contain the address of the track data. The trace leaves them out. So does
-// driver_emu.py.
+// The bytes of a track record.
+using TrackBytes = std::array<uint8_t, 32>;
+
+// Returns a channel's record as the trace prints it.
+template <typename C>
+std::vector<uint8_t> RecordBytes(const C& channel)
+{
+    const std::array<uint8_t, 12> bytes = channel.TraceBytes();
+    return std::vector<uint8_t>(bytes.begin(), bytes.end());
+}
+
+// Bytes 4 to 7 of a track record contain the address of the track data. The trace leaves them out.
 constexpr size_t kDataAddressStart = 4;
 constexpr size_t kDataAddressEnd = 8;
 
 class AlphaDreamMusic : public Music
 {
 public:
-    // Keeps a reference to `rom`, which has to outlive this.
+    // Keeps a reference to `rom`. The ROM has to outlive this.
     AlphaDreamMusic(const Rom& rom, DriverInfo info)
         : Music("AlphaDream's sound driver", info.log, info.warnings), rom_(rom), info_(std::move(info))
     {
@@ -73,7 +83,7 @@ public:
 
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
-        ntdlib::sequence_export::agb::Sf2File f;
+        agblib::sequence_export::agb::Sf2File f;
         shared_->Build(rom_, info_, f);
         return WriteSoundfont(f, rom_, path, error);
     }
@@ -83,8 +93,8 @@ public:
         return alphadream::DumpSong(rom_, info_, song, path, error);
     }
 
-    // Writes the model's state after each frame, as driver_emu.py's trace does: the player while a track plays, each
-    // track that plays, and each sample channel's record and each square's and the noise's record when it changes.
+    // Writes the model's state after each frame: the player while a track plays, each track that plays, and each
+    // sample channel's record and each square's and the noise's record when it changes.
     bool Trace(int song, long long frames, std::FILE* out, std::vector<std::string>& warnings) const override
     {
         Song s;
@@ -94,8 +104,8 @@ public:
         }
 
         Sequencer seq(rom_, info_, s);
-        std::array<ChannelBytes, kSampleTracks> last{};
-        std::array<ChannelBytes, kTracks - kSampleTracks> last_psg{};
+        std::array<std::vector<uint8_t>, kSampleTracks> last;
+        std::array<std::vector<uint8_t>, kTracks - kSampleTracks> last_psg;
         for (long long f = 0; f < frames; f++)
         {
             seq.Step();
@@ -128,30 +138,14 @@ public:
 
             for (int c = 0; c < kSampleTracks; c++)
             {
-                const ChannelBytes b = seq.Channel(c).TraceBytes();
-                if (b == last[size_t(c)])
-                {
-                    continue;
-                }
-
-                last[size_t(c)] = b;
-                std::fprintf(out, "%lld h %d ", f, c);
-                PrintHex(out, b);
-                std::fprintf(out, "\n");
+                const std::string name = "h " + std::to_string(c);
+                PrintChanged(out, f, name.c_str(), RecordBytes(seq.Channel(c)), last[size_t(c)]);
             }
 
             for (int c = 0; c < kTracks - kSampleTracks; c++)
             {
-                const ChannelBytes b = seq.Psg(c).TraceBytes();
-                if (b == last_psg[size_t(c)])
-                {
-                    continue;
-                }
-
-                last_psg[size_t(c)] = b;
-                std::fprintf(out, "%lld q %d ", f, c);
-                PrintHex(out, b);
-                std::fprintf(out, "\n");
+                const std::string name = "q " + std::to_string(c);
+                PrintChanged(out, f, name.c_str(), RecordBytes(seq.Psg(c)), last_psg[size_t(c)]);
             }
         }
 

@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 
-// Ubisoft Milan's sequence format, from ntdlib.
+// Ubisoft Milan's sequence format, from agblib.
 
 #pragma once
 
-#include "ntdlib/ubimilan/song.h"
+#include "agblib/ubimilan/song.h"
 
 namespace agbsf2::ubimilan
 {
 
-using ntdlib::ubimilan::DumpSong;
+using agblib::ubimilan::DumpSong;
 
 } // namespace agbsf2::ubimilan

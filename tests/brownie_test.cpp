@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 
-// Unit tests of the Brownie Brown Music class. The tests in ntdlib check the driver. These tests build synthetic
+// Unit tests of the Brownie Brown Music class. The tests in agblib check the driver. These tests build synthetic
 // cartridges in memory. No game ROM is needed.
 
 #include <memory>
 #include <string>
 
-#include "ntdlib/testing/brownie_cart.h"
+#include "agblib/testing/brownie_cart.h"
 #include "seqlib/testing/check.h"
 
 #include "driver_tests.h"
@@ -18,9 +18,9 @@ namespace agbsf2::brownie
 namespace
 {
 
-using ntdlib::testing::brownie_cart::Cart;
-using ntdlib::testing::brownie_cart::kPsgHold;
-using ntdlib::testing::brownie_cart::kSongTable;
+using agblib::testing::brownie_cart::Cart;
+using agblib::testing::brownie_cart::kPsgHold;
+using agblib::testing::brownie_cart::kSongTable;
 
 // OpenMusic() finds the driver from its code. A game without the driver's code isn't read, even with the song table
 // given, and only --driver brownie makes that an error.

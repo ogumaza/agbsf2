@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 
-// Quintet's model of the driver, from ntdlib.
+// Quintet's model of the driver, from agblib.
 
 #pragma once
 
-#include "ntdlib/quintet/sequencer.h"
+#include "agblib/quintet/sequencer.h"
 
 namespace agbsf2::quintet
 {
 
-using ntdlib::quintet::Channel;
-using ntdlib::quintet::Sequencer;
+using agblib::quintet::Channel;
+using agblib::quintet::Sequencer;
 
 } // namespace agbsf2::quintet

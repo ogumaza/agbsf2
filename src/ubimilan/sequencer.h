@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 
-// Ubisoft Milan's sequencer, from ntdlib.
+// Ubisoft Milan's sequencer, from agblib.
 
 #pragma once
 
-#include "ntdlib/ubimilan/sequencer.h"
+#include "agblib/ubimilan/sequencer.h"
 
 namespace agbsf2::ubimilan
 {
 
-using ntdlib::ubimilan::Sequencer;
+using agblib::ubimilan::Sequencer;
 
 } // namespace agbsf2::ubimilan

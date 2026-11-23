@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-// Unit tests of the Quintet Music class. The tests in ntdlib check the driver. These tests build synthetic cartridges
+// Unit tests of the Quintet Music class. The tests in agblib check the driver. These tests build synthetic cartridges
 // in memory. No game ROM is needed.
 
 #include <array>
@@ -9,10 +9,10 @@
 #include <string>
 #include <vector>
 
-#include "ntdlib/agb/files.h"
-#include "ntdlib/quintet/driver.h"
-#include "ntdlib/testing/agb_cart.h"
-#include "ntdlib/testing/quintet_cart.h"
+#include "agblib/agb/files.h"
+#include "agblib/quintet/driver.h"
+#include "agblib/testing/agb_cart.h"
+#include "agblib/testing/quintet_cart.h"
 #include "seqlib/testing/check.h"
 
 #include "driver_tests.h"
@@ -24,13 +24,13 @@ namespace agbsf2::quintet
 namespace
 {
 
-using ntdlib::agb::Utf8;
-using ntdlib::quintet::Revision;
-using ntdlib::testing::quintet_cart::Cart;
-using ntdlib::testing::quintet_cart::Channel;
-using ntdlib::testing::quintet_cart::FileAddress;
-using ntdlib::testing::quintet_cart::kMusicFile;
-using ntdlib::testing::quintet_cart::Song;
+using agblib::agb::Utf8;
+using agblib::quintet::Revision;
+using agblib::testing::quintet_cart::Cart;
+using agblib::testing::quintet_cart::Channel;
+using agblib::testing::quintet_cart::FileAddress;
+using agblib::testing::quintet_cart::kMusicFile;
+using agblib::testing::quintet_cart::Song;
 
 // OpenMusic() finds Quintet's driver from its code. A game without the driver's code isn't read, even with the music
 // file given, and only --driver quintet makes that an error.
@@ -72,7 +72,7 @@ void TestLoadedFiles()
     std::string error;
     const std::unique_ptr<Music> music = agbsf2::OpenMusic(rom, Overrides(), error);
     ConvertSettings opt;
-    opt.out_dir = Utf8(ntdlib::testing::agb_files::TempFolderPath());
+    opt.out_dir = Utf8(agblib::testing::agb_files::TempFolderPath());
     opt.base_name = "loaded_files";
     SEQLIB_REQUIRE(music && music->SongCount() == 4);
 

@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 
-// MP2K's songs and voices, from ntdlib.
+// MP2K's songs and voices, from agblib.
 
 #pragma once
 
-#include "ntdlib/mp2k/song.h"
+#include "agblib/mp2k/song.h"
 
 namespace agbsf2::mp2k
 {
 
-using ntdlib::mp2k::DumpSong;
-using ntdlib::mp2k::ReadSong;
-using ntdlib::mp2k::SongHeader;
+using agblib::mp2k::DumpSong;
+using agblib::mp2k::ReadSong;
+using agblib::mp2k::SongHeader;
 
 } // namespace agbsf2::mp2k

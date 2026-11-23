@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 
-// Nintendo R&D2's conversion, from ntdlib.
+// Nintendo R&D2's conversion, from agblib.
 
 #pragma once
 
-#include "ntdlib/sequence_export/rd2/convert.h"
+#include "agblib/sequence_export/rd2/convert.h"
 
 namespace agbsf2::rd2
 {
 
-using ntdlib::sequence_export::rd2::ConvertSong;
-using ntdlib::sequence_export::rd2::InspectSong;
-using ntdlib::sequence_export::rd2::SongVersions;
+using agblib::sequence_export::rd2::ConvertSong;
+using agblib::sequence_export::rd2::InspectSong;
+using agblib::sequence_export::rd2::SongVersions;
 
 } // namespace agbsf2::rd2

@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 
-// Rare's tune format: headers, track commands and instruments, from ntdlib.
+// Rare's tune format: headers, track commands and instruments, from agblib.
 
 #pragma once
 
-#include "ntdlib/rare/song.h"
+#include "agblib/rare/song.h"
 
 namespace agbsf2::rare
 {
 
-using ntdlib::rare::Format;
-using ntdlib::rare::ReadTuneHeader;
-using ntdlib::rare::TuneHeader;
+using agblib::rare::Format;
+using agblib::rare::ReadTuneHeader;
+using agblib::rare::TuneHeader;
 
 } // namespace agbsf2::rare

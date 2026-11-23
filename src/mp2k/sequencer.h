@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 
-// MP2K's sequencer, from ntdlib.
+// MP2K's sequencer, from agblib.
 
 #pragma once
 
-#include "ntdlib/mp2k/sequencer.h"
+#include "agblib/mp2k/sequencer.h"
 
 namespace agbsf2::mp2k
 {
 
-using ntdlib::mp2k::Channel;
-using ntdlib::mp2k::kChannelCount;
-using ntdlib::mp2k::kFirstPsgChannel;
-using ntdlib::mp2k::Sequencer;
+using agblib::mp2k::Channel;
+using agblib::mp2k::kChannelCount;
+using agblib::mp2k::kFirstPsgChannel;
+using agblib::mp2k::Sequencer;
 
 } // namespace agbsf2::mp2k

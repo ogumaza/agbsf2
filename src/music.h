@@ -10,8 +10,10 @@
 #include <string>
 #include <vector>
 
-#include "ntdlib/agb/song_plan.h"
-#include "ntdlib/sequence_export/agb/settings.h"
+#include "agblib/agb/song_plan.h"
+#include "agblib/frontline_mod/driver.h"
+#include "agblib/frontline_xm/driver.h"
+#include "agblib/sequence_export/agb/settings.h"
 
 #include "program.h"
 #include "rom.h"
@@ -34,7 +36,15 @@ enum class Driver
     kRd1,
     kAlphaDream,
     kLogikState,
+    kWebfoot,
+    kFrontlineMod,
+    kFrontlineXm,
 };
+
+// The highest volume that --music-volume accepts, in 64ths: the top of the mixers of Logik State's builds for GBAMOD30
+// modules at the master volume of 64. The builds for GBAMOD2. and GBAMOD1. modules take up to 64. OpenMusic() in
+// logikstate/music.cpp says where the top comes from. Webfoot Technologies' driver takes up to 8, in 8ths.
+constexpr int kTopMusicVolume = 256;
 
 // Settings that override detection, from the command line. A value of 0, or kAny for the driver, leaves it to
 // detection.
@@ -45,11 +55,13 @@ struct Overrides
     int song_count = 0;
     uint32_t sample_table = 0; // Konami's driver only
     double mix_rate = 0;       // Konami's driver only
-    int music_volume = 0;      // Logik State's driver only: 1 to 64, or 0 for the volume that the game sets
+    // Logik State's and Webfoot Technologies' drivers only: 1 to kTopMusicVolume, or 0 for the volume that the game
+    // sets.
+    int music_volume = 0;
 };
 
 // The settings for converting songs. The files' comments name agbsf2.
-struct ConvertSettings : ntdlib::sequence_export::agb::ConvertSettings
+struct ConvertSettings : agblib::sequence_export::agb::ConvertSettings
 {
     ConvertSettings()
     {
@@ -57,8 +69,8 @@ struct ConvertSettings : ntdlib::sequence_export::agb::ConvertSettings
     }
 };
 
-using ntdlib::sequence_export::agb::SongReport;
-using ntdlib::sequence_export::agb::SongVersion;
+using agblib::sequence_export::agb::SongReport;
+using agblib::sequence_export::agb::SongVersion;
 
 // Access to a game's songs through its sound driver. Each driver's class passes the driver's name and what detection
 // found to the constructor.
@@ -76,16 +88,19 @@ public:
     // Returns the number of entries in the game's song table.
     virtual int SongCount() const = 0;
 
-    // Returns false if entry `song` of the song table is empty, so there's no song to convert.
+    // Returns false if entry `song` of the song table is empty. An empty entry has no song to convert.
     virtual bool HasSong(int song) const = 0;
 
     // Returns the versions of a song that ConvertSong() writes, each to separate files. The first is the song as the
-    // game starts it. It has no name or suffix. Only the drivers of Rare, Nintendo R&D2, Konami and Ubisoft Milan
-    // return more. Donkey Kong Country 3 plays Enchanted Riverbank above water and under water. Super Mario Advance 2
-    // mutes one track of a sequence for one music number and another track for another. That game also plays a track of
-    // four sequences only while the player rides Yoshi. Two Mermaid Melody games play some songs both as a request
-    // leaves them and in a live stage. The live stage changes some of their tracks. The Mummy starts most of its pieces
-    // with the kit on channel 9 switched off. Each of them has a second version with the kit.
+    // game starts it. It has no suffix. Its name is empty, apart from a song of Logik State's GBAMOD1 modules or of
+    // Frontline Studios' MOD player. Such a song is a part of a module. Its name gives the order that the part starts
+    // at, and says whether the part is a jingle of a GBAMOD1 module or a part that the game never starts. Only the
+    // drivers of Rare, Nintendo R&D2, Konami and Ubisoft Milan return more. Donkey Kong Country 3 plays Enchanted
+    // Riverbank above water and under water. Super Mario Advance 2 mutes one track of a sequence for one music number
+    // and another track for another. That game also plays a track of four sequences only while the player rides Yoshi.
+    // Two Mermaid Melody games play some songs both as a request leaves them and in a live stage. The live stage
+    // changes some of their tracks. The Mummy starts most of its pieces with the kit on channel 9 switched off. Each of
+    // them has a second version with the kit.
     virtual std::vector<SongVersion> Versions(int song) const;
 
     // Works out a song's length, loop and tracks the way ConvertSong() does, without writing anything.
@@ -116,9 +131,8 @@ public:
     // give every number the width of its largest song number.
     virtual std::string FileNumber(int song) const;
 
-    // Writes the state of the driver model to `out` after each of the first `frames` frames of a song, in the format of
-    // the driver's tools/*/driver_emu.py trace, and adds the song's problems to `warnings`. Returns false if the song
-    // can't be played.
+    // Writes the state of the driver model to `out` after each of the first `frames` frames of a song, and adds the
+    // song's problems to `warnings`. Returns false if the song can't be played.
     virtual bool Trace(int song, long long frames, std::FILE* out, std::vector<std::string>& warnings) const = 0;
 
 protected:
@@ -138,14 +152,17 @@ struct FoundMusic
     std::unique_ptr<Music> music;
 };
 
+// Returns true if --music-volume can set the music volume of `driver`.
+bool TakesMusicVolume(Driver driver);
+
 // Returns the name that --driver takes for a driver, such as "mp2k", or an empty one for kAny.
 const char* DriverName(Driver driver);
 
 // Returns the driver that --driver calls `name`, or kAny if no driver has that name.
 Driver DriverNamed(const std::string& name);
 
-// Finds the sound driver of the game in `rom`, which has to outlive the result, and reads its tables. Returns null and
-// sets `error` if the game has none of the drivers, or the tables of the first one it finds can't be read.
+// Finds the sound driver of the game in `rom` and reads its tables. `rom` has to outlive the result. Returns null and
+// sets `error` if the game has none of the drivers, or if the tables of the first driver that it finds can't be read.
 std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std::string& error);
 
 // Finds every sound driver that `overrides` allows in the game in `rom`, and reads their tables. A game can have more
@@ -155,11 +172,11 @@ std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std
 std::vector<FoundMusic> OpenAllMusic(const Rom& rom, const Overrides& overrides, std::string& error,
                                      std::vector<std::string>& unread);
 
-using ntdlib::sequence_export::agb::SongNumber;
-using ntdlib::sequence_export::agb::SongStem;
+using agblib::sequence_export::agb::SongNumber;
+using agblib::sequence_export::agb::SongStem;
 
-// Each driver's part of OpenMusic(), which looks for that driver only. It returns null and sets `error` if the driver's
-// tables can't be read, or returns null and leaves `error` empty if the game shows no sign of the driver.
+// Each driver's part of OpenMusic() looks for that driver only. It returns null and sets `error` if the driver's tables
+// can't be read, or returns null and leaves `error` empty if the game shows no sign of the driver.
 namespace konami
 {
 
@@ -232,6 +249,38 @@ std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std
 
 namespace logikstate
 {
+
 std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std::string& error);
+
 } // namespace logikstate
+
+namespace webfoot
+{
+
+std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std::string& error);
+
+} // namespace webfoot
+
+namespace frontline_mod
+{
+
+std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std::string& error);
+
+// Returns the Music of the player that `info` describes. OpenMusic() returns it after detection. The tests make one
+// from synthetic data.
+std::unique_ptr<Music> MakeMusic(const Rom& rom, agblib::frontline_mod::DriverInfo info);
+
+} // namespace frontline_mod
+
+namespace frontline_xm
+{
+
+std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std::string& error);
+
+// Returns the Music of the player that `info` describes. OpenMusic() returns it after detection. The tests make one
+// from synthetic data.
+std::unique_ptr<Music> MakeMusic(const Rom& rom, agblib::frontline_xm::DriverInfo info);
+
+} // namespace frontline_xm
+
 } // namespace agbsf2

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 
-// The SoundFonts' writer, from ntdlib.
+// The SoundFont writer, from agblib.
 
 #pragma once
 
 #include <string>
 
-#include "ntdlib/sequence_export/agb/sf2.h"
+#include "agblib/sequence_export/agb/sf2.h"
 
 #include "program.h"
 #include "rom.h"
@@ -16,9 +16,9 @@ namespace agbsf2
 
 namespace sf2 = seqlib::sf2;
 
-// Writes the shared SoundFont `f` to `path`, with agbsf2 as its program and the game's title, then `detail`, as its
-// name.
-inline bool WriteSoundfont(ntdlib::sequence_export::agb::Sf2File& f, const Rom& rom, const std::string& path,
+// Writes the shared SoundFont `f` to `path`. The SoundFont names agbsf2 as its program. Its name is the game's title,
+// then `detail`.
+inline bool WriteSoundfont(agblib::sequence_export::agb::Sf2File& f, const Rom& rom, const std::string& path,
                            std::string& error, const std::string& detail = "")
 {
     f.program = kProgramName;

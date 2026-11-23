@@ -26,8 +26,8 @@ namespace
 class QuintetMusic : public Music
 {
 public:
-    // Keeps a reference to `rom`, which has to outlive this. A game with several music files gets a DriverInfo for
-    // each, numbered after the one before.
+    // Keeps a reference to `rom`. The ROM has to outlive this. A game with several music files gets a DriverInfo for
+    // each file. The songs of a file are numbered after those of the file before.
     QuintetMusic(const Rom& rom, const DriverInfo& info)
         : Music("Quintet's sound driver", info.log, info.warnings), rom_(rom), infos_(ReadMusicFiles(rom, info))
     {

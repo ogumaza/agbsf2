@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 
-// Rare's driver tables, from ntdlib.
+// Rare's driver tables, from agblib.
 
 #pragma once
 
-#include "ntdlib/rare/driver.h"
+#include "agblib/rare/driver.h"
 
 namespace agbsf2::rare
 {
 
-using ntdlib::rare::DetectDriver;
-using ntdlib::rare::DriverInfo;
-using ntdlib::rare::DriverOverrides;
-using ntdlib::rare::TuneAddress;
+using agblib::rare::DetectDriver;
+using agblib::rare::DriverInfo;
+using agblib::rare::DriverOverrides;
+using agblib::rare::TuneAddress;
 
 } // namespace agbsf2::rare

@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 
-// Rare's SoundFont instruments, from ntdlib.
+// Rare's SoundFont instruments, from agblib.
 
 #pragma once
 
-#include "ntdlib/sequence_export/rare/soundfont.h"
+#include "agblib/sequence_export/rare/soundfont.h"
 
 namespace agbsf2::rare
 {
 
-using ntdlib::sequence_export::rare::SkipDrumBank;
-using ntdlib::sequence_export::rare::SoundfontBuilder;
+using agblib::sequence_export::rare::SkipDrumBank;
+using agblib::sequence_export::rare::SoundfontBuilder;
 
 } // namespace agbsf2::rare

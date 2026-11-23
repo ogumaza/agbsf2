@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 
-// Unit tests of the Rare Music class. The tests in ntdlib check the driver. These tests build synthetic cartridges in
+// Unit tests of the Rare Music class. The tests in agblib check the driver. These tests build synthetic cartridges in
 // memory. No game ROM is needed.
 
 #include <cstdint>
 #include <memory>
 #include <string>
 
-#include "ntdlib/rare/song.h"
-#include "ntdlib/testing/rare_cart.h"
+#include "agblib/rare/song.h"
+#include "agblib/testing/rare_cart.h"
 #include "seqlib/testing/check.h"
 
 #include "driver_tests.h"
@@ -20,11 +20,11 @@ namespace agbsf2::rare
 namespace
 {
 
-using ntdlib::rare::Format;
-using ntdlib::testing::rare_cart::Cart;
-using ntdlib::testing::rare_cart::kTuneTable;
-using ntdlib::testing::rare_cart::Saw;
-using ntdlib::testing::rare_cart::Track;
+using agblib::rare::Format;
+using agblib::testing::rare_cart::Cart;
+using agblib::testing::rare_cart::kTuneTable;
+using agblib::testing::rare_cart::Saw;
+using agblib::testing::rare_cart::Track;
 
 // The tune that the game plays by the water has a version above water and one under water. The Music class returns
 // both.

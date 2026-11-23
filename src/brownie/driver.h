@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: MIT
 
-// Brownie Brown's driver tables, from ntdlib.
+// Brownie Brown's driver tables, from agblib.
 
 #pragma once
 
-#include "ntdlib/brownie/driver.h"
+#include "agblib/brownie/driver.h"
 
 namespace agbsf2::brownie
 {
 
-using ntdlib::brownie::DetectDriver;
-using ntdlib::brownie::DriverInfo;
-using ntdlib::brownie::DriverOverrides;
-using ntdlib::brownie::PsgTuning;
-using ntdlib::brownie::SongAddress;
+using agblib::brownie::DetectDriver;
+using agblib::brownie::DriverInfo;
+using agblib::brownie::DriverOverrides;
+using agblib::brownie::PsgTuning;
+using agblib::brownie::SongAddress;
 
 } // namespace agbsf2::brownie

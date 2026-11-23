@@ -11,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+#include "agblib/agb/trace.h"
+
 #include "program.h"
 #include "rd1/convert.h"
 #include "rd1/driver.h"
@@ -19,21 +21,21 @@
 #include "rd1/soundfont.h"
 #include "rom.h"
 #include "sf2.h"
-#include "trace.h"
 
 namespace agbsf2::rd1
 {
 namespace
 {
 
-// The player volume that the trace prints. The model keeps no player volume. driver_emu.py prints the player field at
-// +0x26.
+using agblib::agb::PrintHex;
+
+// The player volume that the trace prints for the player field at +0x26. The model keeps no player volume.
 constexpr int kTraceVolume = 256;
 
 class Rd1Music : public Music
 {
 public:
-    // Keeps a reference to `rom`, which has to outlive this.
+    // Keeps a reference to `rom`. The ROM has to outlive this.
     Rd1Music(const Rom& rom, DriverInfo info)
         : Music("Nintendo R&D1's MIDI-file sound driver", info.log, info.warnings), rom_(rom), info_(std::move(info))
     {
@@ -66,7 +68,7 @@ public:
         return rd1::ConvertSong(rom_, info_, song, settings, shared_.get());
     }
 
-    // The shared SoundFont holds the instruments of every song together.
+    // The shared SoundFont contains the instruments of every song together.
     void ShareSoundfont(const ConvertSettings&) override
     {
         shared_ = std::make_unique<InstrumentSet>(rom_, info_);
@@ -74,7 +76,7 @@ public:
 
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
-        ntdlib::sequence_export::agb::Sf2File f = shared_->Build();
+        agblib::sequence_export::agb::Sf2File f = shared_->Build();
         return WriteSoundfont(f, rom_, path, error);
     }
 
@@ -83,8 +85,8 @@ public:
         return rd1::DumpSong(rom_, info_, song, path, error);
     }
 
-    // Writes the model's state after each frame, as driver_emu.py's trace does: the player while it plays the song,
-    // each track that hasn't ended, and each channel's record when it changes.
+    // Writes the model's state after each frame: the player while it plays the song, each track that hasn't ended, and
+    // each channel's record when it changes.
     bool Trace(int song, long long frames, std::FILE* out, std::vector<std::string>& warnings) const override
     {
         SongRecord record;

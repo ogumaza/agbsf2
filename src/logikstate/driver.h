@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: MIT
 
-// Logik State's detection and modules, from ntdlib.
+// Logik State's detection and modules, from agblib.
 
 #pragma once
 
-#include "ntdlib/logikstate/driver.h"
+#include "agblib/logikstate/driver.h"
 
 namespace agbsf2::logikstate
 {
 
-using ntdlib::logikstate::DetectDriver;
-using ntdlib::logikstate::DriverInfo;
-using ntdlib::logikstate::Format;
-using ntdlib::logikstate::kMixChannels;
+using agblib::logikstate::DetectDriver;
+using agblib::logikstate::DriverInfo;
+using agblib::logikstate::Format;
+using agblib::logikstate::kFullVolume;
+using agblib::logikstate::kMixChannels;
 
 } // namespace agbsf2::logikstate

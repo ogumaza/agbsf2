@@ -14,6 +14,8 @@
 #include <utility>
 #include <vector>
 
+#include "agblib/agb/trace.h"
+
 #include "brownie/convert.h"
 #include "brownie/driver.h"
 #include "brownie/sequencer.h"
@@ -22,17 +24,18 @@
 #include "gba.h"
 #include "rom.h"
 #include "sf2.h"
-#include "trace.h"
 
 namespace agbsf2::brownie
 {
 namespace
 {
 
+using agblib::agb::PrintHex;
+
 class BrownieMusic : public Music
 {
 public:
-    // Keeps a reference to `rom`, which has to outlive this.
+    // Keeps a reference to `rom`. The ROM has to outlive this.
     BrownieMusic(const Rom& rom, DriverInfo info)
         : Music("Brownie Brown's sound driver", info.log, info.warnings), rom_(rom), info_(std::move(info))
     {
@@ -49,7 +52,7 @@ public:
         return SongNumber(song, SongCount());
     }
 
-    // An entry with no channels is a sound that plays nothing, which the conversion skips.
+    // An entry with no channels is a sound that plays nothing. The conversion skips it.
     bool HasSong(int) const override
     {
         return true;

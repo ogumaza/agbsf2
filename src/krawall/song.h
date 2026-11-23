@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 
-// Krawall's dump of a module's patterns, from ntdlib.
+// Krawall's dump of a module's patterns, from agblib.
 
 #pragma once
 
-#include "ntdlib/krawall/song.h"
+#include "agblib/krawall/song.h"
 
 namespace agbsf2::krawall
 {
 
-using ntdlib::krawall::DumpSong;
+using agblib::krawall::DumpSong;
 
 } // namespace agbsf2::krawall

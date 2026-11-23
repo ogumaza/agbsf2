@@ -27,7 +27,7 @@ namespace
 class KonamiMusic : public Music
 {
 public:
-    // Keeps a reference to `rom`, which has to outlive this.
+    // Keeps a reference to `rom`. The ROM has to outlive this.
     KonamiMusic(const Rom& rom, DriverInfo info)
         : Music("Konami's sound driver", info.log, info.warnings), rom_(rom), info_(std::move(info))
     {

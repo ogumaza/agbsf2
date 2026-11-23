@@ -24,7 +24,7 @@ namespace agbsf2::rd2
 namespace
 {
 
-// Prints a voice's state as driver_emu.py's trace does.
+// Prints a voice's state for the trace.
 void PrintVoice(std::FILE* out, long long frame, int index, const Voice& v)
 {
     char region[16];
@@ -51,7 +51,7 @@ void PrintVoice(std::FILE* out, long long frame, int index, const Voice& v)
 class Rd2Music : public Music
 {
 public:
-    // Keeps a reference to `rom`, which has to outlive this.
+    // Keeps a reference to `rom`. The ROM has to outlive this.
     Rd2Music(const Rom& rom, DriverInfo info)
         : Music("Nintendo R&D2's sound driver", info.log, info.warnings), rom_(rom), info_(std::move(info))
     {

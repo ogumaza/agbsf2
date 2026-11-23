@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT
 
-// The GBA's constants, from ntdlib.
+// The GBA frame length and register writes, from agblib.
 
 #pragma once
 
-#include "ntdlib/agb/gba.h"
+#include "agblib/agb/gba.h"
 
 namespace agbsf2
 {
 
-using ntdlib::agb::FrameSeconds;
-using ntdlib::agb::PrintWrite;
-using ntdlib::agb::RegisterWrite;
+using agblib::agb::FrameSeconds;
+using agblib::agb::PrintWrite;
+using agblib::agb::RegisterWrite;
 
 } // namespace agbsf2

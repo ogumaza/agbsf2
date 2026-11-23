@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 
-// Unit tests of the Ubisoft Milan Music class. The tests in ntdlib check the driver. These tests build synthetic
+// Unit tests of the Ubisoft Milan Music class. The tests in agblib check the driver. These tests build synthetic
 // cartridges in memory. No game ROM is needed.
 
 #include <memory>
 #include <string>
 
-#include "ntdlib/testing/agb_cart.h"
-#include "ntdlib/testing/ubimilan_cart.h"
+#include "agblib/testing/agb_cart.h"
+#include "agblib/testing/ubimilan_cart.h"
 #include "seqlib/testing/check.h"
 
 #include "driver_tests.h"
@@ -19,15 +19,15 @@ namespace agbsf2::ubimilan
 namespace
 {
 
-using ntdlib::testing::ubimilan_cart::Cart;
-using ntdlib::testing::ubimilan_cart::kOnceId;
-using ntdlib::testing::ubimilan_cart::OlderBuildCart;
+using agblib::testing::ubimilan_cart::Cart;
+using agblib::testing::ubimilan_cart::kOnceId;
+using agblib::testing::ubimilan_cart::OlderBuildCart;
 
 // The Sum of All Fears and Rogue Spear have an older build of the driver. The bank routine of that build copies two
 // tables, not three. OpenMusic() returns the error from detection. The error says that the music is recorded samples.
 void TestOlderBuild()
 {
-    const ntdlib::testing::agb_files::CartImage cart = OlderBuildCart();
+    const agblib::testing::agb_files::CartImage cart = OlderBuildCart();
     std::string error;
 
     SEQLIB_CHECK(!agbsf2::OpenMusic(cart.ToRom(), Overrides(), error));

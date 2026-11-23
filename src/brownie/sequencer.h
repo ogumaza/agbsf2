@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 
-// Brownie Brown's model of the driver, from ntdlib.
+// Brownie Brown's model of the driver, from agblib.
 
 #pragma once
 
-#include "ntdlib/brownie/sequencer.h"
+#include "agblib/brownie/sequencer.h"
 
 namespace agbsf2::brownie
 {
 
-using ntdlib::brownie::Globals;
-using ntdlib::brownie::Sequencer;
+using agblib::brownie::Globals;
+using agblib::brownie::Sequencer;
 
 } // namespace agbsf2::brownie

@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 
-// The model of Rare's per-frame routine, from ntdlib.
+// The model of Rare's per-frame routine, from agblib.
 
 #pragma once
 
-#include "ntdlib/rare/sequencer.h"
+#include "agblib/rare/sequencer.h"
 
 namespace agbsf2::rare
 {
 
-using ntdlib::rare::kSlotOn;
-using ntdlib::rare::kSlotReleased;
-using ntdlib::rare::Sequencer;
-using ntdlib::rare::Slot;
+using agblib::rare::kSlotOn;
+using agblib::rare::kSlotReleased;
+using agblib::rare::Sequencer;
+using agblib::rare::Slot;
 
 } // namespace agbsf2::rare

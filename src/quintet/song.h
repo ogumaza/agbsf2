@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 
-// Quintet's songs and commands, from ntdlib.
+// Quintet's songs and commands, from agblib.
 
 #pragma once
 
-#include "ntdlib/quintet/song.h"
+#include "agblib/quintet/song.h"
 
 namespace agbsf2::quintet
 {
 
-using ntdlib::quintet::DumpSong;
+using agblib::quintet::DumpSong;
 
 } // namespace agbsf2::quintet

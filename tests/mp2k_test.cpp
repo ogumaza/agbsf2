@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 
-// Unit tests of the MP2K Music class. The tests in ntdlib check the driver. These tests build synthetic cartridges in
+// Unit tests of the MP2K Music class. The tests in agblib check the driver. These tests build synthetic cartridges in
 // memory. No game ROM is needed.
 
 #include <cstdint>
 #include <memory>
 #include <string>
 
-#include "ntdlib/mp2k/song.h"
-#include "ntdlib/testing/mp2k_cart.h"
+#include "agblib/mp2k/song.h"
+#include "agblib/testing/mp2k_cart.h"
 #include "seqlib/testing/check.h"
 
 #include "driver_tests.h"
@@ -20,12 +20,12 @@ namespace agbsf2::mp2k
 namespace
 {
 
-using enum ntdlib::mp2k::Command;
-using ntdlib::testing::mp2k_cart::Cart;
-using ntdlib::testing::mp2k_cart::kMode;
-using ntdlib::testing::mp2k_cart::kSongTable;
-using ntdlib::testing::mp2k_cart::Saw;
-using ntdlib::testing::mp2k_cart::Track;
+using enum agblib::mp2k::Command;
+using agblib::testing::mp2k_cart::Cart;
+using agblib::testing::mp2k_cart::kMode;
+using agblib::testing::mp2k_cart::kSongTable;
+using agblib::testing::mp2k_cart::Saw;
+using agblib::testing::mp2k_cart::Track;
 
 // OpenMusic() finds MP2K from its code. A game without the code is read with the driver only when --driver mp2k asks
 // for it, with the song table given. An entry whose header has no tracks isn't a song.

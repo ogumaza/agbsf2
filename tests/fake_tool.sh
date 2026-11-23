@@ -3,7 +3,7 @@
 
 # Stands in for the program in droplet_test.applescript. For each file it prints what the program prints,
 # picked by the file's name: good.gba converts, folder is a folder, one of partial.gba's songs can't
-# be written, bad.gba has no driver, set-01.minigsf converts its set, and set-02.minigsf holds the
+# be written, bad.gba has no driver, set-01.minigsf converts its set, and set-02.minigsf contains the
 # same music. A path with a slash at the end names the folder before it. basename gives that folder's name.
 # Like the program, it exits with 1 if anything failed.
 

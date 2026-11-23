@@ -1,22 +1,22 @@
 // SPDX-License-Identifier: MIT
 
-// Quintet's driver tables, from ntdlib.
+// Quintet's driver tables, from agblib.
 
 #pragma once
 
-#include "ntdlib/quintet/driver.h"
+#include "agblib/quintet/driver.h"
 
 namespace agbsf2::quintet
 {
 
-using ntdlib::quintet::DetectDriver;
-using ntdlib::quintet::DriverInfo;
-using ntdlib::quintet::DriverOverrides;
-using ntdlib::quintet::FileOfSong;
-using ntdlib::quintet::PsgRate;
-using ntdlib::quintet::ReadMusicFiles;
-using ntdlib::quintet::Revision;
-using ntdlib::quintet::SongAddress;
-using ntdlib::quintet::SongCount;
+using agblib::quintet::DetectDriver;
+using agblib::quintet::DriverInfo;
+using agblib::quintet::DriverOverrides;
+using agblib::quintet::FileOfSong;
+using agblib::quintet::PsgRate;
+using agblib::quintet::ReadMusicFiles;
+using agblib::quintet::Revision;
+using agblib::quintet::SongAddress;
+using agblib::quintet::SongCount;
 
 } // namespace agbsf2::quintet

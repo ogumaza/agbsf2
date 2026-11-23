@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT
 
-// Konami's sequencer, from ntdlib.
+// Konami's sequencer, from agblib.
 
 #pragma once
 
-#include "ntdlib/konami/sequencer.h"
+#include "agblib/konami/sequencer.h"
 
 namespace agbsf2::konami
 {
 
-using ntdlib::konami::Sequencer;
-using ntdlib::konami::TrackOutput;
+using agblib::konami::Sequencer;
+using agblib::konami::TrackOutput;
 
 } // namespace agbsf2::konami

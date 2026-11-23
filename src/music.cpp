@@ -19,12 +19,12 @@ namespace
 using Open = std::unique_ptr<Music> (*)(const Rom&, const Overrides&, std::string&);
 
 // The drivers in the order detection looks for them, with the names that --driver takes. Rare's, Quintet's, Nintendo
-// R&D2's, Nintendo R&D1's, AlphaDream's, Brownie Brown's, Ubisoft Milan's and Logik State's drivers, MP2K and Krawall
-// come first. Their detection uses the driver's code, or data that starts with the driver's signature. Konami's
-// detection can fall back on a scan of the data. A scan might mistake another driver's data for a song table. R&D2's
-// comes before MP2K, since a game can play most of its music with R&D2's driver and the rest with MP2K. AlphaDream's
-// comes before MP2K too. Mario & Luigi: Superstar Saga plays its music with it, and MP2K plays only the Mario Bros.
-// Classic that the game holds.
+// R&D2's, Nintendo R&D1's, AlphaDream's, Brownie Brown's, Ubisoft Milan's, Logik State's and Webfoot Technologies'
+// drivers, Frontline Studios' two players, MP2K and Krawall come first. Their detection uses the driver's code, or data
+// that starts with the driver's signature. Konami's detection can fall back on a scan of the data. A scan might mistake
+// another driver's data for a song table. R&D2's comes before MP2K. A game can play most of its music with R&D2's
+// driver and the rest with MP2K. AlphaDream's comes before MP2K too. Mario & Luigi: Superstar Saga plays its music with
+// it, and MP2K plays only the Mario Bros. Classic that the game contains.
 const struct
 {
     Driver driver;
@@ -41,50 +41,81 @@ const struct
     {Driver::kKrawall, "krawall", krawall::OpenMusic},
     {Driver::kUbiMilan, "ubimilan", ubimilan::OpenMusic},
     {Driver::kLogikState, "logikstate", logikstate::OpenMusic},
+    {Driver::kWebfoot, "webfoot", webfoot::OpenMusic},
+    {Driver::kFrontlineMod, "frontline_mod", frontline_mod::OpenMusic},
+    {Driver::kFrontlineXm, "frontline_xm", frontline_xm::OpenMusic},
     {Driver::kKonami, "konami", konami::OpenMusic},
 };
 
-// Returns the error for a game in which detection finds none of the drivers that `driver` allows. Rare's driver and
-// MP2K can read the songs that --song-table gives without the driver's code, so their errors suggest it. Detection of
-// Quintet's, Nintendo R&D1's, Nintendo R&D2's, AlphaDream's, Brownie Brown's, Ubisoft Milan's and Logik State's
-// drivers and Krawall finds their other tables through the driver's code.
-std::string NotFound(Driver driver)
+// Returns the error for a game in which detection finds none of the drivers that `overrides` allows. Rare's driver and
+// MP2K can read the songs that --song-table gives without the driver's code. Their errors suggest the option.
+// Detection of Quintet's, Nintendo R&D1's, Nintendo R&D2's, AlphaDream's, Brownie Brown's, Ubisoft Milan's, Logik
+// State's and Webfoot Technologies' drivers and Krawall finds their other tables through the driver's code. Detection
+// of Frontline Studios' players finds the games' songs in a table. With --music-volume and no --driver, detection looks
+// only for the drivers that take a music volume.
+std::string NotFound(const Overrides& overrides)
 {
     const std::string kUnknown = std::string(": this game's music uses another engine, or a driver version that ") +
                                  kProgramName + " doesn't support";
-    switch (driver)
+    switch (overrides.driver)
     {
     case Driver::kKonami:
         return "no Konami sound driver found" + kUnknown;
+
     case Driver::kRare:
         return "no Rare sound driver found (try --song-table)";
+
     case Driver::kQuintet:
         return "no Quintet sound driver found" + kUnknown;
+
     case Driver::kRd2:
         return "no Nintendo R&D2 sound driver found" + kUnknown;
+
     case Driver::kMp2k:
         return "no MP2K sound driver found (try --song-table)";
+
     case Driver::kBrownie:
         return "no Brownie Brown sound driver found" + kUnknown;
+
     case Driver::kKrawall:
         return "no Krawall sound driver found" + kUnknown;
+
     case Driver::kUbiMilan:
         return "no Ubisoft Milan sound driver found" + kUnknown;
+
     case Driver::kRd1:
         return "no Nintendo R&D1 sound driver found" + kUnknown;
+
     case Driver::kAlphaDream:
         return "no AlphaDream sound driver found" + kUnknown;
+
     case Driver::kLogikState:
         return "no Logik State sound driver found" + kUnknown;
+
+    case Driver::kWebfoot:
+        return "no Webfoot Technologies sound driver found" + kUnknown;
+
+    case Driver::kFrontlineMod:
+        return "no Frontline Studios MOD player found" + kUnknown;
+
+    case Driver::kFrontlineXm:
+        return "no Frontline Studios XM-like player found" + kUnknown;
+
     default:
+        if (overrides.music_volume)
+        {
+            return "no Logik State or Webfoot Technologies sound driver found" + kUnknown;
+        }
+
         return "no Konami, Rare, Quintet, Nintendo R&D1, Nintendo R&D2, AlphaDream, Brownie Brown, Ubisoft Milan, "
-               "Logik State, Krawall or MP2K sound driver found" +
+               "Logik State, Webfoot Technologies, Frontline Studios MOD or XM-like, Krawall or MP2K sound driver "
+               "found" +
                kUnknown;
     }
 }
 
-// Finds the drivers as OpenAllMusic() does, and gives `unread` the errors of those whose tables can't be read. Unless
-// `all` is true, it stops at the first driver that it finds or that it can't read.
+// Finds the drivers as OpenAllMusic() does, and adds the errors of the drivers whose tables can't be read to `unread`.
+// Unless `all` is true, the search stops at the first driver that it finds or that it can't read.
 std::vector<FoundMusic> FindMusic(const Rom& rom, const Overrides& overrides, bool all, std::string& error,
                                   std::vector<std::string>& unread)
 {
@@ -93,6 +124,10 @@ std::vector<FoundMusic> FindMusic(const Rom& rom, const Overrides& overrides, bo
     for (const auto& d : kDrivers)
     {
         if (overrides.driver != Driver::kAny && overrides.driver != d.driver)
+        {
+            continue;
+        }
+        if (overrides.music_volume && !TakesMusicVolume(d.driver))
         {
             continue;
         }
@@ -126,13 +161,18 @@ std::vector<FoundMusic> FindMusic(const Rom& rom, const Overrides& overrides, bo
 
     if (found.empty())
     {
-        error = unread.empty() ? NotFound(overrides.driver) : unread.front();
+        error = unread.empty() ? NotFound(overrides) : unread.front();
     }
 
     return found;
 }
 
 } // namespace
+
+bool TakesMusicVolume(Driver driver)
+{
+    return driver == Driver::kLogikState || driver == Driver::kWebfoot;
+}
 
 const char* DriverName(Driver driver)
 {

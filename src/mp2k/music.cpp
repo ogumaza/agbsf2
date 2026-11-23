@@ -26,7 +26,7 @@ namespace
 class Mp2kMusic : public Music
 {
 public:
-    // Keeps a reference to `rom`, which has to outlive this.
+    // Keeps a reference to `rom`. The ROM has to outlive this.
     Mp2kMusic(const Rom& rom, DriverInfo info)
         : Music("MP2K, Nintendo's MusicPlayer2000 sound driver", info.log, info.warnings),
           rom_(rom),

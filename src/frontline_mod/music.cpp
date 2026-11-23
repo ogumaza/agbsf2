@@ -1,0 +1,153 @@
+// SPDX-License-Identifier: MIT
+
+// Frontline Studios' MOD player behind the Music interface.
+
+#include "music.h"
+
+#include <cstdint>
+#include <cstdio>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "agblib/agb/trace.h"
+#include "xsflib/bytes.h"
+
+#include "frontline_mod/convert.h"
+#include "frontline_mod/driver.h"
+#include "frontline_mod/player.h"
+#include "frontline_mod/soundfont.h"
+#include "module_music.h"
+#include "rom.h"
+
+namespace agbsf2::frontline_mod
+{
+namespace
+{
+
+using agblib::agb::TraceFrames;
+using agblib::agb::TraceRecord;
+
+using xsflib::AppendLe16;
+using xsflib::AppendLe32;
+
+// Returns a channel's record of 64 bytes in the order of the driver's fields.
+std::vector<uint8_t> ChannelBytes(const Channel& c)
+{
+    std::vector<uint8_t> bytes;
+    for (const uint32_t word :
+         {c.on, c.step, c.fraction, c.position, c.end, c.loop_start, c.loop_end, c.level, uint32_t(c.tick), c.parameter,
+          c.vibrato_phase, uint32_t(c.period), c.vibrato_parameter, c.target, c.memory, c.volume})
+    {
+        AppendLe32(bytes, word);
+    }
+
+    return bytes;
+}
+
+// Returns the player's place: the order and the row that it reads next, the speed, the music's volume and the fade
+// step.
+std::vector<uint8_t> PlaceBytes(const Player& player)
+{
+    std::vector<uint8_t> bytes;
+    AppendLe16(bytes, uint16_t(player.Order()));
+    AppendLe16(bytes, uint16_t(player.Row()));
+    bytes.push_back(uint8_t(player.Speed()));
+    AppendLe16(bytes, uint16_t(player.MusicVolume()));
+    AppendLe16(bytes, uint16_t(player.FadeStep()));
+
+    return bytes;
+}
+
+class FrontlineModMusic : public ModuleMusic<DriverInfo, InstrumentSet>
+{
+public:
+    // Keeps a reference to `rom`. The ROM has to outlive this.
+    FrontlineModMusic(const Rom& rom, DriverInfo info)
+        : ModuleMusic("Frontline Studios' MOD player", rom, std::move(info))
+    {
+    }
+
+    int SongCount() const override
+    {
+        return int(Detected().songs.size());
+    }
+
+    // A song is a part of a module: its name shows the order that it starts at, and marks a song that no call of the
+    // game starts.
+    std::vector<SongVersion> Versions(int song) const override
+    {
+        if (song < 0 || song >= SongCount())
+        {
+            return Music::Versions(song);
+        }
+
+        const Song& entry = Detected().songs[size_t(song)];
+        return {{"order " + std::to_string(entry.order) + (entry.unanchored ? ", not started by the game" : ""), ""}};
+    }
+
+    SongReport InspectSong(int song, const ConvertSettings& settings) const override
+    {
+        return frontline_mod::InspectSong(GameRom(), Detected(), song, settings);
+    }
+
+    SongReport ConvertSong(int song, const ConvertSettings& settings) override
+    {
+        return frontline_mod::ConvertSong(GameRom(), Detected(), song, settings, Shared());
+    }
+
+    // Writes the model's state after each frame: the player's place, then each of the module's channels.
+    bool Trace(int song, long long frames, std::FILE* out, std::vector<std::string>& warnings) const override
+    {
+        if (song < 0 || song >= SongCount())
+        {
+            return false;
+        }
+
+        const Song& entry = Detected().songs[size_t(song)];
+        Player player(GameRom(), Detected());
+        player.Start(Detected().modules[size_t(entry.module)], entry.order, entry.step);
+        const auto frame = [&]()
+        {
+            if (!player.Playing())
+            {
+                return false;
+            }
+
+            player.Frame();
+            return true;
+        };
+        const auto records = [&]()
+        {
+            std::vector<TraceRecord> r = {{"g", PlaceBytes(player)}};
+            for (uint32_t c = 0; c < player.MusicChannels(); c++)
+            {
+                r.push_back({"c" + std::to_string(c), ChannelBytes(player.ChannelAt(c))});
+            }
+            return r;
+        };
+        TraceFrames(out, frames, frame, records);
+        if (player.Unmodelled() != 0)
+        {
+            warnings.push_back("the player reached " + std::to_string(player.Unmodelled()) +
+                               " paths that the model doesn't follow");
+        }
+
+        return true;
+    }
+};
+
+} // namespace
+
+std::unique_ptr<Music> MakeMusic(const Rom& rom, DriverInfo info)
+{
+    return std::make_unique<FrontlineModMusic>(rom, std::move(info));
+}
+
+std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides&, std::string& error)
+{
+    return OpenDetected(rom, DetectDriver, MakeMusic, error);
+}
+
+} // namespace agbsf2::frontline_mod

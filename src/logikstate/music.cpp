@@ -9,8 +9,11 @@
 #include <cstdio>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
+
+#include "agblib/agb/trace.h"
 
 #include "logikstate/convert.h"
 #include "logikstate/driver.h"
@@ -19,13 +22,18 @@
 #include "logikstate/soundfont.h"
 #include "rom.h"
 #include "sf2.h"
-#include "trace.h"
 
 namespace agbsf2::logikstate
 {
 
 namespace
 {
+
+using agblib::agb::TraceFrames;
+using agblib::agb::TraceRecord;
+
+// The start of detection's warning when it can't read the music volume from the game's code.
+constexpr std::string_view kUnreadVolume = "no music volume for this release";
 
 class LogikStateMusic : public Music
 {
@@ -61,7 +69,7 @@ public:
             return Music::Versions(song);
         }
 
-        const ntdlib::logikstate::Song& entry = info_.songs[size_t(song)];
+        const agblib::logikstate::Song& entry = info_.songs[size_t(song)];
         return {{"order " + std::to_string(entry.order) + (entry.plays_once ? ", jingle" : ""), ""}};
     }
 
@@ -86,7 +94,7 @@ public:
 
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
-        ntdlib::sequence_export::agb::Sf2File f = shared_->Build(rom_);
+        agblib::sequence_export::agb::Sf2File f = shared_->Build(rom_);
         return WriteSoundfont(f, rom_, path, error);
     }
 
@@ -95,8 +103,8 @@ public:
         return logikstate::DumpSong(rom_, info_, song, path, error);
     }
 
-    // Writes the model's state after each frame, like the trace of driver_emu.py: the player's variables and each
-    // channel's record. Each record is written only when it has changed since it was last written.
+    // Writes the model's state after each frame: the player's variables and each channel's record. Each record is
+    // written only when it has changed since it was last written.
     bool Trace(int song, long long frames, std::FILE* out, std::vector<std::string>& warnings) const override
     {
         if (song < 0 || song >= SongCount())
@@ -104,28 +112,49 @@ public:
             return false;
         }
 
-        const ntdlib::logikstate::Song& entry = info_.songs[size_t(song)];
+        // The players of the earlier formats stop with their module. The driver goes on mixing the channels after a
+        // GBAMOD30 module without the loop flag stops. The trace goes on too. The records of a GBAMOD30 module have the
+        // layout of the game's build.
+        const auto playing = [](const auto& player)
+        {
+            return player.Playing();
+        };
+        const auto channel_record = [](const auto& player, int channel)
+        {
+            return player.ChannelRecord(channel);
+        };
+        const agblib::logikstate::Song& entry = info_.songs[size_t(song)];
         if (info_.format == Format::kGbaMod1)
         {
             Mod1Player player(rom_, entry, info_.music_volume);
-            return TracePlayer(player, kMod1MixChannels, frames, out, warnings);
+            return TracePlayer(player, kMod1MixChannels, playing, channel_record, frames, out, warnings);
         }
         if (info_.format == Format::kGbaMod30)
         {
             Mod30Settings settings = info_.mod30;
             settings.music = info_.music_volume;
             settings.loop = entry.loop_flag;
-            return TraceMod30(Mod30Player(rom_, entry.module, settings), settings.build.records, frames, out, warnings);
+            Mod30Player player(rom_, entry.module, settings);
+            const auto valid = [](const Mod30Player& p)
+            {
+                return p.Valid();
+            };
+            const auto record = [](const Mod30Player& p, int channel)
+            {
+                return p.Record(channel);
+            };
+            return TracePlayer(player, settings.build.records, valid, record, frames, out, warnings);
         }
 
         Player player(rom_, entry, info_.music_volume, info_.build);
-        return TracePlayer(player, kMixChannels, frames, out, warnings);
+        return TracePlayer(player, kMixChannels, playing, channel_record, frames, out, warnings);
     }
 
 private:
-    // Writes the trace of `player`, whose mixer has `channels` channels.
-    template <typename P>
-    static bool TracePlayer(P& player, int channels, long long frames, std::FILE* out,
+    // Writes the trace of `player`: the player's variables (g), then the record that `record` returns for each of the
+    // first `channels` channels (c0 on). The trace goes on while `plays` returns true for the player.
+    template <typename P, typename Plays, typename Record>
+    static bool TracePlayer(P& player, int channels, Plays plays, Record record, long long frames, std::FILE* out,
                             std::vector<std::string>& warnings)
     {
         if (!player.Valid())
@@ -134,47 +163,28 @@ private:
             return false;
         }
 
-        std::vector<uint8_t> globals;
-        std::vector<std::vector<uint8_t>> records(static_cast<size_t>(channels));
-        for (long long f = 0; f < frames && player.Playing(); f++)
+        const auto frame = [&]()
         {
+            if (!plays(player))
+            {
+                return false;
+            }
+
             player.Frame();
-            PrintChanged(out, f, "g", player.Globals(), globals);
+
+            return true;
+        };
+        const auto records = [&]()
+        {
+            std::vector<TraceRecord> r = {{"g", player.Globals()}};
             for (int c = 0; c < channels; c++)
             {
-                const std::string name = "c" + std::to_string(c);
-                PrintChanged(out, f, name.c_str(), player.ChannelRecord(c), records[size_t(c)]);
+                r.push_back({"c" + std::to_string(c), record(player, c)});
             }
-        }
 
-        warnings.insert(warnings.end(), player.Warnings().begin(), player.Warnings().end());
-
-        return true;
-    }
-
-    // Writes the trace of a GBAMOD30 module in the form of driver_emu_mod30.py: each record in the layout of the game's
-    // build. The driver goes on mixing the channels after a module without the loop flag stops, and so does the trace.
-    static bool TraceMod30(Mod30Player player, int records, long long frames, std::FILE* out,
-                           std::vector<std::string>& warnings)
-    {
-        if (!player.Valid())
-        {
-            warnings.insert(warnings.end(), player.Warnings().begin(), player.Warnings().end());
-            return false;
-        }
-
-        std::vector<uint8_t> globals;
-        std::vector<std::vector<uint8_t>> last(static_cast<size_t>(records));
-        for (long long f = 0; f < frames && player.Valid(); f++)
-        {
-            player.Frame();
-            PrintChanged(out, f, "g", player.Globals(), globals);
-            for (int c = 0; c < records; c++)
-            {
-                const std::string name = "c" + std::to_string(c);
-                PrintChanged(out, f, name.c_str(), player.Record(c), last[size_t(c)]);
-            }
-        }
+            return r;
+        };
+        TraceFrames(out, frames, frame, records);
         warnings.insert(warnings.end(), player.Warnings().begin(), player.Warnings().end());
 
         return true;
@@ -195,13 +205,37 @@ std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std
         return nullptr;
     }
 
-    // --music-volume replaces the volume that detection read from the game's code, and detection's line about it.
+    // --music-volume replaces the volume that detection read from the game's code, detection's line about it, and the
+    // warning that detection couldn't read it.
     if (overrides.music_volume)
     {
+        // kTopMusicVolume (music.h) comes from the game's code. The builds for GBAMOD30 modules store any word as the
+        // music's volume. In LEGO Knights' Kingdom (BKNE), the routine at 0x080ADDE8 stores it whole. Each frame
+        // multiplies a channel's volume by the music's, the master's and the fade, each over 64 (0x080AEA88 to
+        // 0x080AEAA6, and 0x080AEB1A to 0x080AEB56 for the mixer of mode 1). The mixer of mode 0 multiplies each point
+        // by that volume and adds it, shifted right by 8, to a byte of the mix. Super Puzzle Fighter II Turbo (AZ8E)
+        // does so at 0x0834A000 to 0x0834A010. BKNE's copy of the mixer (LZ77 data at 0x080B90EC) does the same. The
+        // mixer of mode 1 (LZ77 data at 0x080B9194) reads each channel's volume as a word and sums the products of two
+        // points in the halves of a word. At the master volume of 64, a channel at its full volume plays at the
+        // music's volume. Up to 256, a point at full scale then still fits its byte or its half of a word. A game with
+        // a higher master volume overflows them at a lower music volume. The conversion caps each channel's level at
+        // a sample's full scale anyway. The mixer of mode 1 also takes a volume of 255 as the end of its list of
+        // channels (the word written at 0x080AEC18). A channel at exactly that volume silences itself and the channels
+        // after it in the game. The conversion doesn't follow that.
+        const int top = info.format == Format::kGbaMod30 ? kTopMusicVolume : kFullVolume;
+        if (overrides.music_volume > top)
+        {
+            error = "--music-volume needs a volume from 1 to " + std::to_string(top) + " for this game's modules";
+            return nullptr;
+        }
+
         const std::string prefix = "music volume ";
         std::erase_if(info.log, [&](const std::string& line) { return line.starts_with(prefix); });
+        std::erase_if(info.warnings, [](const std::string& w) { return w.starts_with(kUnreadVolume); });
         info.music_volume = overrides.music_volume;
-        info.log.push_back(prefix + std::to_string(info.music_volume) + " of 64, from --music-volume");
+        const char* const of = info.music_volume > kFullVolume ? ", above the full volume of " : " of ";
+        info.log.push_back(prefix + std::to_string(info.music_volume) + of + std::to_string(kFullVolume) +
+                           ", from --music-volume");
     }
 
     return std::make_unique<LogikStateMusic>(rom, std::move(info));

@@ -4,13 +4,14 @@
 
 #include "music.h"
 
-#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "agblib/agb/trace.h"
 
 #include "krawall/convert.h"
 #include "krawall/driver.h"
@@ -20,17 +21,19 @@
 #include "program.h"
 #include "rom.h"
 #include "sf2.h"
-#include "trace.h"
 
 namespace agbsf2::krawall
 {
 namespace
 {
 
+using agblib::agb::TraceFrames;
+using agblib::agb::TraceRecord;
+
 class KrawallMusic : public Music
 {
 public:
-    // Keeps a reference to `rom`, which has to outlive this.
+    // Keeps a reference to `rom`. The ROM has to outlive this.
     KrawallMusic(const Rom& rom, DriverInfo info)
         : Music("Krawall", info.log, info.warnings), rom_(info.unpacked ? *info.unpacked : rom), info_(std::move(info))
     {
@@ -73,7 +76,7 @@ public:
 
     bool WriteSharedSoundfont(const std::string& path, std::string& error) override
     {
-        ntdlib::sequence_export::agb::Sf2File f = shared_->Build(rom_, info_);
+        agblib::sequence_export::agb::Sf2File f = shared_->Build(rom_, info_);
         return WriteSoundfont(f, rom_, path, error);
     }
 
@@ -98,31 +101,36 @@ public:
             return false;
         }
 
-        std::vector<uint8_t> globals, record;
-        std::array<std::vector<uint8_t>, kPlayerChannels> channels;
-        std::array<std::vector<uint8_t>, kMixChannels> mixer;
-        for (long long f = 0; f < frames; f++)
+        // The frame in which the player stops is the last.
+        bool playing = true;
+        const auto frame = [&]()
         {
+            if (!playing)
+            {
+                return false;
+            }
+
             player.Frame();
-            PrintChanged(out, f, "g", player.Globals(), globals);
-            PrintChanged(out, f, "p", player.PlayerRecord(), record);
+            playing = player.Playing();
+
+            return true;
+        };
+        const auto records = [&]()
+        {
+            std::vector<TraceRecord> r = {{"g", player.Globals()}, {"p", player.PlayerRecord()}};
             for (int c = 0; c < player.Module().channels; c++)
             {
-                const std::string name = "c" + std::to_string(c);
-                PrintChanged(out, f, name.c_str(), player.ChannelRecord(player.Channels()[size_t(c)]),
-                             channels[size_t(c)]);
+                r.push_back({"c" + std::to_string(c), player.ChannelRecord(player.Channels()[size_t(c)])});
             }
+
             for (int m = 0; m < player.MixChannels(); m++)
             {
-                const std::string name = "m" + std::to_string(m);
-                PrintChanged(out, f, name.c_str(), player.MixRecord(player.Mixer()[size_t(m)]), mixer[size_t(m)]);
+                r.push_back({"m" + std::to_string(m), player.MixRecord(player.Mixer()[size_t(m)])});
             }
-            if (!player.Playing())
-            {
-                break;
-            }
-        }
 
+            return r;
+        };
+        TraceFrames(out, frames, frame, records);
         warnings.insert(warnings.end(), player.Warnings().begin(), player.Warnings().end());
 
         return true;

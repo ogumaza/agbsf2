@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-// Unit tests of the Logik State Music class. The tests in ntdlib check the driver. These tests build synthetic
+// Unit tests of the Logik State Music class. The tests in agblib check the driver. These tests build synthetic
 // cartridges in memory. No game ROM is needed.
 
 #include <algorithm>
@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "ntdlib/testing/logikstate_cart.h"
+#include "agblib/testing/logikstate_cart.h"
 #include "seqlib/testing/check.h"
 
 #include "driver_tests.h"
@@ -21,10 +21,10 @@ namespace agbsf2::logikstate
 namespace
 {
 
-using ntdlib::testing::logikstate_cart::Cart;
-using ntdlib::testing::logikstate_cart::kBank;
-using ntdlib::testing::logikstate_cart::TestModule;
-using ntdlib::testing::logikstate_cart::TestRow;
+using agblib::testing::logikstate_cart::Cart;
+using agblib::testing::logikstate_cart::kBank;
+using agblib::testing::logikstate_cart::TestModule;
+using agblib::testing::logikstate_cart::TestRow;
 
 // Returns whether `music` has `line` among what detection found.
 bool Logs(const Music& music, const std::string& line)
@@ -63,11 +63,44 @@ void TestMusicVolume()
     SEQLIB_CHECK_EQ(loud->InspectSong(0, ConvertSettings()).tracks, 2);
 }
 
+// The builds for GBAMOD2. modules take a music volume up to 64. --music-volume above that is an error. In a release
+// whose volume detection can't read, --music-volume also replaces detection's warning about it.
+void TestMusicVolumeTop()
+{
+    Cart cart({std::vector<int8_t>(400, 40)});
+    TestModule module;
+    module.channels = 4;
+    module.patterns = {std::vector<TestRow>(64)};
+    module.samples[0] = {400, 0, 64, 0, 0};
+    module.patterns[0][0] = {{200, 1, 0, 0}};
+    cart.AddCall(cart.AddModule(module), kBank, 0);
+    cart.UseLongRecords();
+    const Rom rom = cart.ToRom();
+    Overrides set;
+    set.music_volume = 40;
+    Overrides over = set;
+    over.music_volume = 65;
+    std::string error;
+
+    const std::unique_ptr<Music> music = agbsf2::OpenMusic(rom, Overrides(), error);
+    const std::unique_ptr<Music> quiet = agbsf2::OpenMusic(rom, set, error);
+    SEQLIB_REQUIRE(music != nullptr && quiet != nullptr);
+    SEQLIB_CHECK(error.empty());
+    SEQLIB_REQUIRE(music->Warnings().size() == 1);
+    SEQLIB_CHECK(music->Warnings()[0].starts_with("no music volume for this release"));
+    SEQLIB_CHECK(quiet->Warnings().empty());
+    SEQLIB_CHECK(Logs(*quiet, "music volume 40 of 64, from --music-volume"));
+
+    SEQLIB_CHECK(agbsf2::OpenMusic(rom, over, error) == nullptr);
+    SEQLIB_CHECK(error == "--music-volume needs a volume from 1 to 64 for this game's modules");
+}
+
 } // namespace
 
 void RunTests()
 {
     TestMusicVolume();
+    TestMusicVolumeTop();
 }
 
 } // namespace agbsf2::logikstate

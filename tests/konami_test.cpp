@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 
-// Unit tests of the Konami Music class. The tests in ntdlib check the driver. These tests build synthetic cartridges in
+// Unit tests of the Konami Music class. The tests in agblib check the driver. These tests build synthetic cartridges in
 // memory. No game ROM is needed.
 
 #include <cstdio>
@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "ntdlib/testing/konami_cart.h"
+#include "agblib/testing/konami_cart.h"
 #include "seqlib/testing/check.h"
 
 #include "driver_tests.h"
@@ -21,15 +21,16 @@ namespace agbsf2::konami
 namespace
 {
 
-using ntdlib::testing::konami_cart::kSampleTable;
-using ntdlib::testing::konami_cart::kScanSongTable;
-using ntdlib::testing::konami_cart::kSongEntrySize;
-using ntdlib::testing::konami_cart::kSongTable;
-using ntdlib::testing::konami_cart::ScanRom;
-using ntdlib::testing::konami_cart::SyntheticRom;
+using agblib::testing::konami_cart::kSampleTable;
+using agblib::testing::konami_cart::kScanSongTable;
+using agblib::testing::konami_cart::kSongEntrySize;
+using agblib::testing::konami_cart::kSongTable;
+using agblib::testing::konami_cart::ScanRom;
+using agblib::testing::konami_cart::SyntheticRom;
 
-// OpenMusic() reads a game with Konami's driver through the Music interface, which leaves out the empty entries of the
-// song table and gives --info the address of each song's data and the length that converting it would give.
+// OpenMusic() reads a game with Konami's driver through the Music interface. The interface leaves out the empty entries
+// of the song table. It gives --info the address of each song's data and the length that converting the song would
+// give.
 void TestMusic()
 {
     // The scan image's tables are found from its data, and SyntheticRom()'s are given, with an empty third entry. Its

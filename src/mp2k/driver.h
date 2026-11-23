@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: MIT
 
-// MP2K's detection, from ntdlib.
+// MP2K's detection, from agblib.
 
 #pragma once
 
-#include "ntdlib/mp2k/driver.h"
+#include "agblib/mp2k/driver.h"
 
 namespace agbsf2::mp2k
 {
 
-using ntdlib::mp2k::DetectDriver;
-using ntdlib::mp2k::DriverInfo;
-using ntdlib::mp2k::DriverOverrides;
-using ntdlib::mp2k::SongAddress;
+using agblib::mp2k::DetectDriver;
+using agblib::mp2k::DriverInfo;
+using agblib::mp2k::DriverOverrides;
+using agblib::mp2k::SongAddress;
 
 } // namespace agbsf2::mp2k

@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 
-// Ubisoft Milan's SoundFonts, from ntdlib.
+// Ubisoft Milan's SoundFonts, from agblib.
 
 #pragma once
 
-#include "ntdlib/sequence_export/ubimilan/soundfont.h"
+#include "agblib/sequence_export/ubimilan/soundfont.h"
 
 namespace agbsf2::ubimilan
 {
 
-using ntdlib::sequence_export::ubimilan::InstrumentSet;
+using agblib::sequence_export::ubimilan::InstrumentSet;
 
 } // namespace agbsf2::ubimilan
