@@ -20,11 +20,11 @@ using Open = std::unique_ptr<Music> (*)(const Rom&, const Overrides&, std::strin
 
 // The drivers in the order detection looks for them, with the names that --driver takes. Rare's, Quintet's, Nintendo
 // R&D2's, Nintendo R&D1's, AlphaDream's, Brownie Brown's, Ubisoft Milan's, Logik State's and Webfoot Technologies'
-// drivers, Frontline Studios' two players, MP2K and Krawall come first. Their detection uses the driver's code, or data
-// that starts with the driver's signature. Konami's detection can fall back on a scan of the data. A scan might mistake
-// another driver's data for a song table. R&D2's comes before MP2K. A game can play most of its music with R&D2's
-// driver and the rest with MP2K. AlphaDream's comes before MP2K too. Mario & Luigi: Superstar Saga plays its music with
-// it, and MP2K plays only the Mario Bros. Classic that the game contains.
+// drivers, Frontline Studios' two players, Engine Software's driver, MP2K and Krawall come first. Their detection uses
+// the driver's code, or data that starts with the driver's signature. Konami's detection can fall back on a scan of the
+// data. A scan might mistake another driver's data for a song table. R&D2's comes before MP2K. A game can play most of
+// its music with R&D2's driver and the rest with MP2K. AlphaDream's comes before MP2K too. Mario & Luigi: Superstar
+// Saga plays its music with it, and MP2K plays only the Mario Bros. Classic that the game contains.
 const struct
 {
     Driver driver;
@@ -44,15 +44,16 @@ const struct
     {Driver::kWebfoot, "webfoot", webfoot::OpenMusic},
     {Driver::kFrontlineMod, "frontline_mod", frontline_mod::OpenMusic},
     {Driver::kFrontlineXm, "frontline_xm", frontline_xm::OpenMusic},
+    {Driver::kEngineSoftware, "engine_software", engine_software::OpenMusic},
     {Driver::kKonami, "konami", konami::OpenMusic},
 };
 
 // Returns the error for a game in which detection finds none of the drivers that `overrides` allows. Rare's driver and
-// MP2K can read the songs that --song-table gives without the driver's code. Their errors suggest the option.
-// Detection of Quintet's, Nintendo R&D1's, Nintendo R&D2's, AlphaDream's, Brownie Brown's, Ubisoft Milan's, Logik
-// State's and Webfoot Technologies' drivers and Krawall finds their other tables through the driver's code. Detection
-// of Frontline Studios' players finds the games' songs in a table. With --music-volume and no --driver, detection looks
-// only for the drivers that take a music volume.
+// MP2K can read the songs that --song-table gives without the driver's code. Their errors suggest the option. Detection
+// of Quintet's, Nintendo R&D1's, Nintendo R&D2's, AlphaDream's, Brownie Brown's, Ubisoft Milan's, Logik State's,
+// Webfoot Technologies' and Engine Software's drivers and Krawall finds their other tables through the driver's code.
+// Detection of Frontline Studios' players finds the games' songs in a table. With --music-volume and no --driver,
+// detection looks only for the drivers that take a music volume.
 std::string NotFound(const Overrides& overrides)
 {
     const std::string kUnknown = std::string(": this game's music uses another engine, or a driver version that ") +
@@ -101,6 +102,9 @@ std::string NotFound(const Overrides& overrides)
     case Driver::kFrontlineXm:
         return "no Frontline Studios XM-like player found" + kUnknown;
 
+    case Driver::kEngineSoftware:
+        return "no Engine Software sound driver found" + kUnknown;
+
     default:
         if (overrides.music_volume)
         {
@@ -108,8 +112,8 @@ std::string NotFound(const Overrides& overrides)
         }
 
         return "no Konami, Rare, Quintet, Nintendo R&D1, Nintendo R&D2, AlphaDream, Brownie Brown, Ubisoft Milan, "
-               "Logik State, Webfoot Technologies, Frontline Studios MOD or XM-like, Krawall or MP2K sound driver "
-               "found" +
+               "Logik State, Webfoot Technologies, Engine Software, Frontline Studios MOD or XM-like, Krawall or MP2K "
+               "sound driver found" +
                kUnknown;
     }
 }

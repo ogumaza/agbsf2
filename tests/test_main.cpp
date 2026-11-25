@@ -54,6 +54,7 @@ std::vector<DriverCase> DriverCases()
         {Driver::kWebfoot, "webfoot", unknown("no Webfoot Technologies sound driver found")},
         {Driver::kFrontlineMod, "frontline_mod", unknown("no Frontline Studios MOD player found")},
         {Driver::kFrontlineXm, "frontline_xm", unknown("no Frontline Studios XM-like player found")},
+        {Driver::kEngineSoftware, "engine_software", unknown("no Engine Software sound driver found")},
     };
 }
 
@@ -74,11 +75,12 @@ void TestNoDriver()
 
     SEQLIB_CHECK(!found_any && !found_all && !found_all_mp2k && unread.empty() && unread_mp2k.empty());
     SEQLIB_CHECK(all == any && all_mp2k == "no MP2K sound driver found (try --song-table)");
-    SEQLIB_CHECK(any ==
-                 "no Konami, Rare, Quintet, Nintendo R&D1, Nintendo R&D2, AlphaDream, Brownie Brown, Ubisoft Milan, "
-                 "Logik State, Webfoot Technologies, Frontline Studios MOD or XM-like, Krawall or MP2K sound driver "
-                 "found" +
-                     std::string(kUnknown));
+    SEQLIB_CHECK(
+        any ==
+        "no Konami, Rare, Quintet, Nintendo R&D1, Nintendo R&D2, AlphaDream, Brownie Brown, Ubisoft Milan, "
+        "Logik State, Webfoot Technologies, Engine Software, Frontline Studios MOD or XM-like, Krawall or MP2K "
+        "sound driver found" +
+            std::string(kUnknown));
     for (const DriverCase& c : DriverCases())
     {
         Overrides only;
@@ -124,6 +126,7 @@ int Run()
     webfoot::RunTests();
     frontline_mod::RunTests();
     frontline_xm::RunTests();
+    engine_software::RunTests();
 
     std::printf("%d checks, %d failures\n", seqlib::testing::checks, seqlib::testing::failures);
 

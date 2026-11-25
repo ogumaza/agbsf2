@@ -110,3 +110,10 @@ namespace agbsf2::frontline_xm
 void RunTests();
 
 } // namespace agbsf2::frontline_xm
+
+namespace agbsf2::engine_software
+{
+
+void RunTests();
+
+} // namespace agbsf2::engine_software

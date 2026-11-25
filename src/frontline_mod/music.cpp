@@ -11,7 +11,6 @@
 #include <utility>
 #include <vector>
 
-#include "agblib/agb/trace.h"
 #include "xsflib/bytes.h"
 
 #include "frontline_mod/convert.h"
@@ -25,9 +24,6 @@ namespace agbsf2::frontline_mod
 {
 namespace
 {
-
-using agblib::agb::TraceFrames;
-using agblib::agb::TraceRecord;
 
 using xsflib::AppendLe16;
 using xsflib::AppendLe32;
@@ -60,18 +56,14 @@ std::vector<uint8_t> PlaceBytes(const Player& player)
     return bytes;
 }
 
-class FrontlineModMusic : public ModuleMusic<DriverInfo, InstrumentSet>
+class FrontlineModMusic : public SongListMusic<DriverInfo, InstrumentSet>
 {
 public:
     // Keeps a reference to `rom`. The ROM has to outlive this.
     FrontlineModMusic(const Rom& rom, DriverInfo info)
-        : ModuleMusic("Frontline Studios' MOD player", rom, std::move(info))
+        : SongListMusic("Frontline Studios' MOD player", rom, std::move(info), frontline_mod::InspectSong,
+                        frontline_mod::ConvertSong)
     {
-    }
-
-    int SongCount() const override
-    {
-        return int(Detected().songs.size());
     }
 
     // A song is a part of a module: its name shows the order that it starts at, and marks a song that no call of the
@@ -85,16 +77,6 @@ public:
 
         const Song& entry = Detected().songs[size_t(song)];
         return {{"order " + std::to_string(entry.order) + (entry.unanchored ? ", not started by the game" : ""), ""}};
-    }
-
-    SongReport InspectSong(int song, const ConvertSettings& settings) const override
-    {
-        return frontline_mod::InspectSong(GameRom(), Detected(), song, settings);
-    }
-
-    SongReport ConvertSong(int song, const ConvertSettings& settings) override
-    {
-        return frontline_mod::ConvertSong(GameRom(), Detected(), song, settings, Shared());
     }
 
     // Writes the model's state after each frame: the player's place, then each of the module's channels.
@@ -118,21 +100,11 @@ public:
             player.Frame();
             return true;
         };
-        const auto records = [&]()
+        const auto channels = [](const Player& player)
         {
-            std::vector<TraceRecord> r = {{"g", PlaceBytes(player)}};
-            for (uint32_t c = 0; c < player.MusicChannels(); c++)
-            {
-                r.push_back({"c" + std::to_string(c), ChannelBytes(player.ChannelAt(c))});
-            }
-            return r;
+            return player.MusicChannels();
         };
-        TraceFrames(out, frames, frame, records);
-        if (player.Unmodelled() != 0)
-        {
-            warnings.push_back("the player reached " + std::to_string(player.Unmodelled()) +
-                               " paths that the model doesn't follow");
-        }
+        TraceModel(player, "player", frame, channels, PlaceBytes, ChannelBytes, frames, out, warnings);
 
         return true;
     }

@@ -119,7 +119,7 @@ Its notice follows.
 agblib (MIT License)
 ====================
 
-The ROM and GSF reader and all fourteen sound drivers, with their conversions,
+The ROM and GSF reader and all fifteen sound drivers, with their conversions,
 come from agblib, in externals/agblib.
 Its notice follows.
 

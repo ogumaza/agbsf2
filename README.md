@@ -2,9 +2,9 @@
 
 `agbsf2` converts the music of Game Boy Advance games that use Konami's,
 Rare's, Quintet's, Nintendo R&D1's, Nintendo R&D2's, AlphaDream's, Brownie
-Brown's, Ubisoft Milan's, Logik State's or Webfoot Technologies' sound driver,
-Frontline Studios' MOD or XM-like player, Nintendo's MP2K, or Krawall, to MIDI
-files and SoundFonts.
+Brown's, Ubisoft Milan's, Logik State's, Webfoot Technologies' or Engine
+Software's sound driver, Frontline Studios' MOD or XM-like player, Nintendo's
+MP2K, or Krawall, to MIDI files and SoundFonts.
 
 MP2K, often called the "Sappy" engine, is the sound driver in most GBA games.
 Many games use another driver, among them Konami's, Rare's and Quintet's games,
@@ -269,6 +269,23 @@ Each song plays at the master volume that the game passes on a new save. The
 game scales the master volume by the music volume in its options, over 9.
 A new save sets that volume to 9. The sound effects aren't converted.
 
+### Engine Software's driver
+
+* *The Santa Clause 3: The Escape Clause*. Songs 0-11.
+
+The driver plays modules in the manner of FastTracker 2 through a software
+mixer. The game's sound manager starts each song and raises the music volume
+from 0 to 210 of 256 over its first 53 frames. Song 6 starts at that volume
+at once. Song 5 is a jingle: it plays once at that volume and ends. In the
+game, the song before it then goes on from where it was. Song 6 plays once
+too, with no loop markers: the driver would loop it, but the game fades it out
+before its second pass.
+
+*Dragon Ball Z: Taiketsu* and *Ty the Tasmanian Tiger 2: Bush Rescue* have
+other builds of the driver. `agbsf2` finds the driver in them and gives an
+error. The sound effects are single samples that the game's code starts, and
+they aren't converted.
+
 ### Other games
 
 Detection finds each driver by its code rather than at fixed addresses. Other
@@ -290,7 +307,7 @@ clang-cl. Other platforms and compilers aren't supported.
 You need Git, a C++20 compiler and CMake 3.20 or later. The MIDI and
 SoundFont code comes from seqlib. The PSF container reader, the file and
 console code and the parsing of numbers come from xsflib. The ROM and GSF
-reader and all fourteen sound drivers, with their conversions, come from
+reader and all fifteen sound drivers, with their conversions, come from
 agblib. agblib builds on ntdlib. The four libraries are Git submodules of the
 repository, in `externals/seqlib`, `externals/xsflib`, `externals/ntdlib` and
 `externals/agblib`. There are no other dependencies.
@@ -383,14 +400,14 @@ Each file's results go in a folder next to it, as above.
 | `-n, --name NAME` | base name of the output files (default: input name) |
 | `-s, --songs LIST` | only these songs, e.g. `0,3,7-9` |
 | `-l, --loops N` | play each song's loop N times (default 2) |
-| `-t, --tracks LIST` | only these tracks, e.g. `4-15`; in Konami's driver, 0-3 are the PSG channels and 4 and up the sample voices, in Quintet's, 0-3 are the PSG channels and 4 and 5 the PCM channels, in Brownie Brown's, 0-3 are the music's PSG channels, 4-7 the sound effects' and 8 and up the sample channels, in Ubisoft Milan's, 0-2 are the PSG channels and 9 the kit, in Krawall, the module's channels, 0-31, in Logik State's, the module's channels, 0-7, in Webfoot Technologies', the song's channels, 0-14, and in Frontline Studios' players, the module's channels, 0-3 |
+| `-t, --tracks LIST` | only these tracks, e.g. `4-15`; in Konami's driver, 0-3 are the PSG channels and 4 and up the sample voices, in Quintet's, 0-3 are the PSG channels and 4 and 5 the PCM channels, in Brownie Brown's, 0-3 are the music's PSG channels, 4-7 the sound effects' and 8 and up the sample channels, in Ubisoft Milan's, 0-2 are the PSG channels and 9 the kit, in Krawall, the module's channels, 0-31, in Logik State's, the module's channels, 0-7, in Webfoot Technologies', the song's channels, 0-14, in Frontline Studios' players, the module's channels, 0-3, and in Engine Software's, the song's channels, 0-7 |
 | `--single-sf2` | one SoundFont for all songs (see [Output](#output) for its banks) |
 | `--voice-channels` | MP2K only: a MIDI channel for each of the driver's sound channels instead of each track. Notes then stop where the game cuts them off, but the notes of a track move between channels (see [MIDI from MP2K](#midi-from-mp2k)) |
 | `--psg-exclusive` | MP2K only: an exclusive class for each PSG channel in the SoundFont. A track's next note on a PSG channel then ends the slow release of the note before it. The game cuts that note off there too. A note that another track cuts off still fades out (see [SoundFont from MP2K](#soundfont-from-mp2k)) |
 | `--frame-timing` | put each event on the frame the game plays it in, rather than on the song's beat (see [Output](#output)) |
 | `--dump` | also write a text listing of every command of each song (`NAME_NN.txt`) |
 | `--info` | print each driver found, with its tables and a list of its songs, then exit. The track count, length and loop reflect the current conversion options. A song that the game plays in two versions gets a line for each |
-| `--driver NAME` | use only `konami`, `rare`, `quintet`, `rd1`, `rd2`, `alphadream`, `brownie`, `ubimilan`, `logikstate`, `webfoot`, `frontline_mod`, `frontline_xm`, `krawall` or `mp2k`, instead of every driver detection finds |
+| `--driver NAME` | use only `konami`, `rare`, `quintet`, `rd1`, `rd2`, `alphadream`, `brownie`, `ubimilan`, `logikstate`, `webfoot`, `frontline_mod`, `frontline_xm`, `engine_software`, `krawall` or `mp2k`, instead of every driver detection finds |
 | `--song-table ADDR`, `--song-count N` | override detection: the address of the song table (hex) and the number of songs. In Nintendo R&D2's driver the address is that of the game's settings for the driver, in Ubisoft Milan's driver that of the sound bank, and in Krawall that of the game's table of modules |
 | `--sample-table ADDR`, `--mix-rate HZ` | override detection in Konami's driver: the address of the sample table (hex) and the mixer rate |
 | `--music-volume N` | Logik State's and Webfoot Technologies' drivers only: play at this music volume, not at the volume that the game sets at its start. The volume goes from 1 to 64 in Logik State's driver, or to 256 for `GBAMOD30` modules, and from 1 to 8 in Webfoot Technologies' driver (see [Accuracy](#accuracy)) |
@@ -399,9 +416,9 @@ Each file's results go in a folder next to it, as above.
 
 Detection looks for Rare's driver first, then for Quintet's, Nintendo R&D2's,
 Nintendo R&D1's, AlphaDream's, MP2K, Brownie Brown's, Krawall, Ubisoft
-Milan's, Logik State's and Webfoot Technologies' drivers and Frontline
-Studios' two players. It finds these by their code alone. Konami's driver
-comes last.
+Milan's, Logik State's and Webfoot Technologies' drivers, Frontline Studios'
+two players and Engine Software's driver. It finds these by their code alone.
+Konami's driver comes last.
 
 If a game has several drivers, the songs of each are converted. The files of
 the first driver get the usual names. The others add the name of the driver
@@ -1595,6 +1612,55 @@ instrument on key 60, with the finetune of the instrument. With
 `--single-sf2`, the presets of all the songs are numbered together, in the
 order the songs first play them, with 128 to a bank.
 
+### MIDI from Engine Software's driver
+
+Each song becomes a MIDI file. Each MIDI file has a conductor track for tempo
+and loop markers, plus a track for every channel of the song that plays
+notes. Tracks are named `Channel 1` to `Channel 8`.
+
+The beat and the bars are chosen as for Krawall's modules. A row takes 120
+MIDI ticks, and the tempo gives it its length. The driver counts its ticks in
+samples of its mixer, and a tick can fall inside a frame. `--frame-timing`
+changes nothing.
+
+A note starts where its channel starts its sample: at a note, at a retrigger,
+or where a sample offset moves the channel within its sample. It ends where
+the channel stops the sample or starts it again. A note takes the key nearest
+the step of the channel, and a pitch bend gives the rest. At each tick, the
+level of the channel sets its expression (CC11). The level is the product of
+the channel volume, the music volume, the volume envelope of the instrument
+and its fade-out. The expression therefore plays the envelope and the
+fade-out in steps of a tick. The mixer plays one channel of sound for both
+sides. Every note stays in the centre, and the pans of the song have no
+effect.
+
+Each song starts as the game's sound manager starts it, with the music volume
+rising from 0 over 53 frames. A song that loops from its start then gets its
+loop from its second pass, where the volume has stopped rising. The jingle
+plays once and ends. A loop is detected when an order and row come back with
+the same speed and tempo. The MIDI file marks it with `loopStart` and
+`loopEnd`.
+
+### SoundFont from Engine Software's driver
+
+Each song's SoundFont has a preset for each instrument and point that its
+notes start from. A sample is named `Sample` and the number of its instrument
+in the bank, from 1. The samples are the game's 8-bit samples, widened to 16
+bits, with the loops of their instruments. When the mixer goes back from the
+end of a loop to its start, it keeps the fraction of the step past the end. A
+loop therefore plays at its length. The rate of each sample puts note 49 of
+the driver on key 60, with the relative note and the fine tune of the
+instrument. The mixer stops a channel at once, and the zones keep the
+shortest release that the format allows.
+
+The zones contain no volume envelope and no fade-out. The driver counts the
+steps of an envelope in ticks, which follow the tempo, and its fade-out falls
+in a straight line of amplitude. Neither fits a zone. The MIDI file plays both
+through the expression of each note. The SoundFont played alone, or a note
+added in an editor, plays each instrument at a steady level. With
+`--single-sf2`, the presets of all the songs are numbered together, in the
+order the songs first play them, with 128 to a bank.
+
 ### Sequence listing (`--dump`)
 
 The listing shows every track command with its address, raw bytes and
@@ -1978,9 +2044,9 @@ SoundFonts.
 * **Mixer character.** The mixer mixes at 21024 Hz in mono and writes 8-bit
   output. Nine of the games with `GBAMOD30` modules mix at 10512 Hz. The mixer
   plays each sample point by point, without interpolation. A SoundFont player
-  interpolates and plays the same samples more cleanly. In renders of five
-  songs each of *Aero the Acro-Bat* and *Zapper* by FluidSynth 2.6.2, the
-  bands from 8 kHz up are up to 24 dB below the recordings of mGBA 0.11.0.
+  interpolates and plays the same samples more cleanly. Played by FluidSynth
+  2.6.2, five songs each of *Aero the Acro-Bat* and *Zapper* are up to 24 dB
+  below what mGBA 0.11.0 plays in the bands from 8 kHz up.
   FluidSynth rendered them with its reverb and chorus on. It applies 0.4 of
   the attenuation of a zone, and it plays every note 1.5 dB louder than the
   SoundFont specifies (see [FluidSynth](#fluidsynth)). The mixer also cuts the
@@ -2035,18 +2101,18 @@ SoundFonts.
 
 ### Webfoot Technologies' driver
 
-* **Mixer character.** The mixer mixes at 13,981 Hz in *The Legacy of Goku*
-  and at 15,978 Hz in the later games, in stereo, and writes 8-bit output. It
-  plays each sample point by point, without interpolation. A SoundFont player
-  interpolates and plays the same samples more cleanly. In renders of 26 songs
-  of the four games by FluidSynth 2.6.2, the mix is within 1 dB of the
-  recordings of mGBA 0.11.0 in 94 to 96% of its 50 ms windows. The bands from
-  5 kHz up are up to 31 dB below the recordings. FluidSynth rendered them with
-  its reverb and chorus on. It applies 0.4 of the attenuation of a zone, and
-  it plays every note 1.5 dB louder than the SoundFont specifies (see
-  [FluidSynth](#fluidsynth)). The mixer also clips the sum of the channels to a
-  byte, and the 2002 build wraps the sum of each side at 16 bits. The
-  conversion plays those places without the clip or the wrap.
+* **Mixer character.** The mixer mixes at 13,981 Hz in *The Legacy of Goku* and
+  at 15,978 Hz in the later games, in stereo, and writes 8-bit output. It plays
+  each sample point by point, without interpolation. A SoundFont player
+  interpolates and plays the same samples more cleanly. Played by FluidSynth
+  2.6.2, 26 songs of the four games are within 1 dB of what mGBA 0.11.0 plays
+  in 94 to 96% of their 50 ms windows. The bands from 5 kHz up are up to 31 dB
+  below the game in mGBA. FluidSynth rendered them with its reverb and chorus
+  on. It applies 0.4 of the attenuation of a zone, and it plays every note
+  1.5 dB louder than the SoundFont specifies (see [FluidSynth](#fluidsynth)).
+  The mixer also clips the sum of the channels to a byte, and the 2002 build
+  wraps the sum of each side at 16 bits. The conversion plays those places
+  without the clip or the wrap.
 * **The game's settings.** The conversion plays each song at the music volume
   that the game starts with: 4 of 8, and 3 of 8 in *GT Transformation*. At 4,
   a channel in the centre at volume 3 or less is silent, and at 3, one at
@@ -2063,14 +2129,14 @@ SoundFonts.
 * **Mixer character.** The mixer mixes at 18,157 Hz in mono and writes 8-bit
   output. It plays each sample point by point, without interpolation, and maps
   the sum of the channels through a table to 8 bits. A SoundFont player
-  interpolates and plays the same samples more cleanly. In renders of 15 songs
-  of the three games by FluidSynth 2.6.2, the mix is within 1 dB of the
-  recordings of mGBA 0.11.0 in 94% of the 50 ms windows of *Hardcore Pool* and
-  *Games Explosion!*, and in 78% of those of *Garfield*. *Garfield* plays its
-  music at a lower master volume, and its quiet passages lose more to the
-  8-bit output. FluidSynth rendered them with its reverb and chorus on. It
-  applies 0.4 of the attenuation of a zone, and it plays every note 1.5 dB
-  louder than the SoundFont specifies (see [FluidSynth](#fluidsynth)).
+  interpolates and plays the same samples more cleanly. Played by FluidSynth
+  2.6.2, 15 songs of the three games are within 1 dB of what mGBA 0.11.0 plays
+  in 94% of the 50 ms windows of *Hardcore Pool* and *Games Explosion!*, and in
+  78% of those of *Garfield*. *Garfield* plays its music at a lower master
+  volume, and its quiet passages lose more to the 8-bit output. FluidSynth
+  rendered them with its reverb and chorus on. It applies 0.4 of the
+  attenuation of a zone, and it plays every note 1.5 dB louder than the
+  SoundFont specifies (see [FluidSynth](#fluidsynth)).
 * **Loops.** The mixer checks the end of a sample once every two samples. It
   starts each pass of a loop again without the part of a point that its step
   had passed. By the check that restarts the loop, the position can be up to
@@ -2092,15 +2158,39 @@ SoundFonts.
   output. It plays each sample point by point, without interpolation. A
   SoundFont player interpolates and plays the same samples more cleanly, with
   less sound near the top of the mixer's band and none of its images above
-  10 kHz. In renders of the ten songs of the two games by FluidSynth 2.6.2,
-  the mix is within 1 dB of the recordings of mGBA 0.11.0 in 95% of the
-  50 ms windows of *Chicken Shoot* and in 93% of those of *Chicken Shoot 2*.
+  10 kHz. Played by FluidSynth 2.6.2, the ten songs of the two games are within
+  1 dB of what mGBA 0.11.0 plays in 95% of the 50 ms windows of *Chicken Shoot*
+  and in 93% of those of *Chicken Shoot 2*.
   FluidSynth rendered them with its reverb and chorus on. It applies 0.4 of
   the attenuation of a zone, and it plays every note 1.5 dB louder than the
   SoundFont specifies (see [FluidSynth](#fluidsynth)).
 * **Tempo changes.** Song 3 of *Chicken Shoot 2* changes the BPM at every row.
   The MIDI file follows each change, but the render of it in FluidSynth drifts
   late: by about 14 ms after 28 s.
+
+### Engine Software's driver
+
+* **Mixer character.** The mixer mixes at 13,379 Hz in mono and writes 8-bit
+  output. It plays each sample point by point, without interpolation, and
+  clips the sum of the channels. Every song but 0, 5 and 6 reaches the clip at
+  times. A SoundFont player interpolates and plays the same samples more
+  cleanly, with less sound near the top of the mixer's band and none of its
+  images above 6.7 kHz. Played by FluidSynth 2.6.2, five songs of *The Santa
+  Clause 3* are within 1 dB of what mGBA 0.11.0 plays in 93.9% of the 50 ms
+  windows. FluidSynth rendered them with its reverb and chorus on. It applies
+  0.4 of the attenuation of a zone, and it plays every note 1.5 dB louder than
+  the SoundFont specifies (see [FluidSynth](#fluidsynth)).
+* **Envelopes.** The sixth instrument of the bank (`Sample 06`) has a volume
+  envelope. It falls from 64 to 4 over 5 ticks, rises to 31 and stays there
+  until the note is released, then falls to 0. Songs 3 and 4 play it. Every
+  instrument fades out after its note is released. The MIDI file plays the
+  envelope and the fade-out in steps of a tick, as the driver does. The
+  SoundFont alone plays each instrument at a steady level (see [SoundFont from
+  Engine Software's driver](#soundfont-from-engine-softwares-driver)).
+* **Fade-in.** The conversion starts the ramp of the music volume a frame
+  later than the game does. In a song's first 53 frames, the music volume is
+  therefore one step of 4/256 below the game's. Songs 5 and 6 start at 210
+  of 256 at once and aren't affected.
 
 ### FluidSynth
 
@@ -2148,8 +2238,8 @@ off.
 `docs/konami.md`, `docs/rare.md`, `docs/quintet.md`, `docs/rd1.md`,
 `docs/rd2.md`, `docs/alphadream.md`, `docs/mp2k.md`, `docs/brownie.md`,
 `docs/krawall.md`, `docs/ubimilan.md`, `docs/logikstate.md`,
-`docs/webfoot.md`, `docs/frontline_mod.md` and `docs/frontline_xm.md`
-document the drivers and their data formats in full, including how the tool
+`docs/webfoot.md`, `docs/frontline_mod.md`, `docs/frontline_xm.md` and
+`docs/engine_software.md` document the drivers and their data formats in full, including how the tool
 locates them. The code of the drivers comes from agblib. A folder for each
 driver in `src/` connects it to the interface in `src/music.h`.
 
@@ -2158,7 +2248,7 @@ driver in `src/` connects it to the interface in `src/music.h`.
 `agbsf2` is released under the MIT License (see `LICENSE`). The libraries that
 it builds on have these licenses:
 
-* **agblib** (MIT License) contains the ROM and GSF reader and all fourteen
+* **agblib** (MIT License) contains the ROM and GSF reader and all fifteen
   sound drivers, with their conversions. Its notice is in
   `externals/agblib/LICENSE`.
 * **ntdlib** (MIT License) is the library that agblib builds on. Its notice is

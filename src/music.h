@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "agblib/agb/song_plan.h"
+#include "agblib/engine_software/driver.h"
 #include "agblib/frontline_mod/driver.h"
 #include "agblib/frontline_xm/driver.h"
 #include "agblib/sequence_export/agb/settings.h"
@@ -39,6 +40,7 @@ enum class Driver
     kWebfoot,
     kFrontlineMod,
     kFrontlineXm,
+    kEngineSoftware,
 };
 
 // The highest volume that --music-volume accepts, in 64ths: the top of the mixers of Logik State's builds for GBAMOD30
@@ -282,5 +284,16 @@ std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std
 std::unique_ptr<Music> MakeMusic(const Rom& rom, agblib::frontline_xm::DriverInfo info);
 
 } // namespace frontline_xm
+
+namespace engine_software
+{
+
+std::unique_ptr<Music> OpenMusic(const Rom& rom, const Overrides& overrides, std::string& error);
+
+// Returns the Music of the driver that `info` describes. OpenMusic() returns it after detection. The tests make one
+// from synthetic data.
+std::unique_ptr<Music> MakeMusic(const Rom& rom, agblib::engine_software::DriverInfo info);
+
+} // namespace engine_software
 
 } // namespace agbsf2

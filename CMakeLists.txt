@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 cmake_minimum_required(VERSION 3.20)
-project(agbsf2 VERSION 1.11.0 LANGUAGES CXX)
+project(agbsf2 VERSION 1.12.0 LANGUAGES CXX)
 
 # The name of the macOS droplet app.
 set(AGBSF2_APP_NAME Agbsf2)
@@ -43,6 +43,7 @@ add_library(agbsf2_core STATIC
     src/webfoot/music.cpp
     src/frontline_mod/music.cpp
     src/frontline_xm/music.cpp
+    src/engine_software/music.cpp
 )
 target_include_directories(agbsf2_core PUBLIC src)
 target_link_libraries(agbsf2_core PUBLIC seqlib::seqlib agblib::sequence_export_mp2k agblib::sequence_export_konami
@@ -50,7 +51,8 @@ target_link_libraries(agbsf2_core PUBLIC seqlib::seqlib agblib::sequence_export_
                       agblib::sequence_export_rd2 agblib::sequence_export_brownie agblib::sequence_export_ubimilan
                       agblib::sequence_export_rd1 agblib::sequence_export_alphadream
                       agblib::sequence_export_logikstate agblib::sequence_export_webfoot
-                      agblib::sequence_export_frontline_mod agblib::sequence_export_frontline_xm)
+                      agblib::sequence_export_frontline_mod agblib::sequence_export_frontline_xm
+                      agblib::sequence_export_engine_software)
 
 # The warnings of agbsf2's targets. xsflib_project's options keep the floats the same on every platform.
 if(MSVC)
@@ -83,7 +85,8 @@ if(AGBSF2_BUILD_TESTS)
     add_executable(agbsf2_tests tests/test_main.cpp tests/konami_test.cpp tests/rare_test.cpp tests/quintet_test.cpp
                                 tests/mp2k_test.cpp tests/rd2_test.cpp tests/brownie_test.cpp tests/krawall_test.cpp
                                 tests/ubimilan_test.cpp tests/logikstate_test.cpp tests/webfoot_test.cpp
-                                tests/frontline_mod_test.cpp tests/frontline_xm_test.cpp)
+                                tests/frontline_mod_test.cpp tests/frontline_xm_test.cpp
+                                tests/engine_software_test.cpp)
     target_link_libraries(agbsf2_tests PRIVATE agbsf2_core agblib::testing)
     add_test(NAME agbsf2_tests COMMAND agbsf2_tests)
 

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 
 // Converts the music of GBA games with Konami's, Rare's, Quintet's, Nintendo R&D1's, Nintendo R&D2's, AlphaDream's,
-// Brownie Brown's, Ubisoft Milan's, Logik State's or Webfoot Technologies' sound driver, one of Frontline Studios' two
-// players, Nintendo's MP2K or Krawall, to MIDI files and SoundFonts.
+// Brownie Brown's, Ubisoft Milan's, Logik State's, Webfoot Technologies' or Engine Software's sound driver, one of
+// Frontline Studios' two players, Nintendo's MP2K or Krawall, to MIDI files and SoundFonts.
 
 #include <algorithm>
 #include <cmath>
@@ -49,8 +49,9 @@ void Usage(FILE* f)
                  "Converts every song in each GBA ROM (.gba) or GSF rip (.gsf, .gsflib, .minigsf)\n"
                  "to a MIDI file and a matching SoundFont, for games whose music uses Konami's,\n"
                  "Rare's, Quintet's, Nintendo R&D1's, Nintendo R&D2's, AlphaDream's, Brownie\n"
-                 "Brown's, Ubisoft Milan's or Logik State's sound driver, Nintendo's MP2K or\n"
-                 "Krawall. A game with more than one of them has each one's songs converted.\n"
+                 "Brown's, Ubisoft Milan's, Logik State's, Webfoot Technologies' or Engine\n"
+                 "Software's sound driver, one of Frontline Studios' two players, Nintendo's MP2K\n"
+                 "or Krawall. A game with more than one of them has each one's songs converted.\n"
                  "The results go in a folder beside the input file, with the same name. You can\n"
                  "also drop files on the program.\n"
                  "\n"
@@ -68,9 +69,10 @@ void Usage(FILE* f)
                  "                        Milan's, 0-2 are the PSG channels and 9 the kit, in\n"
                  "                        Krawall, the module's channels, 0-31, in Logik\n"
                  "                        State's, the module's channels, 0-7, in Webfoot\n"
-                 "                        Technologies', the song's channels, 0-14, and in\n"
+                 "                        Technologies', the song's channels, 0-14, in\n"
                  "                        Frontline Studios' players, the module's channels,\n"
-                 "                        0-3)\n"
+                 "                        0-3, and in Engine Software's, the song's channels,\n"
+                 "                        0-7)\n"
                  "      --single-sf2      write one SoundFont for all songs\n"
                  "      --voice-channels  give each of the driver's sound channels a MIDI channel\n"
                  "                        (MP2K), so that notes stop where the game cuts them\n"
@@ -86,8 +88,8 @@ void Usage(FILE* f)
                  "                        exit\n"
                  "      --driver NAME     use only konami, rare, quintet, rd1, rd2, alphadream,\n"
                  "                        brownie, ubimilan, logikstate, webfoot, frontline_mod,\n"
-                 "                        frontline_xm, krawall or mp2k, instead of every driver\n"
-                 "                        detection finds\n"
+                 "                        frontline_xm, engine_software, krawall or mp2k, instead\n"
+                 "                        of every driver detection finds\n"
                  "      --song-table ADDR    use this song table address (hex; in Nintendo R&D2's\n"
                  "                           driver, the address of the game's settings for it,\n"
                  "                           in Ubisoft Milan's, the sound bank, and in Krawall,\n"
@@ -150,7 +152,10 @@ void Usage(FILE* f)
                  "                        change; in Frontline Studios' XM-like player, the\n"
                  "                        order, row, tick, speed, BPM and samples to the next\n"
                  "                        tick (frame g) and each channel's record (frame c0), in\n"
-                 "                        hex, when they change\n"
+                 "                        hex, when they change; in Engine Software's, the order,\n"
+                 "                        row, tick, speed, tempo, pattern delay, music volume\n"
+                 "                        and samples a tick (frame g) and each music channel's\n"
+                 "                        record (frame c0), in hex, when they change\n"
                  "      --trace-frames N  frames to trace (default: 3000)\n"
                  "  -q, --quiet           only print warnings and errors\n"
                  "  -h, --help            show this help\n"
@@ -419,7 +424,7 @@ std::optional<int> ParseArgs(const std::vector<std::string>& args, Options& o)
             {
                 OptionError(
                     "--driver needs konami, rare, quintet, rd1, rd2, alphadream, brownie, ubimilan, logikstate, "
-                    "webfoot, frontline_mod, frontline_xm, krawall or mp2k");
+                    "webfoot, frontline_mod, frontline_xm, engine_software, krawall or mp2k");
                 return 2;
             }
         }

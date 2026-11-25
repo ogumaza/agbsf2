@@ -11,7 +11,6 @@
 #include <utility>
 #include <vector>
 
-#include "agblib/agb/trace.h"
 #include "xsflib/bytes.h"
 
 #include "frontline_xm/convert.h"
@@ -25,9 +24,6 @@ namespace agbsf2::frontline_xm
 {
 namespace
 {
-
-using agblib::agb::TraceFrames;
-using agblib::agb::TraceRecord;
 
 using xsflib::AppendLe16;
 using xsflib::AppendLe32;
@@ -71,62 +67,24 @@ std::vector<uint8_t> PlaceBytes(const Player& player)
     return bytes;
 }
 
-class FrontlineXmMusic : public ModuleMusic<DriverInfo, InstrumentSet>
+class FrontlineXmMusic : public SongListMusic<DriverInfo, InstrumentSet>
 {
 public:
     // Keeps a reference to `rom`. The ROM has to outlive this.
     FrontlineXmMusic(const Rom& rom, DriverInfo info)
-        : ModuleMusic("Frontline Studios' XM-like player", rom, std::move(info))
+        : SongListMusic("Frontline Studios' XM-like player", rom, std::move(info), frontline_xm::InspectSong,
+                        frontline_xm::ConvertSong)
     {
-    }
-
-    int SongCount() const override
-    {
-        return int(Detected().songs.size());
-    }
-
-    SongReport InspectSong(int song, const ConvertSettings& settings) const override
-    {
-        return frontline_xm::InspectSong(GameRom(), Detected(), song, settings);
-    }
-
-    SongReport ConvertSong(int song, const ConvertSettings& settings) override
-    {
-        return frontline_xm::ConvertSong(GameRom(), Detected(), song, settings, Shared());
     }
 
     // Writes the model's state after each frame: the player's place, then each channel.
     bool Trace(int song, long long frames, std::FILE* out, std::vector<std::string>& warnings) const override
     {
-        if (song < 0 || song >= SongCount())
+        const auto channels = [](const Player&)
         {
-            return false;
-        }
-
-        Player player(GameRom(), Detected());
-        player.Start(song);
-        const auto frame = [&]()
-        {
-            player.Frame();
-            return true;
+            return agblib::frontline_xm::kChannels;
         };
-        const auto records = [&]()
-        {
-            std::vector<TraceRecord> r = {{"g", PlaceBytes(player)}};
-            for (int c = 0; c < agblib::frontline_xm::kChannels; c++)
-            {
-                r.push_back({"c" + std::to_string(c), ChannelBytes(player.ChannelAt(c))});
-            }
-            return r;
-        };
-        TraceFrames(out, frames, frame, records);
-        if (player.Unmodelled() != 0)
-        {
-            warnings.push_back("the player reached " + std::to_string(player.Unmodelled()) +
-                               " paths that the model doesn't follow");
-        }
-
-        return true;
+        return TraceSong<Player>(song, "player", channels, PlaceBytes, ChannelBytes, frames, out, warnings);
     }
 };
 
